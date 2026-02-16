@@ -1,0 +1,26 @@
+Comandi ROS2 da eseguire 
+
+ros2 launch realsense2_camera rs_launch.py \
+    enable_color:=true \
+    enable_depth:=true \
+    pointcloud.enable:=true \
+    colorizer.enable:=false \
+    align_depth.enable:=true
+
+
+ros2 run yolo_pose_ros yolo_pose_node
+
+
+ros2 topic list 
+
+
+cd ~/Ros2_repositories/realsense_ws
+colcon build --symlink-install
+source install/setup.bash
+
+
+
+
+
+
+
