@@ -1,3 +1,0 @@
-geometry_msgs/Pose body_control
-uint32 locomotion_hint
-uint32 stairs_mode

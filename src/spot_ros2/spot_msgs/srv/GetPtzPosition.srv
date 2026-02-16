@@ -1,5 +1,0 @@
-string name
----
-bool success
-string message
-bosdyn_spot_cam_api_msgs/PtzPosition position

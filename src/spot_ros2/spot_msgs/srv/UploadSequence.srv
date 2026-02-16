@@ -1,4 +1,0 @@
-char[] sequence_proto_serialized
----
-bool success 
-string message
