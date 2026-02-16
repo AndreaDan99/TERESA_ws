@@ -1,0 +1,26 @@
+# Z1 Robot Camera Configuration
+# RealSense camera mounted on link06
+
+camera_transform:
+  parent_frame: "link06"
+  child_frame: "camera_link"
+  
+  # Translation [m]
+  x: 0.10   # 10cm forward
+  y: 0.0
+  z: -0.02  # 2cm below
+  
+  # Rotation (quaternion) - 180° around Y axis
+  qx: 0.0
+  qy: 1.0
+  qz: 0.0
+  qw: 0.0
+
+realsense_surface_node:
+  ros__parameters:
+    ee_frame: "link06"
+    camera_frame: "camera_depth_optical_frame"
+    base_frame: "world"
+    patch_radius_px: 30
+    min_depth: 0.10
+    max_depth: 2.0
