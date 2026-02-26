@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 Z1 YOLO Torso Tracker + Impedance Control
+- Macchina a stati: IDLE → ESTIMATING → LOCKED → RECOVERY
 - YOLO → Torso center (camera_depth_optical_frame)
-- Kalman Filter 3D per smoothing e predizione
-- Debounce sul lost
+- Kalman Filter 3D per convergenza stima
+- Target si congela quando stima è stabile
 - Visualizzazione RViz in world frame
 """
 
@@ -13,7 +14,7 @@ from message_filters import Subscriber, ApproximateTimeSynchronizer
 
 from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import PointStamped, PoseStamped, Point
-from std_msgs.msg import Bool, ColorRGBA
+from std_msgs.msg import Bool, ColorRGBA, String
 from visualization_msgs.msg import Marker, MarkerArray
 from cv_bridge import CvBridge
 
@@ -31,11 +32,19 @@ from .kalman_filter import Kalman3D
 TORSO_KEYPOINTS = [5, 6, 11, 12]
 
 TORSO_EDGES = [
-    (5, 6),   # spalla sx → spalla dx
-    (5, 11),  # spalla sx → fianco sx
-    (6, 12),  # spalla dx → fianco dx
-    (11, 12), # fianco sx → fianco dx
+    (5, 6),
+    (5, 11),
+    (6, 12),
+    (11, 12),
 ]
+
+# Colori marker per stato
+STATE_COLORS = {
+    'IDLE':       ColorRGBA(r=0.5, g=0.5, b=0.5, a=0.5),  # grigio
+    'ESTIMATING': ColorRGBA(r=1.0, g=0.5, b=0.0, a=0.9),  # arancione
+    'LOCKED':     ColorRGBA(r=0.0, g=1.0, b=0.0, a=0.9),  # verde
+    'RECOVERY':   ColorRGBA(r=1.0, g=0.0, b=0.0, a=0.9),  # rosso
+}
 
 
 class Z1YoloTorsoTracker(Node):
@@ -43,90 +52,104 @@ class Z1YoloTorsoTracker(Node):
     def __init__(self):
         super().__init__('z1_yolo_torso_tracker')
 
-        # ── Parametri ──────────────────────────────────────────────
-        self.declare_parameter('model_path',        'yolo11n-pose.pt')
-        self.declare_parameter('conf_thr',          0.3)
-        self.declare_parameter('max_depth',         2.5)
-        self.declare_parameter('lost_timeout',      1.0)
-        self.declare_parameter('lost_debounce',     0.3)
-        self.declare_parameter('device',            'cpu')
-        self.declare_parameter('imgsz',             416)
-        self.declare_parameter('kf_process_noise',  0.005)  # Q — smoothing
-        self.declare_parameter('kf_meas_noise',     0.05)   # R — reattività
-        self.declare_parameter('kf_vel_damping',    0.9)    # smorzamento velocità
+        # ── Parametri base ─────────────────────────────────────────
+        self.declare_parameter('model_path',         'yolo11n-pose.pt')
+        self.declare_parameter('conf_thr',           0.3)
+        self.declare_parameter('max_depth',          2.5)
+        self.declare_parameter('device',             'cpu')
+        self.declare_parameter('imgsz',              416)
 
-        self.conf_thr       = float(self.get_parameter('conf_thr').value)
-        self.max_depth      = float(self.get_parameter('max_depth').value)
-        self.lost_timeout   = float(self.get_parameter('lost_timeout').value)
-        self.lost_debounce  = float(self.get_parameter('lost_debounce').value)
-        self.imgsz          = int(self.get_parameter('imgsz').value)
-        self.vel_damping    = float(self.get_parameter('kf_vel_damping').value)
-        device              = self.get_parameter('device').value
+        # ── Parametri Kalman ───────────────────────────────────────
+        self.declare_parameter('kf_process_noise',   0.0001)
+        self.declare_parameter('kf_meas_noise',      0.5)
+        self.declare_parameter('kf_vel_damping',     0.9)
 
-        # ── YOLO con fallback CPU ──────────────────────────────────
+        # ── Parametri macchina a stati ─────────────────────────────
+        self.declare_parameter('min_detection_conf', 0.6)   # conf minima per iniziare
+        self.declare_parameter('min_keypoints',      3)     # keypoint minimi validi
+        self.declare_parameter('lock_stable_frames', 20)    # frame stabili per lock
+        self.declare_parameter('lock_variance_thr',  0.005) # varianza max per lock (m²)
+        self.declare_parameter('recovery_frames',    10)    # frame recovery prima di ri-lock
+        self.declare_parameter('lock_stable_checks', 5)
+
+        self.declare_parameter('lock_drift_thr',    0.15)  # 15cm — distanza max tollerata
+        self.declare_parameter('lock_drift_frames', 10)    # frame consecutivi prima di recovery
+
+
+        # Leggi parametri
+        self.conf_thr          = float(self.get_parameter('conf_thr').value)
+        self.max_depth         = float(self.get_parameter('max_depth').value)
+        self.imgsz             = int(self.get_parameter('imgsz').value)
+        self.vel_damping       = float(self.get_parameter('kf_vel_damping').value)
+        self.min_det_conf      = float(self.get_parameter('min_detection_conf').value)
+        self.min_keypoints     = int(self.get_parameter('min_keypoints').value)
+        self.lock_stable_frames = int(self.get_parameter('lock_stable_frames').value)
+        self.lock_variance_thr = float(self.get_parameter('lock_variance_thr').value)
+        self.recovery_frames   = int(self.get_parameter('recovery_frames').value)
+        self.lock_stable_checks = int(self.get_parameter('lock_stable_checks').value)
+        self.lock_drift_thr    = float(self.get_parameter('lock_drift_thr').value)
+        self.lock_drift_frames = int(self.get_parameter('lock_drift_frames').value)
+        
+        device = self.get_parameter('device').value
+
+        # ── YOLO ──────────────────────────────────────────────────
         model_path = self.get_parameter('model_path').value
         self.model = YOLO(model_path)
-
         try:
             self.model.to(device)
             self.get_logger().info(f'✅ YOLO su device: {device}')
         except Exception as e:
-            self.get_logger().warn(f'⚠️ Device {device} non disponibile, uso CPU: {e}')
+            self.get_logger().warn(f'⚠️ Fallback CPU: {e}')
             device = 'cpu'
             self.model.to('cpu')
-
         self.device = device
 
-        # ── Kalman Filter sul centro torso ─────────────────────────
+        # ── Kalman ────────────────────────────────────────────────
         self.kf = Kalman3D(
             dt=0.033,
             process_noise=float(self.get_parameter('kf_process_noise').value),
             measurement_noise=float(self.get_parameter('kf_meas_noise').value)
         )
 
-        # ── Bridge + TF ────────────────────────────────────────────
+        # ── Bridge + TF ───────────────────────────────────────────
         self.bridge      = CvBridge()
         self.tf_buffer   = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        # ── Subscribers sincronizzati (RealSense) ──────────────────
+        # ── Subscribers ───────────────────────────────────────────
         self.sub_rgb   = Subscriber(self, Image, '/camera/camera/color/image_raw')
         self.sub_depth = Subscriber(self, Image, '/camera/camera/depth/image_rect_raw')
-
         self.sync = ApproximateTimeSynchronizer(
-            [self.sub_rgb, self.sub_depth],
-            queue_size=5,
-            slop=0.05
-        )
+            [self.sub_rgb, self.sub_depth], queue_size=5, slop=0.05)
         self.sync.registerCallback(self.cb_synchronized)
 
         self.sub_info = self.create_subscription(
-            CameraInfo,
-            '/camera/camera/color/camera_info',
-            self.cb_info,
-            1
-        )
+            CameraInfo, '/camera/camera/color/camera_info', self.cb_info, 1)
 
-        # ── Publishers ─────────────────────────────────────────────
+        # ── Publishers ────────────────────────────────────────────
         self.pub_torso_camera = self.create_publisher(PointStamped, '/torso_target_camera', 10)
         self.pub_torso_ee     = self.create_publisher(PoseStamped,  '/torso_target_ee',     10)
         self.pub_visible      = self.create_publisher(Bool,         '/torso_visible',        10)
         self.pub_markers      = self.create_publisher(MarkerArray,  '/torso_markers',        10)
+        self.pub_state        = self.create_publisher(String,       '/torso_tracker_state',  10)
 
-        # ── Stato ──────────────────────────────────────────────────
-        self.cam_info       = None
-        self.last_torso     = None
-        self.target_saved   = None
-        self.lost_timer     = None
-        self.torso_visible  = False
-        self.debounce_timer = None
-        self.last_kp_3d     = {}
+        # ── Macchina a stati ──────────────────────────────────────
+        self.state           = 'IDLE'
+        self.stable_counter  = 0
+        self.recovery_counter = 0
+        self.drift_counter    = 0 
+        self.position_history = []   # lista di np.array [x,y,z]
+        self.locked_target   = None  # target congelato in camera frame
 
+        # ── Stato generico ────────────────────────────────────────
+        self.cam_info    = None
+        self.last_kp_3d  = {}
+
+        self.get_logger().info('🚀 Z1 YOLO Torso Tracker (state machine) pronto!')
         self.get_logger().info(
-            f'🚀 Z1 YOLO Torso Tracker pronto!\n'
-            f'   KF process_noise={self.get_parameter("kf_process_noise").value} '
-            f'meas_noise={self.get_parameter("kf_meas_noise").value} '
-            f'vel_damping={self.vel_damping}'
+            f'   lock_stable_frames={self.lock_stable_frames} '
+            f'lock_variance_thr={self.lock_variance_thr} '
+            f'min_keypoints={self.min_keypoints}'
         )
 
     # ──────────────────────────────────────────────────────────────
@@ -144,160 +167,221 @@ class Z1YoloTorsoTracker(Node):
         try:
             rgb   = self.bridge.imgmsg_to_cv2(rgb_msg,   desired_encoding='bgr8')
             depth = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='passthrough')
-
             if depth.dtype == np.uint16:
                 depth = depth.astype(np.float32) / 1000.0
-
             h_rgb, w_rgb = rgb.shape[:2]
-            h_d,   w_d   = depth.shape[:2]
-            if (h_d != h_rgb) or (w_d != w_rgb):
+            if depth.shape[:2] != (h_rgb, w_rgb):
                 depth = cv2.resize(depth, (w_rgb, h_rgb),
                                    interpolation=cv2.INTER_NEAREST)
         except Exception as e:
-            self.get_logger().error(f'Errore conversione immagini: {e}')
+            self.get_logger().error(f'Errore immagini: {e}')
             return
 
         # ── YOLO inference ─────────────────────────────────────────
         try:
             results = self.model.predict(
-                rgb,
-                conf=self.conf_thr,
-                classes=[0],
-                verbose=False,
-                imgsz=self.imgsz,
-                device=self.device
-            )
+                rgb, conf=self.conf_thr, classes=[0],
+                verbose=False, imgsz=self.imgsz, device=self.device)
         except Exception as e:
-            self.get_logger().error(f'YOLO inference fallita: {e}')
+            self.get_logger().error(f'YOLO fallita: {e}')
             return
 
-        # ── Validazione output ─────────────────────────────────────
+        # ── Estrai misura torso ────────────────────────────────────
+        torso_raw, kp_3d, n_valid, avg_conf = self._extract_torso(
+            results, depth)
+
+        # ── Macchina a stati ──────────────────────────────────────
+        self._update_state(torso_raw, n_valid, avg_conf, rgb_msg.header)
+
+        # ── Pubblica markers ──────────────────────────────────────
+        target = self.locked_target if self.locked_target is not None \
+                 else (self.kf.get_position() if self.kf.initialized else None)
+
+        if target is not None and kp_3d:
+            self._publish_markers(target, kp_3d, rgb_msg.header)
+
+    # ──────────────────────────────────────────────────────────────
+    def _extract_torso(self, results, depth):
+        """Estrae centro torso 3D da risultati YOLO.
+        Ritorna: (torso_raw, kp_3d, n_valid, avg_conf)
+        """
         if len(results) == 0 or results[0].keypoints is None:
-            self._handle_lost()
-            return
+            return None, {}, 0, 0.0
 
         kp_data = results[0].keypoints
         if kp_data.xy is None or kp_data.xy.shape[0] == 0:
-            self._handle_lost()
-            return
+            return None, {}, 0, 0.0
 
         kp_xy   = kp_data.xy.cpu().numpy()[0]
         kp_conf = kp_data.conf.cpu().numpy()[0]
 
-        # ── Calcolo torso center 3D ────────────────────────────────
         K  = np.array(self.cam_info.k).reshape(3, 3)
         fx, fy = K[0, 0], K[1, 1]
         cx, cy = K[0, 2], K[1, 2]
 
         torso_pts = []
         kp_3d     = {}
+        confs     = []
 
         for idx in TORSO_KEYPOINTS:
             if kp_conf[idx] < self.conf_thr:
                 continue
-
             u, v = int(kp_xy[idx, 0]), int(kp_xy[idx, 1])
-
             if not (0 <= v < depth.shape[0] and 0 <= u < depth.shape[1]):
                 continue
-
-            d = float(depth[v, u])
-            if d <= 0.0 or d > self.max_depth:
+            d = self._get_depth_robust(depth, u, v, window=5)
+            if d is None:
                 continue
-
             X = (u - cx) * d / fx
             Y = (v - cy) * d / fy
             Z = d
             torso_pts.append([X, Y, Z])
             kp_3d[idx] = [X, Y, Z]
+            confs.append(kp_conf[idx])
 
-        # ── Almeno 2 punti validi ──────────────────────────────────
-        if len(torso_pts) >= 2:
-            torso_raw = np.mean(torso_pts, axis=0)
-            self.last_kp_3d     = kp_3d
-            self.debounce_timer = None
+        if len(torso_pts) < 2:
+            return None, {}, 0, 0.0
 
-            # ── Kalman: predict + update con misura reale ──────────
-            self.kf.predict(self.vel_damping)
-            self.kf.update(torso_raw)
-            torso_filtered = self.kf.get_position()
-
-            self._handle_detected(torso_filtered, rgb_msg.header)
-            self._publish_markers(torso_filtered, kp_3d, rgb_msg.header)
-        else:
-            self._handle_lost()
+        torso_raw = np.mean(torso_pts, axis=0)
+        avg_conf  = float(np.mean(confs))
+        return torso_raw, kp_3d, len(torso_pts), avg_conf
 
     # ──────────────────────────────────────────────────────────────
-    def _handle_detected(self, torso_center, header):
-        """Torso visibile: pubblica posizione filtrata da Kalman."""
-        self.torso_visible = True
-        self.last_torso    = torso_center.copy()
-        self.target_saved  = None
-        self.lost_timer    = self.get_clock().now()
+    def _update_state(self, torso_raw, n_valid, avg_conf, header):
+        """Macchina a stati principale."""
 
+        prev_state = self.state
+
+        # ── IDLE ──────────────────────────────────────────────────
+        if self.state == 'IDLE':
+            if torso_raw is not None \
+                    and n_valid >= self.min_keypoints \
+                    and avg_conf >= self.min_det_conf:
+                self.state = 'ESTIMATING'
+                self.kf.reset()
+                self.kf.initialize(torso_raw)
+                self.position_history = [torso_raw.copy()]
+                self.stable_counter   = 0
+                self.get_logger().info('🟠 IDLE → ESTIMATING')
+
+        # ── ESTIMATING ────────────────────────────────────────────
+        elif self.state == 'ESTIMATING':
+            if torso_raw is not None \
+                    and n_valid >= self.min_keypoints \
+                    and avg_conf >= self.min_det_conf:
+
+                # Aggiorna Kalman
+                self.kf.predict(self.vel_damping)
+                self.kf.update(torso_raw)
+                estimated = self.kf.get_position()
+
+                # Accumula storia posizioni
+                self.position_history.append(estimated.copy())
+                if len(self.position_history) > self.lock_stable_frames:
+                    self.position_history.pop(0)
+
+                # Pubblica stima corrente
+                self._publish_target(estimated, header)
+                self._publish_visible(True)
+
+                # Controlla se stima è stabile → LOCK
+                if len(self.position_history) >= self.lock_stable_frames:
+                    variance = np.var(self.position_history, axis=0).sum()
+                    if variance < self.lock_variance_thr:
+                        self.stable_counter += 1
+                        if self.stable_counter >= self.lock_stable_checks:  # 3 check consecutivi stabili
+                            self.locked_target = estimated.copy()
+                            self.state = 'LOCKED'
+                    else:
+                        self.stable_counter = 0  # reset se torna instabile
+
+            else:
+                # YOLO ha perso il torso in ESTIMATING → torna IDLE
+                self.get_logger().warn('⚠️ Torso perso durante stima → IDLE')
+                self.state = 'IDLE'
+                self.kf.reset()
+                self.position_history = []
+                self._publish_visible(False)
+
+        # ── LOCKED ────────────────────────────────────────────────
+        elif self.state == 'LOCKED':
+            self._publish_target(self.locked_target, header)
+            self._publish_visible(True)
+
+            # ── Controllo deriva: se il torso si è spostato → RECOVERY ──
+            if torso_raw is not None \
+                    and n_valid >= self.min_keypoints \
+                    and avg_conf >= self.min_det_conf:
+
+                drift = np.linalg.norm(torso_raw - self.locked_target)
+
+                if drift > self.lock_drift_thr:
+                    self.drift_counter += 1
+                    if self.drift_counter >= self.lock_drift_frames:
+                        self.get_logger().info(
+                            f'⚠️ Deriva rilevata: {drift:.3f}m → RECOVERY')
+                        self.state = 'RECOVERY'
+                        self.drift_counter = 0
+                        self.recovery_counter = 0
+                        self.position_history = []
+                        self.kf.reset()
+                else:
+                    self.drift_counter = 0  # reset se torna vicino
+
+
+        # ── RECOVERY ──────────────────────────────────────────────
+        elif self.state == 'RECOVERY':
+            self.recovery_counter += 1
+
+            if torso_raw is not None \
+                    and n_valid >= self.min_keypoints \
+                    and avg_conf >= self.min_det_conf:
+                self.kf.predict(self.vel_damping)
+                self.kf.update(torso_raw)
+                estimated = self.kf.get_position()
+                # Usa la media della storia:
+                if len(self.position_history) >= 5:
+                    smoothed = np.mean(self.position_history[-10:], axis=0)
+                else:
+                    smoothed = estimated
+                self._publish_target(smoothed, header)
+
+                self.position_history.append(estimated.copy())
+                if len(self.position_history) > self.lock_stable_frames:
+                    self.position_history.pop(0)
+
+            # Dopo recovery_frames → ri-lock
+            if self.recovery_counter >= self.recovery_frames:
+                if self.kf.initialized:
+                    self.locked_target = self.kf.get_position().copy()
+                self.state = 'LOCKED'
+                self.recovery_counter = 0
+                self.get_logger().info('🟢 RECOVERY → LOCKED (ri-lock)')
+
+        # ── Log cambio stato ──────────────────────────────────────
+        if self.state != prev_state:
+            self.get_logger().info(
+                f'🔄 Stato: {prev_state} → {self.state}  '
+                f'(n_kp={n_valid} conf={avg_conf:.2f})'
+            )
+
+        # Pubblica stato
+        state_msg = String()
+        state_msg.data = self.state
+        self.pub_state.publish(state_msg)
+
+    # ──────────────────────────────────────────────────────────────
+    def _publish_target(self, point_camera, header):
+        """Pubblica target in camera frame e trasforma in link06."""
         pt = PointStamped()
-        pt.header = header
-        pt.point.x, pt.point.y, pt.point.z = torso_center
+        pt.header.frame_id = 'camera_depth_optical_frame'
+        pt.header.stamp    = self.get_clock().now().to_msg()
+        pt.point.x, pt.point.y, pt.point.z = point_camera
         self.pub_torso_camera.publish(pt)
-
-        self._publish_ee(torso_center, header)
-        self._publish_visible(True)
+        self._publish_ee(point_camera)
 
     # ──────────────────────────────────────────────────────────────
-    def _handle_lost(self):
-        """Torso perso: debounce + Kalman predice senza misura."""
-        now = self.get_clock().now()
-
-        # ── Debounce: aspetta lost_debounce sec prima di dichiarare perso
-        if self.debounce_timer is None:
-            self.debounce_timer = now
-            # Durante il debounce: Kalman predice e continua a pubblicare
-            if self.kf.initialized:
-                self.kf.predict(self.vel_damping)
-                predicted = self.kf.get_position()
-                self._publish_ee(predicted, header=None)
-            return
-
-        elapsed_debounce = (now - self.debounce_timer).nanoseconds / 1e9
-
-        if elapsed_debounce < self.lost_debounce:
-            # Ancora in debounce → Kalman predice senza misura
-            if self.kf.initialized:
-                self.kf.predict(self.vel_damping)
-                predicted = self.kf.get_position()
-                self._publish_ee(predicted, header=None)
-            return
-
-        # ── Torso davvero perso ────────────────────────────────────
-        if self.torso_visible:
-            self.get_logger().info('👤 Torso perso (confermato dopo debounce)')
-
-        self.torso_visible = False
-        self._publish_visible(False)
-
-        # Kalman continua a predire (utile per target_saved)
-        if self.kf.initialized:
-            self.kf.predict(self.vel_damping * 0.95)  # smorzamento extra quando perso
-
-        if self.lost_timer is None:
-            self.lost_timer = now
-            return
-
-        elapsed_lost = (now - self.lost_timer).nanoseconds / 1e9
-
-        # Salva target dopo lost_timeout
-        if (elapsed_lost > self.lost_timeout
-                and self.last_torso is not None
-                and self.target_saved is None):
-            self.target_saved = self.last_torso.copy()
-            self.get_logger().info(f'🎯 TARGET SALVATO: {self.target_saved}')
-
-        # Pubblica target salvato (posizione congelata)
-        if self.target_saved is not None:
-            self._publish_ee(self.target_saved, header=None)
-
-    # ──────────────────────────────────────────────────────────────
-    def _publish_ee(self, point_camera, header):
+    def _publish_ee(self, point_camera):
         pt_stamped = PointStamped()
         pt_stamped.header.frame_id = 'camera_depth_optical_frame'
         pt_stamped.header.stamp    = self.get_clock().now().to_msg()
@@ -305,24 +389,17 @@ class Z1YoloTorsoTracker(Node):
 
         try:
             transform = self.tf_buffer.lookup_transform(
-                'link06',
-                'camera_depth_optical_frame',
+                'link06', 'camera_depth_optical_frame',
                 rclpy.time.Time(),
-                timeout=rclpy.duration.Duration(seconds=0.1)
-            )
+                timeout=rclpy.duration.Duration(seconds=0.1))
             transformed = do_transform_point(pt_stamped, transform)
-
             pose = PoseStamped()
             pose.header             = transformed.header
             pose.pose.position      = transformed.point
             pose.pose.orientation.w = 1.0
             self.pub_torso_ee.publish(pose)
-
         except TransformException as e:
-            self.get_logger().warn(
-                f'TF camera→link06 fallita: {e}',
-                throttle_duration_sec=2.0
-            )
+            self.get_logger().warn(f'TF fallita: {e}', throttle_duration_sec=2.0)
 
     # ──────────────────────────────────────────────────────────────
     def _publish_visible(self, visible: bool):
@@ -331,22 +408,29 @@ class Z1YoloTorsoTracker(Node):
         self.pub_visible.publish(msg)
 
     # ──────────────────────────────────────────────────────────────
+    def _get_depth_robust(self, depth, u, v, window=5):
+        h, w = depth.shape
+        half  = window // 2
+        patch = depth[max(v-half,0):min(v+half+1,h),
+                      max(u-half,0):min(u+half+1,w)]
+        valid = patch[(patch > 0.05) & (patch < self.max_depth)]
+        if valid.size < 3:
+            return None
+        return float(np.median(valid))
+
+    # ──────────────────────────────────────────────────────────────
     def _publish_markers(self, torso_center, kp_3d, header):
-        """Pubblica MarkerArray in world frame per RViz."""
 
         def cam_to_world(pt):
             ps = PointStamped()
             ps.header.frame_id = 'camera_depth_optical_frame'
             ps.header.stamp    = self.get_clock().now().to_msg()
-            ps.point.x = float(pt[0])
-            ps.point.y = float(pt[1])
-            ps.point.z = float(pt[2])
+            ps.point.x, ps.point.y, ps.point.z = float(pt[0]), float(pt[1]), float(pt[2])
             try:
                 t = self.tf_buffer.lookup_transform(
                     'world', 'camera_depth_optical_frame',
                     rclpy.time.Time(),
-                    timeout=rclpy.duration.Duration(seconds=0.05)
-                )
+                    timeout=rclpy.duration.Duration(seconds=0.05))
                 tr = do_transform_point(ps, t)
                 return [tr.point.x, tr.point.y, tr.point.z]
             except:
@@ -356,17 +440,15 @@ class Z1YoloTorsoTracker(Node):
         if center_w is None:
             return
 
-        kp_3d_w = {}
-        for idx, pt in kp_3d.items():
-            w = cam_to_world(pt)
-            if w is not None:
-                kp_3d_w[idx] = w
+        kp_3d_w = {idx: cam_to_world(pt) for idx, pt in kp_3d.items()}
+        kp_3d_w = {idx: w for idx, w in kp_3d_w.items() if w is not None}
 
         frame   = 'world'
         stamp   = self.get_clock().now().to_msg()
         markers = MarkerArray()
+        color   = STATE_COLORS.get(self.state, STATE_COLORS['IDLE'])
 
-        # 1. Pallino VERDE sul centro filtrato da Kalman
+        # 1. Pallino centrale (colore = stato)
         cm = Marker()
         cm.header.frame_id    = frame
         cm.header.stamp       = stamp
@@ -379,11 +461,11 @@ class Z1YoloTorsoTracker(Node):
         cm.pose.position.z    = float(center_w[2])
         cm.pose.orientation.w = 1.0
         cm.scale.x = cm.scale.y = cm.scale.z = 0.08
-        cm.color   = ColorRGBA(r=0.0, g=1.0, b=0.0, a=0.9)
-        cm.lifetime.nanosec = 200_000_000
+        cm.color              = color
+        cm.lifetime.nanosec   = 200_000_000
         markers.markers.append(cm)
 
-        # 2. Sfere BLU sui keypoint raw (non filtrati)
+        # 2. Sfere BLU keypoint
         for i, idx in enumerate(TORSO_KEYPOINTS):
             if idx not in kp_3d_w:
                 continue
@@ -400,8 +482,8 @@ class Z1YoloTorsoTracker(Node):
             m.pose.position.z    = float(kp[2])
             m.pose.orientation.w = 1.0
             m.scale.x = m.scale.y = m.scale.z = 0.04
-            m.color   = ColorRGBA(r=0.0, g=0.5, b=1.0, a=0.8)
-            m.lifetime.nanosec = 200_000_000
+            m.color              = ColorRGBA(r=0.0, g=0.5, b=1.0, a=0.8)
+            m.lifetime.nanosec   = 200_000_000
             markers.markers.append(m)
 
         # 3. Linee GIALLE tra keypoint
@@ -416,7 +498,6 @@ class Z1YoloTorsoTracker(Node):
         lm.color              = ColorRGBA(r=1.0, g=1.0, b=0.0, a=0.8)
         lm.pose.orientation.w = 1.0
         lm.lifetime.nanosec   = 200_000_000
-
         for (a, b) in TORSO_EDGES:
             if a in kp_3d_w and b in kp_3d_w:
                 lm.points.append(Point(x=float(kp_3d_w[a][0]),
@@ -428,7 +509,7 @@ class Z1YoloTorsoTracker(Node):
         if lm.points:
             markers.markers.append(lm)
 
-        # 4. Linee ROSSE dal centro ai keypoint
+        # 4. Linee ROSSE centro → keypoint
         sm = Marker()
         sm.header.frame_id    = frame
         sm.header.stamp       = stamp
@@ -440,11 +521,9 @@ class Z1YoloTorsoTracker(Node):
         sm.color              = ColorRGBA(r=1.0, g=0.3, b=0.0, a=0.6)
         sm.pose.orientation.w = 1.0
         sm.lifetime.nanosec   = 200_000_000
-
         pc = Point(x=float(center_w[0]),
                    y=float(center_w[1]),
                    z=float(center_w[2]))
-
         for idx in TORSO_KEYPOINTS:
             if idx in kp_3d_w:
                 sm.points.append(pc)
@@ -454,6 +533,23 @@ class Z1YoloTorsoTracker(Node):
         if sm.points:
             markers.markers.append(sm)
 
+        # 5. Testo stato in RViz
+        tm = Marker()
+        tm.header.frame_id    = frame
+        tm.header.stamp       = stamp
+        tm.ns                 = 'torso_state'
+        tm.id                 = 20
+        tm.type               = Marker.TEXT_VIEW_FACING
+        tm.action             = Marker.ADD
+        tm.pose.position.x    = float(center_w[0])
+        tm.pose.position.y    = float(center_w[1])
+        tm.pose.position.z    = float(center_w[2]) + 0.15
+        tm.pose.orientation.w = 1.0
+        tm.scale.z            = 0.05
+        tm.color              = color
+        tm.text               = self.state
+        tm.lifetime.nanosec   = 200_000_000
+        markers.markers.append(tm)
         self.pub_markers.publish(markers)
 
 

@@ -1,0 +1,33 @@
+# z1_yolo_torso_params.yaml
+# Parametri per Z1 YOLO Torso Tracker
+
+z1_yolo_torso_tracker:
+  ros__parameters:
+
+    # ── YOLO ──────────────────────────────────────────────────────
+    model_path:   'yolo11n-pose.pt'
+    conf_thr:     0.3
+    max_depth:    2.5
+    device:       'cpu'
+    imgsz:        416
+
+    # ── Kalman Filter ──────────────────────────────────────────────
+    # Q basso = mi fido del modello (corpo fermo)
+    # R alto  = non mi fido troppo di YOLO (misura rumorosa)
+    kf_process_noise:  0.00005
+    kf_meas_noise:     1.0
+    kf_vel_damping:    0.9
+
+    # ── Macchina a stati ───────────────────────────────────────────
+    min_detection_conf:  0.6    # conf minima YOLO per iniziare stima
+    min_keypoints:       3      # keypoint minimi validi (su 4)
+    lock_stable_frames:  20     # finestra storia per calcolare varianza
+    lock_variance_thr:   0.005  # varianza max per considerare stima stabile
+    lock_stable_checks:  5      # check consecutivi stabili prima del lock
+
+    # ── Rilevamento deriva in LOCKED ───────────────────────────────
+    lock_drift_thr:    0.25     # distanza max tollerata prima di recovery (m)
+    lock_drift_frames: 10       # frame consecutivi oltre soglia → recovery
+
+    # ── Recovery ───────────────────────────────────────────────────
+    recovery_frames:   10       # frame in recovery prima di ri-lock

@@ -195,6 +195,7 @@ Visualization Manager:
         torso_edges: true
         torso_keypoints: true
         torso_spokes: true
+        torso_state: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
