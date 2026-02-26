@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, ExecuteProcess, TimerAction, RegisterEventHandler
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from launch.conditions import IfCondition
-from launch.event_handlers import OnShutdown
+
 
 
 def generate_launch_description():
@@ -32,43 +32,19 @@ def generate_launch_description():
         z1_vision_pkg, 'rviz', 'z1_realsense.rviz'
     ])
 
-    # ============== JOINT TRAJECTORY START COMMAND ==============
-    go_to_start_conf = TimerAction(
-        period=5.0,   # qualche secondo dopo l'avvio del controller di traiettoria
-        actions=[
-            ExecuteProcess(
-                cmd=[
-                    'ros2', 'topic', 'pub', '--once',
-                    '/joint_trajectory_controller/joint_trajectory',
-                    'trajectory_msgs/msg/JointTrajectory',
-                    '{header: {stamp: {sec: 0, nanosec: 0}}, '
-                    "joint_names: ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6'], "
-                    'points: [{positions: [0.0, 1.0, -1.0, 0.0, 0.0, 0.0], '
-                    'time_from_start: {sec: 10, nanosec: 0}}]}'
-                ],
-                output='screen'
-            )
-        ]
-    )
-    go_to_safe_conf = ExecuteProcess(
-        cmd=[
-            'ros2', 'topic', 'pub', '--once',
-            '/joint_trajectory_controller/joint_trajectory',
-            'trajectory_msgs/msg/JointTrajectory',
-            '{header: {stamp: {sec: 0, nanosec: 0}}, '
-            "joint_names: ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6'], "
-            'points: [{positions: [0.0, 0.0, -0.1, 0.0, 0.0, 0.0], '
-            'time_from_start: {sec: 5, nanosec: 0}}]}'
-        ],
-        output='screen'
-    )
-
-    on_shutdown_handler = RegisterEventHandler(
-        OnShutdown(
-            on_shutdown=[
-                go_to_safe_conf
-            ]
-        )
+    # ============== TRAJECTORY MANAGER NODE ==============
+    # Sostituisce i vecchi TimerAction + ExecuteProcess
+    trajectory_manager_node = Node(
+        package='z1_vision',                    # ← il tuo pacchetto
+        executable='trajectory_manager',        # ← entry point dal setup.py
+        name='trajectory_manager',
+        output='screen',
+        parameters=[{
+            'start_pos': [0.0, 1.0, -1.0, 0.0, 0.0, 0.0],   # ← parametri opzionali
+            'home_pos': [0.0, 0.0, -0.2, 0.0, 0.0, 0.0],
+            'start_duration': 10.0,
+            'home_duration': 10.0,
+        }]
     )
     
     return LaunchDescription([
@@ -139,8 +115,6 @@ def generate_launch_description():
             }.items()
         ),
 
-        # comando di traiettoria iniziale
-        go_to_start_conf,
         
         # ============== REALSENSE CAMERA ==============
         IncludeLaunchDescription(
@@ -198,5 +172,4 @@ def generate_launch_description():
             condition=IfCondition(use_rviz)
         ),
 
-        on_shutdown_handler,  
     ])
