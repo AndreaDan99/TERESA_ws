@@ -14,7 +14,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import PoseStamped, WrenchStamped
-from std_msgs.msg import Float64MultiArray, Float32
+from std_msgs.msg import Float64MultiArray, Float32, Bool
 from tf_transformations import quaternion_matrix  
 
 import signal
@@ -111,7 +111,6 @@ class ImpedanceController(Node):
         self.use_surface_frame = self.get_parameter('use_surface_frame').get_parameter_value().bool_value
         self.desired_normal_offset = self.get_parameter('desired_normal_offset').get_parameter_value().double_value
 
-        # ✅ AGGIUNGI QUESTE RIGHE QUI
         self.get_logger().info('='*70)
         self.get_logger().info(f'🔍 DEBUG PARAMETRI REALSENSE:')
         self.get_logger().info(f'   use_surface_frame = {self.use_surface_frame}')
@@ -156,13 +155,14 @@ class ImpedanceController(Node):
         # Stato superficie (RealSense)
         self.surface_frame = None
         self.surface_signed_distance = 0.0
+        self.torso_visible = False  
 
         # Subscribers
         self.joint_state_sub = self.create_subscription(
             JointState, '/joint_states', self.joint_state_callback, 10
         )
         self.desired_pose_sub = self.create_subscription(
-            PoseStamped, '/desired_pose', self.desired_pose_callback, 10
+            PoseStamped, '/torso_target_ee', self.desired_pose_callback, 10
         )
         self.impedance_params_sub = self.create_subscription(
             Float64MultiArray, '/set_impedance', self.impedance_callback, 10
@@ -182,7 +182,9 @@ class ImpedanceController(Node):
             self.surface_dist_callback,
             10
         )
-
+        self.torso_visible_sub = self.create_subscription(
+            Bool, '/torso_visible', self.torso_visible_callback, 10
+        )
         
         # Publishers
         self.torque_pub = self.create_publisher(Float64MultiArray, '/torque_controller/commands', 10)
@@ -265,7 +267,21 @@ class ImpedanceController(Node):
                 self.get_logger().error(f'   A:  [{position[0]:.3f}, {position[1]:.3f}, {position[2]:.3f}]')
                 self.get_logger().info(f'💡 Usa step < {self.max_step_distance*1000:.0f}mm')
                 return
-        
+            
+        if self.use_surface_frame and self.torso_visible and self.surface_frame is not None:
+            surf_pos = np.array([
+                self.surface_frame.pose.position.x,
+                self.surface_frame.pose.position.y,
+                self.surface_frame.pose.position.z,
+            ])
+            q_surf = self.surface_frame.pose.orientation
+            R = quaternion_matrix([q_surf.x, q_surf.y, q_surf.z, q_surf.w])[:3, :3]
+            normal = R[:, 2]  # Z axis = normale al torso
+            position = surf_pos + self.desired_normal_offset * normal
+            self.get_logger().debug(
+                f'🎯 Target su torso offset={self.desired_normal_offset*1000:.1f}mm'
+            )
+
         # Imposta target posizione
         quaternion = pin.Quaternion(
             msg.pose.orientation.w, msg.pose.orientation.x,
@@ -311,10 +327,21 @@ class ImpedanceController(Node):
             self.get_logger().info(f'Impedenza aggiornata: K_p={msg.data[:3]}, K_d={msg.data[6:9]}')
         else:
             self.get_logger().warn(f'Formato impedance non valido: attesi 12 valori, ricevuti {len(msg.data)}')
-    
+
+    def torso_visible_callback(self, msg: Bool):
+        """✅ Flag torso rilevato da YOLO"""
+        prev = self.torso_visible
+        self.torso_visible = msg.data
+        if prev != self.torso_visible:
+            if self.torso_visible:
+                self.get_logger().info('👤 Torso RILEVATO - surface attiva')
+            else:
+                self.get_logger().info('👻 Torso PERSO - surface disattivata')
+
     def surface_callback(self, msg: PoseStamped):
         """Callback per superficie stimata da RealSense"""
-        self.surface_frame = msg
+        if self.torso_visible:  
+            self.surface_frame = msg
 
     def surface_dist_callback(self, msg: Float32):
         """Callback per distanza firmata TCP-superficie"""

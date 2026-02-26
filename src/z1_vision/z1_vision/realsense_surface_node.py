@@ -6,8 +6,8 @@ import numpy as np
 import cv2
 
 from sensor_msgs.msg import Image, CameraInfo
-from geometry_msgs.msg import PoseStamped
-from std_msgs.msg import Float32
+from geometry_msgs.msg import PoseStamped, PointStamped
+from std_msgs.msg import Float32, Bool
 from cv_bridge import CvBridge
 
 from tf2_ros import Buffer, TransformListener
@@ -25,10 +25,10 @@ class RealSenseSurfaceNode(Node):
         # Parametri
         self.declare_parameter("camera_frame", "camera_depth_optical_frame")
         self.declare_parameter("ee_frame", "link06")
-        self.declare_parameter("base_frame", "world")  # ← CAMBIATO da base_link
-        self.declare_parameter("patch_radius_px", 30)  # ← Aumentato per robustezza
-        self.declare_parameter("min_depth", 0.10)  # ← Più conservativo
-        self.declare_parameter("max_depth", 2.0)   # ← Range più ampio
+        self.declare_parameter("base_frame", "world")
+        self.declare_parameter("patch_radius_px", 30)
+        self.declare_parameter("min_depth", 0.10)
+        self.declare_parameter("max_depth", 2.0)
 
         self.camera_frame = self.get_parameter("camera_frame").get_parameter_value().string_value
         self.ee_frame = self.get_parameter("ee_frame").get_parameter_value().string_value
@@ -39,13 +39,21 @@ class RealSenseSurfaceNode(Node):
 
         self.fx = self.fy = self.ppx = self.ppy = None
 
-        # Subscriber - ✅ TOPIC CORRETTI
+        # ✅ SUBSCRIBER TORSO-SPECIFIC
+        self.torso_sub = self.create_subscription(
+            PointStamped, "/torso_target_camera", self.torso_callback, 10
+        )
+        self.visible_sub = self.create_subscription(
+            Bool, "/torso_visible", self.visible_callback, 10
+        )
+
+        # Subscriber Realsense
         self.depth_sub = self.create_subscription(
-            Image, "/camera/camera/aligned_depth_to_color/image_raw",  # ← CORRETTO
+            Image, "/camera/camera/aligned_depth_to_color/image_raw",
             self.depth_callback, 10
         )
         self.info_sub = self.create_subscription(
-            CameraInfo, "/camera/camera/color/camera_info",  # ← CORRETTO
+            CameraInfo, "/camera/camera/color/camera_info",
             self.info_callback, 10
         )
 
@@ -53,16 +61,16 @@ class RealSenseSurfaceNode(Node):
         self.surface_pub = self.create_publisher(PoseStamped, "surface_frame", 10)
         self.dist_pub = self.create_publisher(Float32, "surface_signed_distance", 10)
 
+        # State torso
+        self.torso_center_cam = None
+        self.torso_visible = False
+
         self.get_logger().info("="*70)
-        self.get_logger().info("RealSense Surface Node Inizializzato")
-        self.get_logger().info(f"Camera frame: {self.camera_frame}")
-        self.get_logger().info(f"EE frame: {self.ee_frame}")
-        self.get_logger().info(f"Base frame: {self.base_frame}")
-        self.get_logger().info(f"ROI patch radius: {self.patch_r}px")
-        self.get_logger().info(f"Depth range: [{self.min_depth:.2f}, {self.max_depth:.2f}] m")
+        self.get_logger().info("🚀 TORSO-SPECIFIC Surface Node")
+        self.get_logger().info("ROI dinamico su /torso_target_camera")
         self.get_logger().info("="*70)
 
-    def info_callback(self, msg: CameraInfo):
+    def info_callback(self, msg):
         if self.fx is None:
             self.fx = msg.k[0]
             self.fy = msg.k[4]
@@ -73,57 +81,61 @@ class RealSenseSurfaceNode(Node):
                 f"cx={self.ppx:.1f}, cy={self.ppy:.1f}"
             )
 
+    def torso_callback(self, msg: PointStamped):
+        """Centro torso 3D (camera frame) da YOLO"""
+        self.torso_center_cam = np.array([
+            msg.point.x, msg.point.y, msg.point.z
+        ])
+
+    def visible_callback(self, msg: Bool):
+        """Torso rilevato da YOLO"""
+        self.torso_visible = msg.data
+
+    def project_to_image(self, pt_cam):
+        """3D camera → pixel (u,v)"""
+        if self.fx is None or pt_cam[2] <= 0:
+            return None
+        u = self.ppx + self.fx * pt_cam[0] / pt_cam[2]
+        v = self.ppy + self.fy * pt_cam[1] / pt_cam[2]
+        return int(u), int(v)
+
     def depth_to_points(self, depth_img, mask=None):
-        """Converte depth image + maschera in point cloud Nx3 nel frame camera."""
         if self.fx is None:
             return None
-
         h, w = depth_img.shape
         if mask is None:
             mask = depth_img > 0
-
         ys, xs = np.where(mask)
         zs = depth_img[ys, xs]
-
-        # Filtro range depth
         valid = (zs > self.min_depth) & (zs < self.max_depth)
-        xs = xs[valid]
-        ys = ys[valid]
-        zs = zs[valid]
-        
+        xs, ys, zs = xs[valid], ys[valid], zs[valid]
         if zs.size < 10:
-            self.get_logger().warn(f"⚠️ Solo {zs.size} punti validi nel ROI")
             return None
-
-        # Backprojection
         xs_f = (xs - self.ppx) * zs / self.fx
         ys_f = (ys - self.ppy) * zs / self.fy
-
-        pts = np.vstack([xs_f, ys_f, zs]).T  # Nx3
-        return pts
+        return np.vstack([xs_f, ys_f, zs]).T
 
     def fit_plane_pca(self, pts):
-        """Fit piano p = p0 + n·d via PCA."""
         p0 = pts.mean(axis=0)
         pts_c = pts - p0
         _, _, Vt = np.linalg.svd(pts_c, full_matrices=False)
-        n = Vt[-1, :]  # autovettore con varianza minima
-        n = n / np.linalg.norm(n)
+        n = Vt[-1, :] / np.linalg.norm(Vt[-1, :])
         return p0, n
 
     def quat_to_rot(self, q):
         return tf.quaternion_matrix([q.x, q.y, q.z, q.w])[:3, :3]
 
     def depth_callback(self, msg: Image):
-        if self.fx is None:
-            self.get_logger().warn("⚠️ Camera intrinsics non ancora ricevuti")
+        # ✅ CRITICO: Skip se no torso!
+        if not self.torso_visible or self.torso_center_cam is None:
             return
 
-        # 1) Depth → CV2
+        if self.fx is None:
+            return
+
         try:
             depth_img = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
-        except Exception as e:
-            self.get_logger().error(f"❌ CvBridge error: {e}")
+        except:
             return
         
         if msg.encoding == "16UC1":
@@ -133,16 +145,16 @@ class RealSenseSurfaceNode(Node):
 
         h, w = depth_img.shape
 
-        # 2) ✅ USA CENTRO IMMAGINE (camera guarda avanti, rileva superficie frontale)
-        u_ee = int(self.ppx)
-        v_ee = int(self.ppy)
-
-        # 3) ROI attorno al centro
-        r = self.patch_r
-        u_min = max(u_ee - r, 0)
-        u_max = min(u_ee + r, w - 1)
-        v_min = max(v_ee - r, 0)
-        v_max = min(v_ee + r, h - 1)
+        # ✅ ROI su PROIEZIONE TORSO
+        torso_uv = self.project_to_image(self.torso_center_cam)
+        if torso_uv is None:
+            return
+        u_ee, v_ee = torso_uv
+        
+        u_min = max(u_ee - self.patch_r, 0)
+        u_max = min(u_ee + self.patch_r, w - 1)
+        v_min = max(v_ee - self.patch_r, 0)
+        v_max = min(v_ee + self.patch_r, h - 1)
 
         mask = np.zeros((h, w), dtype=bool)
         mask[v_min:v_max+1, u_min:u_max+1] = True
@@ -151,64 +163,51 @@ class RealSenseSurfaceNode(Node):
         if pts_cam is None:
             return
 
-        # 4) Fit piano
+        # Fit piano
         try:
             p0_cam, n_cam = self.fit_plane_pca(pts_cam)
-        except Exception as e:
-            self.get_logger().error(f"❌ PCA fit failed: {e}")
+        except:
             return
 
         if n_cam[2] < 0:
             n_cam = -n_cam
 
-        # 5) TF base → camera
+        # TF base → camera
         try:
             tf_base_cam = self.tf_buffer.lookup_transform(
-                self.base_frame, 
-                self.camera_frame, 
-                rclpy.time.Time(),
-                timeout=rclpy.duration.Duration(seconds=0.1)
+                self.base_frame, self.camera_frame,
+                rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=0.1)
             )
-        except Exception as e:
-            self.get_logger().warn(f"⚠️ TF {self.base_frame}→{self.camera_frame}: {e}")
+        except:
             return
 
         R_bc = self.quat_to_rot(tf_base_cam.transform.rotation)
-        t_bc = np.array([
-            tf_base_cam.transform.translation.x,
-            tf_base_cam.transform.translation.y,
-            tf_base_cam.transform.translation.z
-        ])
+        t_bc = np.array([tf_base_cam.transform.translation.x,
+                         tf_base_cam.transform.translation.y,
+                         tf_base_cam.transform.translation.z])
 
         p0_base = R_bc @ p0_cam + t_bc
         n_base = R_bc @ n_cam
 
-        # 6) Distanza TCP–superficie
+        # Distanza TCP-superficie
         try:
             tf_base_ee = self.tf_buffer.lookup_transform(
-                self.base_frame, 
-                self.ee_frame, 
-                rclpy.time.Time(),
-                timeout=rclpy.duration.Duration(seconds=0.1)
+                self.base_frame, self.ee_frame,
+                rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=0.1)
             )
-        except Exception as e:
-            self.get_logger().warn(f"⚠️ TF {self.base_frame}→{self.ee_frame}: {e}")
+        except:
             return
 
-        tcp_base = np.array([
-            tf_base_ee.transform.translation.x,
-            tf_base_ee.transform.translation.y,
-            tf_base_ee.transform.translation.z
-        ])
-
+        tcp_base = np.array([tf_base_ee.transform.translation.x,
+                             tf_base_ee.transform.translation.y,
+                             tf_base_ee.transform.translation.z])
         d = np.dot(tcp_base - p0_base, n_base)
 
-        # 7) Pubblica
+        # Costruisci Pose superficie
         z_axis = n_base / np.linalg.norm(n_base)
         aux = np.array([1.0, 0.0, 0.0])
         if abs(np.dot(aux, z_axis)) > 0.9:
             aux = np.array([0.0, 1.0, 0.0])
-        
         x_axis = np.cross(aux, z_axis)
         x_axis /= np.linalg.norm(x_axis)
         y_axis = np.cross(z_axis, x_axis)
@@ -227,10 +226,10 @@ class RealSenseSurfaceNode(Node):
         surf_msg.pose.position.x = float(p0_base[0])
         surf_msg.pose.position.y = float(p0_base[1])
         surf_msg.pose.position.z = float(p0_base[2])
-        surf_msg.pose.orientation.x = q[0]
-        surf_msg.pose.orientation.y = q[1]
-        surf_msg.pose.orientation.z = q[2]
-        surf_msg.pose.orientation.w = q[3]
+        surf_msg.pose.orientation.x = float(q[0])
+        surf_msg.pose.orientation.y = float(q[1])
+        surf_msg.pose.orientation.z = float(q[2])
+        surf_msg.pose.orientation.w = float(q[3])
         
         self.surface_pub.publish(surf_msg)
 
@@ -239,11 +238,9 @@ class RealSenseSurfaceNode(Node):
         self.dist_pub.publish(dist_msg)
         
         self.get_logger().info(
-            f"✅ Surface @ [{p0_base[0]:.3f}, {p0_base[1]:.3f}, {p0_base[2]:.3f}], "
-            f"dist: {d*1000:.1f}mm"
+            f"✅ TORSO SURFACE [{p0_base[0]:.3f}, {p0_base[1]:.3f}, {p0_base[2]:.3f}] "
+            f"ROI@({u_ee},{v_ee}) dist: {d*1000:.1f}mm"
         )
-
-
 
 def main(args=None):
     rclpy.init(args=args)
@@ -255,7 +252,6 @@ def main(args=None):
     finally:
         node.destroy_node()
         rclpy.shutdown()
-
 
 if __name__ == "__main__":
     main()

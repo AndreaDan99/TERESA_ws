@@ -102,7 +102,7 @@ def launch_setup(context, *args, **kwargs):
         executable="spawner",
         arguments=["torque_controller", "-c", "/controller_manager", "--inactive"],
         parameters=[{"use_sim_time": use_sim_time}],
-        condition=is_real,  # Solo per robot reale
+        #condition=is_real,  # Solo per robot reale
     )
 
     nodes_to_start.append(torque_controller_spawner)
