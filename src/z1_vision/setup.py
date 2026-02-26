@@ -37,8 +37,8 @@ setup(
             'impedance_controller_realsense = z1_vision.impedance_controller_realsense:main',
             'realsense_surface_node = z1_vision.realsense_surface_node:main',
             'trajectory_manager = z1_vision.trajectory_manager:main',
-            'z1_yolo_torso_tracker = z1_vision.z1_yolo_torso_tracker:main'
-            'safe_controller_switch = z1_vision.safe_controller_switch:main'
+            'z1_yolo_torso_tracker = z1_vision.z1_yolo_torso_tracker:main',
+            'safe_controller_switch = z1_vision.safe_controller_switch:main',
         ],
     },
 )

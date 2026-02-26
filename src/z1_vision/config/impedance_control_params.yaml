@@ -30,4 +30,4 @@ impedance_controller_realsense:
     gravity_scale_factor_j2: 1.3
      
     use_surface_frame: true            # ← DA false A true
-    desired_normal_offset: -0.005        # ← -5mm sopra superficie
+    desired_normal_offset: -0.20      

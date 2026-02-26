@@ -19,7 +19,7 @@ def generate_launch_description():
     camera_qz = LaunchConfiguration('camera_qz')
     camera_qw = LaunchConfiguration('camera_qw')
     parent_frame = LaunchConfiguration('parent_frame')
-    use_surface_node = LaunchConfiguration('use_surface_node')
+    #use_surface_node = LaunchConfiguration('use_surface_node')
     use_rviz = LaunchConfiguration('use_rviz')
     
     # Package paths
@@ -31,21 +31,6 @@ def generate_launch_description():
     rviz_config = PathJoinSubstitution([
         z1_vision_pkg, 'rviz', 'z1_realsense.rviz'
     ])
-
-    # ============== TRAJECTORY MANAGER NODE ==============
-    # Sostituisce i vecchi TimerAction + ExecuteProcess
-    trajectory_manager_node = Node(
-        package='z1_vision',                    # ← il tuo pacchetto
-        executable='trajectory_manager',        # ← entry point dal setup.py
-        name='trajectory_manager',
-        output='screen',
-        parameters=[{
-            'start_pos': [0.0, 1.0, -1.0, 0.0, 0.0, 0.0],   # ← parametri opzionali
-            'home_pos': [0.0, 0.0, -0.2, 0.0, 0.0, 0.0],
-            'start_duration': 10.0,
-            'home_duration': 10.0,
-        }]
-    )
     
     return LaunchDescription([
         # ============== ARGUMENTS ==============
@@ -89,11 +74,7 @@ def generate_launch_description():
             default_value='link06',
             description='Parent frame for camera mounting'
         ),
-        DeclareLaunchArgument(
-            'use_surface_node',
-            default_value='true',
-            description='Launch surface detection node'
-        ),
+
         DeclareLaunchArgument(
             'use_rviz',
             default_value='true',
@@ -144,23 +125,6 @@ def generate_launch_description():
                 parent_frame, 'camera_link'
             ],
             output='screen'
-        ),
-        
-        # ============== SURFACE DETECTION NODE ==============
-        Node(
-            package='z1_vision',
-            executable='realsense_surface_node',
-            name='realsense_surface_node',
-            parameters=[{
-                'ee_frame': 'link06',
-                'camera_frame': 'camera_depth_optical_frame',
-                'base_frame': 'world',
-                'patch_radius_px': 30,
-                'min_depth': 0.05,
-                'max_depth': 2.0,
-            }],
-            output='screen',
-            condition=IfCondition(use_surface_node)
         ),
         
         # ============== RVIZ CUSTOM ==============
