@@ -33,6 +33,9 @@ setup(
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
-        'console_scripts': [],
+        'console_scripts': [            
+            'impedance_controller_realsense = z1_vision.impedance_controller_realsense:main',
+            'realsense_surface_node = z1_vision.realsense_surface_node:main',
+        ],
     },
 )

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, ExecuteProcess, TimerAction, RegisterEventHandler
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from launch.conditions import IfCondition
+from launch.event_handlers import OnShutdown
 
 
 def generate_launch_description():
@@ -30,6 +31,45 @@ def generate_launch_description():
     rviz_config = PathJoinSubstitution([
         z1_vision_pkg, 'rviz', 'z1_realsense.rviz'
     ])
+
+    # ============== JOINT TRAJECTORY START COMMAND ==============
+    go_to_start_conf = TimerAction(
+        period=5.0,   # qualche secondo dopo l'avvio del controller di traiettoria
+        actions=[
+            ExecuteProcess(
+                cmd=[
+                    'ros2', 'topic', 'pub', '--once',
+                    '/joint_trajectory_controller/joint_trajectory',
+                    'trajectory_msgs/msg/JointTrajectory',
+                    '{header: {stamp: {sec: 0, nanosec: 0}}, '
+                    "joint_names: ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6'], "
+                    'points: [{positions: [0.0, 1.0, -1.0, 0.0, 0.0, 0.0], '
+                    'time_from_start: {sec: 10, nanosec: 0}}]}'
+                ],
+                output='screen'
+            )
+        ]
+    )
+    go_to_safe_conf = ExecuteProcess(
+        cmd=[
+            'ros2', 'topic', 'pub', '--once',
+            '/joint_trajectory_controller/joint_trajectory',
+            'trajectory_msgs/msg/JointTrajectory',
+            '{header: {stamp: {sec: 0, nanosec: 0}}, '
+            "joint_names: ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6'], "
+            'points: [{positions: [0.0, 0.0, -0.1, 0.0, 0.0, 0.0], '
+            'time_from_start: {sec: 5, nanosec: 0}}]}'
+        ],
+        output='screen'
+    )
+
+    on_shutdown_handler = RegisterEventHandler(
+        OnShutdown(
+            on_shutdown=[
+                go_to_safe_conf
+            ]
+        )
+    )
     
     return LaunchDescription([
         # ============== ARGUMENTS ==============
@@ -55,7 +95,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'camera_qy',
-            default_value='-0.0',
+            default_value='0.0',
             description='Camera quaternion Y'
         ),
         DeclareLaunchArgument(
@@ -98,6 +138,9 @@ def generate_launch_description():
                 'rviz': 'false',
             }.items()
         ),
+
+        # comando di traiettoria iniziale
+        go_to_start_conf,
         
         # ============== REALSENSE CAMERA ==============
         IncludeLaunchDescription(
@@ -130,7 +173,7 @@ def generate_launch_description():
         
         # ============== SURFACE DETECTION NODE ==============
         Node(
-            package='z1_control',
+            package='z1_vision',
             executable='realsense_surface_node',
             name='realsense_surface_node',
             parameters=[{
@@ -138,7 +181,7 @@ def generate_launch_description():
                 'camera_frame': 'camera_depth_optical_frame',
                 'base_frame': 'world',
                 'patch_radius_px': 30,
-                'min_depth': 0.05,  # ← RIDOTTO da 0.10 a 0.05
+                'min_depth': 0.05,
                 'max_depth': 2.0,
             }],
             output='screen',
@@ -154,4 +197,6 @@ def generate_launch_description():
             output='screen',
             condition=IfCondition(use_rviz)
         ),
+
+        on_shutdown_handler,  
     ])
