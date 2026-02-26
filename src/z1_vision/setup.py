@@ -36,6 +36,7 @@ setup(
         'console_scripts': [            
             'impedance_controller_realsense = z1_vision.impedance_controller_realsense:main',
             'realsense_surface_node = z1_vision.realsense_surface_node:main',
+            'trajectory_manager = z1_vision.trajectory_manager:main',
         ],
     },
 )
