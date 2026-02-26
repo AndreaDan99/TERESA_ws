@@ -41,6 +41,7 @@ setup(
             'impedance_controller = z1_control.impedance_controller:main',
             'impedance_test = z1_control.impedance_test:main',
             'impedance_controller_v2 = z1_control.impedance_controller_v2:main',
+            'impedance_controller_realsense = z1_control.impedance_controller_realsense:main',
             'realsense_surface_node = z1_control.realsense_surface_node:main',
         ],
     },

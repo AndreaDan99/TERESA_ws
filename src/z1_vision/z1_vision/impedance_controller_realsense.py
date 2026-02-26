@@ -117,7 +117,7 @@ class ImpedanceController(Node):
         self.get_logger().info(f'   use_surface_frame = {self.use_surface_frame}')
         self.get_logger().info(f'   desired_normal_offset = {self.desired_normal_offset}')
         self.get_logger().info('='*70)
-        
+
         # Stato robot
         self.n_joints = 6
         self.q = np.zeros(self.model.nq)

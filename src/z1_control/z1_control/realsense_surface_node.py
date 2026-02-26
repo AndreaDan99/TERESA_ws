@@ -115,9 +115,6 @@ class RealSenseSurfaceNode(Node):
         return tf.quaternion_matrix([q.x, q.y, q.z, q.w])[:3, :3]
 
     def depth_callback(self, msg: Image):
-        # ✅ LOG DEBUG
-        # self.get_logger().debug("📥 Depth callback triggered")
-        
         if self.fx is None:
             self.get_logger().warn("⚠️ Camera intrinsics non ancora ricevuti")
             return
@@ -129,49 +126,24 @@ class RealSenseSurfaceNode(Node):
             self.get_logger().error(f"❌ CvBridge error: {e}")
             return
         
-        # Gestione encoding (mm vs m)
         if msg.encoding == "16UC1":
-            depth_img = depth_img.astype(np.float32) / 1000.0  # mm → m
+            depth_img = depth_img.astype(np.float32) / 1000.0
         else:
             depth_img = depth_img.astype(np.float32)
 
         h, w = depth_img.shape
 
-        # 2) TF camera → EE per proiezione TCP
-        try:
-            tf_cam_ee = self.tf_buffer.lookup_transform(
-                self.camera_frame, 
-                self.ee_frame, 
-                rclpy.time.Time(),
-                timeout=rclpy.duration.Duration(seconds=0.1)  # ← Timeout
-            )
-        except Exception as e:
-            self.get_logger().warn(f"⚠️ TF {self.camera_frame}→{self.ee_frame}: {e}")
-            return
+        # 2) ✅ USA CENTRO IMMAGINE (camera guarda avanti, rileva superficie frontale)
+        u_ee = int(self.ppx)
+        v_ee = int(self.ppy)
 
-        tx = tf_cam_ee.transform.translation
-        
-        # ✅ FIX: Controllo Z camera (asse ottico)
-        if tx.z <= 0.05:  # TCP troppo vicino o dietro
-            self.get_logger().warn(f"⚠️ TCP fuori vista: z={tx.z:.3f}m")
-            return
-
-        # Proiezione TCP nel depth image
-        u_ee = int(self.fx * tx.x / tx.z + self.ppx)
-        v_ee = int(self.fy * tx.y / tx.z + self.ppy)
-
-        if not (0 <= u_ee < w and 0 <= v_ee < h):
-            self.get_logger().warn(f"⚠️ TCP fuori immagine: u={u_ee}, v={v_ee}")
-            return
-
-        # 3) ROI attorno al TCP
+        # 3) ROI attorno al centro
         r = self.patch_r
         u_min = max(u_ee - r, 0)
         u_max = min(u_ee + r, w - 1)
         v_min = max(v_ee - r, 0)
         v_max = min(v_ee + r, h - 1)
 
-        # Crea maschera ROI
         mask = np.zeros((h, w), dtype=bool)
         mask[v_min:v_max+1, u_min:u_max+1] = True
 
@@ -179,18 +151,17 @@ class RealSenseSurfaceNode(Node):
         if pts_cam is None:
             return
 
-        # 4) Fit piano nel frame camera
+        # 4) Fit piano
         try:
             p0_cam, n_cam = self.fit_plane_pca(pts_cam)
         except Exception as e:
             self.get_logger().error(f"❌ PCA fit failed: {e}")
             return
 
-        # Orienta normale verso la camera (z > 0)
         if n_cam[2] < 0:
             n_cam = -n_cam
 
-        # 5) TF base → camera per trasformare piano
+        # 5) TF base → camera
         try:
             tf_base_cam = self.tf_buffer.lookup_transform(
                 self.base_frame, 
@@ -212,7 +183,7 @@ class RealSenseSurfaceNode(Node):
         p0_base = R_bc @ p0_cam + t_bc
         n_base = R_bc @ n_cam
 
-        # 6) Distanza firmata TCP–superficie
+        # 6) Distanza TCP–superficie
         try:
             tf_base_ee = self.tf_buffer.lookup_transform(
                 self.base_frame, 
@@ -230,12 +201,10 @@ class RealSenseSurfaceNode(Node):
             tf_base_ee.transform.translation.z
         ])
 
-        d = np.dot(tcp_base - p0_base, n_base)  # >0 sopra, <0 dentro
+        d = np.dot(tcp_base - p0_base, n_base)
 
-        # 7) Costruisci PoseStamped surface_frame
+        # 7) Pubblica
         z_axis = n_base / np.linalg.norm(n_base)
-        
-        # Scegli x,y ortonormali
         aux = np.array([1.0, 0.0, 0.0])
         if abs(np.dot(aux, z_axis)) > 0.9:
             aux = np.array([0.0, 1.0, 0.0])
@@ -263,18 +232,17 @@ class RealSenseSurfaceNode(Node):
         surf_msg.pose.orientation.z = q[2]
         surf_msg.pose.orientation.w = q[3]
         
-        # ✅ PUBBLICAZIONE
         self.surface_pub.publish(surf_msg)
 
         dist_msg = Float32()
         dist_msg.data = float(d)
         self.dist_pub.publish(dist_msg)
         
-        # ✅ LOG SUCCESSO (commentalo in produzione)
         self.get_logger().info(
-            f"📤 Surface @ [{p0_base[0]:.3f}, {p0_base[1]:.3f}, {p0_base[2]:.3f}], "
-            f"distance: {d:.4f}m"
+            f"✅ Surface @ [{p0_base[0]:.3f}, {p0_base[1]:.3f}, {p0_base[2]:.3f}], "
+            f"dist: {d*1000:.1f}mm"
         )
+
 
 
 def main(args=None):

@@ -47,3 +47,38 @@ impedance_controller_v2:
     
     # Compensazione dinamica
     gravity_scale_factor_j2: 1.3
+
+
+impedance_controller_realsense:
+  ros__parameters:
+    urdf_path: '/home/andrea/Ros2_repositories/unitree_z1_ws/install/z1_description/share/z1_description/urdf/z1.urdf'
+    end_effector_frame: 'link06'
+    control_rate: 500.0
+    log_rate: 2.0
+    
+    # Controllo posizione (cartesiano)
+    K_p_translation: [400.0, 400.0, 800.0]
+    K_d_translation: [15.0, 15.0, 30.0]
+    K_i_translation: [0.2, 0.2, 0.6]
+    
+    # Rotazioni cartesiane (non usate, mantenute per compatibilità)
+    K_p_rotation: [0.0, 0.0, 0.0]
+    K_d_rotation: [0.0, 0.0, 0.0]
+    K_i_rotation: [0.0, 0.0, 0.0]
+    
+    # Controllo orientamento (joint-space su polso)
+    control_wrist_orientation: true
+    K_p_wrist_joints: [40.0, 40.0, 40.0]
+    K_d_wrist_joints: [4.0, 4.0, 4.0]
+    
+    # Parametri generali
+    integral_limit: 0.02
+    torque_limit: 80.0
+    safe_startup_duration: 3.0
+    max_step_distance: 0.40
+    
+    # Compensazione dinamica
+    gravity_scale_factor_j2: 1.3
+     
+    use_surface_frame: true              # ← DA false A true
+    desired_normal_offset: -0.005        # ← -5mm sopra superficie

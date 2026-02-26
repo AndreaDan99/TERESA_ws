@@ -5,69 +5,117 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
-from ament_index_python.packages import get_package_share_directory
-import os
+from launch.conditions import IfCondition
 
 
 def generate_launch_description():
-    # Parametri camera
-    camera_x = LaunchConfiguration('camera_x', default='0.10')
-    camera_y = LaunchConfiguration('camera_y', default='0.0')
-    camera_z = LaunchConfiguration('camera_z', default='-0.02')
-    
-    # Quaternione camera (180° attorno Y)
-    camera_qx = LaunchConfiguration('camera_qx', default='0.0')
-    camera_qy = LaunchConfiguration('camera_qy', default='1.0')
-    camera_qz = LaunchConfiguration('camera_qz', default='0.0')
-    camera_qw = LaunchConfiguration('camera_qw', default='0.0')
-    
-    parent_frame = LaunchConfiguration('parent_frame', default='link06')
+    # Launch arguments
+    camera_x = LaunchConfiguration('camera_x')
+    camera_y = LaunchConfiguration('camera_y')
+    camera_z = LaunchConfiguration('camera_z')
+    camera_qx = LaunchConfiguration('camera_qx')
+    camera_qy = LaunchConfiguration('camera_qy')
+    camera_qz = LaunchConfiguration('camera_qz')
+    camera_qw = LaunchConfiguration('camera_qw')
+    parent_frame = LaunchConfiguration('parent_frame')
+    use_surface_node = LaunchConfiguration('use_surface_node')
+    use_rviz = LaunchConfiguration('use_rviz')
     
     # Package paths
-    z1_gazebo_pkg = FindPackageShare('z1_gazebo')
+    z1_bringup_pkg = FindPackageShare('z1_bringup')
     realsense_pkg = FindPackageShare('realsense2_camera')
     z1_vision_pkg = FindPackageShare('z1_vision')
     
-    # RViz config
+    # Custom RViz config
     rviz_config = PathJoinSubstitution([
         z1_vision_pkg, 'rviz', 'z1_realsense.rviz'
     ])
     
     return LaunchDescription([
-        # Arguments
-        DeclareLaunchArgument('camera_x', default_value='0.10',
-                             description='Camera X offset from parent frame'),
-        DeclareLaunchArgument('camera_y', default_value='0.0',
-                             description='Camera Y offset from parent frame'),
-        DeclareLaunchArgument('camera_z', default_value='-0.02',
-                             description='Camera Z offset from parent frame'),
-        DeclareLaunchArgument('parent_frame', default_value='link06',
-                             description='Parent frame for camera'),
-        DeclareLaunchArgument('use_rviz', default_value='true',
-                             description='Launch RViz'),
-        
-        # 1. Z1 Gazebo simulation
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource([
-                PathJoinSubstitution([z1_gazebo_pkg, 'launch', 'empty_world.launch.py'])
-            ])
+        # ============== ARGUMENTS ==============
+        DeclareLaunchArgument(
+            'camera_x',
+            default_value='0.0',
+            description='Camera X offset from parent frame [m]'
+        ),
+        DeclareLaunchArgument(
+            'camera_y',
+            default_value='0.0',
+            description='Camera Y offset from parent frame [m]'
+        ),
+        DeclareLaunchArgument(
+            'camera_z',
+            default_value='0.05',  # ← 5cm SOPRA
+            description='Camera Z offset from parent frame [m]'
+        ),
+        DeclareLaunchArgument(
+            'camera_qx',
+            default_value='0.0',  
+            description='Camera quaternion X'
+        ),
+        DeclareLaunchArgument(
+            'camera_qy',
+            default_value='-0.0',
+            description='Camera quaternion Y'
+        ),
+        DeclareLaunchArgument(
+            'camera_qz',
+            default_value='0.0',
+            description='Camera quaternion Z'
+        ),
+        DeclareLaunchArgument(
+            'camera_qw',
+            default_value='1.0', 
+            description='Camera quaternion W'
+        ),
+        DeclareLaunchArgument(
+            'parent_frame',
+            default_value='link06',
+            description='Parent frame for camera mounting'
+        ),
+        DeclareLaunchArgument(
+            'use_surface_node',
+            default_value='true',
+            description='Launch surface detection node'
+        ),
+        DeclareLaunchArgument(
+            'use_rviz',
+            default_value='true',
+            description='Launch RViz with custom config'
         ),
         
-        # 2. RealSense camera
+        # ============== Z1 ROBOT (RViz DISABILITATO) ==============
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource([
-                PathJoinSubstitution([realsense_pkg, 'launch', 'rs_launch.py'])
+                PathJoinSubstitution([
+                    z1_bringup_pkg, 'launch', 'z1.launch.py'
+                ])
+            ]),
+            launch_arguments={
+                'sim_ignition': 'true',
+                'starting_controller': 'joint_trajectory_controller',
+                'with_gripper': 'false',
+                'rviz': 'false',
+            }.items()
+        ),
+        
+        # ============== REALSENSE CAMERA ==============
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource([
+                PathJoinSubstitution([
+                    realsense_pkg, 'launch', 'rs_launch.py'
+                ])
             ]),
             launch_arguments={
                 'enable_color': 'true',
                 'enable_depth': 'true',
                 'pointcloud.enable': 'true',
-                'align_depth.enable': 'true',
                 'colorizer.enable': 'false',
+                'align_depth.enable': 'true',
             }.items()
         ),
         
-        # 3. Static TF: link06 → camera_link
+        # ============== CAMERA TF ==============
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
@@ -80,7 +128,7 @@ def generate_launch_description():
             output='screen'
         ),
         
-        # 4. Surface detection node
+        # ============== SURFACE DETECTION NODE ==============
         Node(
             package='z1_control',
             executable='realsense_surface_node',
@@ -90,19 +138,20 @@ def generate_launch_description():
                 'camera_frame': 'camera_depth_optical_frame',
                 'base_frame': 'world',
                 'patch_radius_px': 30,
-                'min_depth': 0.10,
+                'min_depth': 0.05,  # ← RIDOTTO da 0.10 a 0.05
                 'max_depth': 2.0,
             }],
-            output='screen'
+            output='screen',
+            condition=IfCondition(use_surface_node)
         ),
         
-        # 5. RViz
+        # ============== RVIZ CUSTOM ==============
         Node(
             package='rviz2',
             executable='rviz2',
             name='rviz2',
             arguments=['-d', rviz_config],
-            condition=LaunchConfiguration('use_rviz'),
-            output='screen'
+            output='screen',
+            condition=IfCondition(use_rviz)
         ),
     ])
