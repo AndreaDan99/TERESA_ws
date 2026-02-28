@@ -241,6 +241,10 @@ class RealSenseSurfaceNode(Node):
             f"✅ TORSO SURFACE [{p0_base[0]:.3f}, {p0_base[1]:.3f}, {p0_base[2]:.3f}] "
             f"ROI@({u_ee},{v_ee}) dist: {d*1000:.1f}mm"
         )
+        self.get_logger().info(
+            f'🔍 normale world: [{n_base[0]:.3f}, {n_base[1]:.3f}, {n_base[2]:.3f}] | '
+            f'target Z: {p0_base[2] + self.desired_normal_offset * n_base[2]:.3f}m'
+)
 
 def main(args=None):
     rclpy.init(args=args)

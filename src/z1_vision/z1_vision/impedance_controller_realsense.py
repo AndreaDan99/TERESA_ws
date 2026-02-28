@@ -14,7 +14,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import PoseStamped, WrenchStamped
-from std_msgs.msg import Float64MultiArray, Float32, Bool
+from std_msgs.msg import Float64MultiArray, Float32, Bool, String
 from tf_transformations import quaternion_matrix  
 
 import signal
@@ -133,7 +133,8 @@ class ImpedanceController(Node):
         # Controllo PID
         self.control_dt = 1.0 / control_rate
         self.error_integral = np.zeros(6)
-        
+        self.scale_j2_filtered = 1.0  # valore iniziale neutro
+
         # Safe startup mode
         self.safe_startup_mode = True
         self.safe_startup_counter = 0
@@ -156,6 +157,8 @@ class ImpedanceController(Node):
         self.surface_frame = None
         self.surface_signed_distance = 0.0
         self.torso_visible = False  
+
+        self.tracker_state = "IDLE"
 
         # Subscribers
         self.joint_state_sub = self.create_subscription(
@@ -186,11 +189,16 @@ class ImpedanceController(Node):
             Bool, '/torso_visible', self.torso_visible_callback, 10
         )
         
+        self.tracker_state_sub = self.create_subscription(
+            String, '/torso_tracker_state', self.tracker_state_callback, 10
+        )
+
         # Publishers
         self.torque_pub = self.create_publisher(Float64MultiArray, '/torque_controller/commands', 10)
         self.current_pose_pub = self.create_publisher(PoseStamped, '/current_ee_pose', 10)
         self.wrench_pub = self.create_publisher(WrenchStamped, '/cartesian_wrench', 10)
-        
+        self.pub_unreachable = self.create_publisher(Bool, '/target_unreachable', 10)
+
         # Timers
         self.timer = self.create_timer(self.control_dt, self.control_loop)
         self.log_timer = self.create_timer(1.0 / self.log_rate, self.print_status)
@@ -242,15 +250,23 @@ class ImpedanceController(Node):
     
     def desired_pose_callback(self, msg):
         """Callback per aggiornare la posa desiderata con validazione"""
+        if self.tracker_state not in ("LOCKED", "RETURNING"):
+            return
         position = np.array([msg.pose.position.x, msg.pose.position.y, msg.pose.position.z])
         
         # Verifica workspace
         reach = np.linalg.norm(position[:2])
-        if not (0.05 < reach < 0.70 and -0.35 < position[1] < 0.35 and 0.05 < position[2] < 0.85):
+        reach_3d = np.linalg.norm(position)
+        reach_xy = np.linalg.norm(position[:2])
+        if not (reach_3d > 0.05 and reach_xy < 0.8 and
+                -0.4 < position[1] < 0.4 and
+                0.05 < position[2] < 0.85):
             self.get_logger().error(
                 f'❌ Target FUORI workspace: [{position[0]:.3f}, {position[1]:.3f}, {position[2]:.3f}]'
             )
-            self.get_logger().error('   Limiti: reach=0.05-0.70m, y=-0.35-0.35m, z=0.05-0.85m')
+            self.get_logger().error(
+                f'   reach_3d={reach_3d:.3f}m, reach_xy={reach_xy:.3f}m, z={position[2]:.3f}m'
+            )
             return
         
         # Verifica distanza da posizione corrente
@@ -259,14 +275,14 @@ class ImpedanceController(Node):
             distance = np.linalg.norm(position - x_current.translation)
             
             if distance > self.max_step_distance:
-                self.get_logger().error(f'⚠️ Target troppo lontano: {distance*1000:.0f}mm!')
-                self.get_logger().error(
-                    f'   Da: [{x_current.translation[0]:.3f}, {x_current.translation[1]:.3f}, '
-                    f'{x_current.translation[2]:.3f}]'
+                # Non rifiutare: cappa il target alla distanza massima
+                direction = (position - x_current.translation) / distance
+                position = x_current.translation + direction * self.max_step_distance
+                self.get_logger().debug(
+                    f'⚠️ Target cappato a {self.max_step_distance*1000:.0f}mm '
+                    f'(originale: {distance*1000:.0f}mm)'
                 )
-                self.get_logger().error(f'   A:  [{position[0]:.3f}, {position[1]:.3f}, {position[2]:.3f}]')
-                self.get_logger().info(f'💡 Usa step < {self.max_step_distance*1000:.0f}mm')
-                return
+                # NON pubblicare unreachable, NON fare return
             
         if self.use_surface_frame and self.torso_visible and self.surface_frame is not None:
             surf_pos = np.array([
@@ -346,6 +362,10 @@ class ImpedanceController(Node):
     def surface_dist_callback(self, msg: Float32):
         """Callback per distanza firmata TCP-superficie"""
         self.surface_signed_distance = msg.data
+
+    def tracker_state_callback(self, msg):
+        self.tracker_state = msg.data
+
 
     def control_loop(self):
         """Loop principale di controllo"""
@@ -458,9 +478,9 @@ class ImpedanceController(Node):
         # ========================================
         # INTEGRAZIONE SUPERFICIE (REALSENSE)
         # ========================================
-        if self.use_surface_frame and self.surface_frame is not None:
-            surf_pose = self.surface_frame.pose
-            
+        if self.use_surface_frame and self.torso_visible and self.surface_frame is not None:
+            surf_frame = self.surface_frame 
+            surf_pose = surf_frame.pose
             # Costruisci SE3 dalla superficie
             q_surf = [
                 surf_pose.orientation.x,
@@ -488,7 +508,7 @@ class ImpedanceController(Node):
 
 
         # ========================================
-        # CALCOLO ERRORE (METODO SEMPLICE)
+        # CALCOLO ERRORE 
         # ========================================
         x_error = np.zeros(6)  # ✅ INIZIALIZZA PRIMA!
         x_error[:3] = self.x_desired.translation - x_current.translation  # [X, Y, Z]
@@ -503,14 +523,25 @@ class ImpedanceController(Node):
 
         # Anti-windup intelligente
         error_norm_total = np.linalg.norm(x_error[:3])  # ✅ Usa solo errore posizione
-        if error_norm_total > 0.025:  # ✅ Abbassato da 0.15m (150mm) a 25mm
+        if error_norm_total > 0.020:  # ✅ Abbassato da 0.15m (150mm) a 25mm
             self.error_integral *= 0.90
         else:
             self.error_integral += x_error * self.control_dt
             self.error_integral = np.clip(self.error_integral, -self.integral_limit, self.integral_limit)
 
-        # Legge di controllo PID cartesiana
-        F_cartesian = self.K_p @ x_error - self.K_d @ dx + self.K_i @ self.error_integral
+        # ── Scaling adattivo Kp/Kd in funzione dell'estensione ──────────
+        reach_xy = np.linalg.norm(x_current.translation[:2])
+        reach_norm = np.clip(reach_xy / 0.6, 0.0, 1.0)
+
+        scale_kp = 1.0 - 0.65 * reach_norm   # 1.0 (rannicchiato) → 0.35 (disteso)
+        scale_kd = 1.0 + 1.00 * reach_norm   # 1.0 (rannicchiato) → 2.0  (disteso)
+
+        K_p_eff = self.K_p * scale_kp
+        K_d_eff = self.K_d * scale_kd
+        F_max = 80.0  # Newton, limite di sicurezza
+
+        F_cartesian = K_p_eff @ x_error - K_d_eff @ dx + self.K_i @ self.error_integral
+        F_cartesian = np.clip(F_cartesian, -F_max, F_max)
 
         # Disabilita controllo rotazionale cartesiano (già zero, ma per sicurezza)
         F_cartesian[3:6] = 0.0
@@ -562,6 +593,15 @@ class ImpedanceController(Node):
 
         # Compensazione dinamica
         tau_compensation = self.compute_compensation()
+        # ── Riduci gravity comp J2 durante RETURNING in zona verticale ──
+        reach_xy = np.linalg.norm(x_current.translation[:2])
+        if self.tracker_state == "RETURNING" and reach_xy < 0.35:
+            boost_scale = np.clip(1.0 - reach_xy / 0.35, 0.0, 1.0)
+            tau_compensation[1] *= (1.0 - 0.7 * boost_scale)  # riduce fino al 30%
+            # Boost diretto J2
+            Kp_j2_direct = 80.0 * boost_scale
+            tau_impedance[1] += Kp_j2_direct * (-x_error[0])
+            tau_impedance[1] += Kp_j2_direct * 0.5 * (-x_error[2])
 
         # ===== DEBUG LOG SEGNI =====
         if self.iteration_count % 500 == 0:
@@ -595,31 +635,62 @@ class ImpedanceController(Node):
         self.max_error_rot = max(self.max_error_rot, self.error_norm_rot)
 
     def compute_compensation(self):
-        """
-        Compensazione ibrida: usa Pinocchio per la forma matematica,
-        ma scala il risultato per correggere parametri URDF errati
-        """
-        # Calcola gravità con Pinocchio (forma corretta ma ampiezza sbagliata)
         tau_gravity = pin.computeGeneralizedGravity(self.model, self.data, self.q)
         
-        # Calcola Coriolis
         aq_zero = np.zeros(self.model.nv)
         tau_rnea = pin.rnea(self.model, self.data, self.q, self.dq, aq_zero)
         tau_coriolis = tau_rnea - tau_gravity
         
-        # Compensa con scaling su J2
         tau_comp = tau_gravity + tau_coriolis
-        tau_comp[1] = tau_gravity[1] * self.gravity_scale_j2 + tau_coriolis[1]
-        
-        # ===== DEBUG LOG =====
-        if self.iteration_count % 500 == 0:  # Ogni secondo
+
+        # ── Scale adattivo J2 in funzione dell'estensione XY ──────────
+        ee_pos = self.data.oMf[self.ee_frame_id].translation
+        reach_xy = np.linalg.norm(ee_pos[:2])
+        reach_xy_norm = np.clip(reach_xy / 0.3, 0.0, 1.0)  # satura a 0.3m
+        scale_j2_raw = self.gravity_scale_j2 - (self.gravity_scale_j2 - 1.0) * reach_xy_norm
+
+                # Filtro passa-basso: alpha piccolo = variazione lenta
+        alpha = 0.02  # era 0.005
+
+        self.scale_j2_filtered = alpha * scale_j2_raw + (1.0 - alpha) * self.scale_j2_filtered
+        tau_comp[1] = tau_gravity[1] * self.scale_j2_filtered + tau_coriolis[1]
+
+        # # ── Scale adattivo J4-J5 in funzione dell'estensione ──────────
+        # scale_j4 = 1.0 + 0.2 * reach_xy_norm   # più leggero, polso pesa meno
+        # scale_j5 = 1.0 + 0.2 * reach_xy_norm
+
+        # tau_comp[3] = tau_gravity[3] * scale_j4 + tau_coriolis[3]
+        # tau_comp[4] = tau_gravity[4] * scale_j5 + tau_coriolis[4]
+
+        if self.iteration_count % 500 == 0:
             self.get_logger().info(
                 f'GRAVITY J2: {tau_gravity[1]:.2f} Nm | '
-                f'SCALED: {tau_gravity[1] * self.gravity_scale_j2:.2f} Nm | '
+                f'reach_xy: {reach_xy:.3f}m | '
+                f'scale_j2: {self.scale_j2_filtered:.3f} | '
+                f'SCALED: {tau_gravity[1] * self.scale_j2_filtered:.2f} Nm | '
                 f'TOTAL COMP: {tau_comp[1]:.2f} Nm'
+                f'GRAVITY J4: {tau_gravity[3]:.2f} Nm | '
+                #f'SCALED: {tau_gravity[3]*scale_j4:.2f} Nm | '
+                f'GRAVITY J5: {tau_gravity[4]:.2f} Nm | '
+                #f'SCALED: {tau_gravity[4]*scale_j5:.2f} Nm'
+                f'scale_j2_raw: {scale_j2_raw:.3f} | '
+                f'scale_j2_filt: {self.scale_j2_filtered:.3f} | '
+
+                
             )
-        # =====================
+            if self.iteration_count % 500 == 0:
+                self.get_logger().info(
+                    f'POLSO tau_total: '
+                    f'J4={tau_comp[3]:+.3f}Nm  '
+                    f'J5={tau_comp[4]:+.3f}Nm  '
+                    f'J6={tau_comp[5]:+.3f}Nm | '
+                    f'q: [{np.rad2deg(self.q[3]):.1f}°, '
+                    f'{np.rad2deg(self.q[4]):.1f}°, '
+                    f'{np.rad2deg(self.q[5]):.1f}°]'
+                )
+
         return tau_comp[:self.n_joints]
+
 
     def publish_torque(self, tau):
         """Pubblica comandi di coppia"""

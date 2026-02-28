@@ -14,6 +14,7 @@ import time
 import numpy as np
 
 from sensor_msgs.msg import JointState
+from std_msgs.msg import Float64MultiArray
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
 from controller_manager_msgs.srv import SwitchController
@@ -31,11 +32,18 @@ class SafeControllerSwitch(Node):
 
         self.current_q = None
 
+
         # Subscriber joint states
         self.js_sub = self.create_subscription(
             JointState,
             '/joint_states',
             self.joint_state_callback,
+            10
+        )
+
+        self.torque_pub = self.create_publisher(
+            Float64MultiArray,
+            '/torque_controller/commands',
             10
         )
 
@@ -86,9 +94,14 @@ class SafeControllerSwitch(Node):
         success = self._do_switch()
 
         if success:
-            self.get_logger().info('✅ Switch completato! Avvio impedance controller...')
-        else:
-            self.get_logger().error('❌ Switch fallito!')
+            self.get_logger().info('⏳ Hold durante avvio impedance...')
+            start = time.time()
+            while time.time() - start < 1.0:   # 1 secondo di hold
+                msg = Float64MultiArray()
+                msg.data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+                self.torque_pub.publish(msg)
+                rclpy.spin_once(self, timeout_sec=0.01)
+                time.sleep(0.01)
 
         return success
 
@@ -110,9 +123,6 @@ class SafeControllerSwitch(Node):
         self.get_logger().info('📌 Goal "hold" pubblicato sul trajectory controller')
 
     def _do_switch(self):
-        """Chiama il servizio switch_controller"""
-
-        # Aspetta che il servizio sia disponibile
         if not self.switch_client.wait_for_service(timeout_sec=3.0):
             self.get_logger().error('❌ Servizio switch_controller non disponibile!')
             return False
@@ -120,12 +130,11 @@ class SafeControllerSwitch(Node):
         req = SwitchController.Request()
         req.activate_controllers   = ['torque_controller']
         req.deactivate_controllers = ['joint_trajectory_controller']
-        req.strictness = 2  # STRICT: fallisce se un controller non esiste
+        req.strictness = 1          # ← BEST_EFFORT invece di STRICT
         req.activate_asap = True
 
         future = self.switch_client.call_async(req)
 
-        # Aspetta risposta (max 3 secondi)
         timeout = 3.0
         start = time.time()
         while not future.done():
@@ -135,7 +144,12 @@ class SafeControllerSwitch(Node):
                 return False
 
         result = future.result()
-        return result.ok
+        if result.ok:
+            self.get_logger().info('✅ Switch riuscito!')
+        else:
+            self.get_logger().warn('⚠️ Switch parziale (torque_controller già attivo?), continuo...')
+
+        return True  # ← sempre True: se torque è già attivo va bene lo stesso
 
 
 def main():

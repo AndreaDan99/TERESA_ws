@@ -191,6 +191,7 @@ Visualization Manager:
       Enabled: true
       Name: MarkerArray
       Namespaces:
+        starting_position: true
         torso_center: true
         torso_edges: true
         torso_keypoints: true
@@ -224,7 +225,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 1.8563916683197021
+      Distance: 2.4809694290161133
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -239,10 +240,10 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.2300003319978714
+      Pitch: 0.32500046491622925
       Target Frame: world
       Value: Orbit (rviz)
-      Yaw: 3.0799996852874756
+      Yaw: 3.135005235671997
     Saved: ~
 Window Geometry:
   Displays:

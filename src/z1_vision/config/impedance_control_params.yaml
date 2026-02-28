@@ -6,28 +6,29 @@ impedance_controller_realsense:
     log_rate: 2.0
     
     # Controllo posizione (cartesiano)
-    K_p_translation: [400.0, 400.0, 800.0]
-    K_d_translation: [15.0, 15.0, 30.0]
-    K_i_translation: [0.2, 0.2, 0.6]
+    K_p_translation: [200.0, 200.0, 300.0]
+    K_d_translation: [20.0, 20.0, 30.0]
+    K_i_translation: [0.3, 0.3, 0.5]
     
     # Rotazioni cartesiane (non usate, mantenute per compatibilità)
-    K_p_rotation: [0.0, 0.0, 0.0]
-    K_d_rotation: [0.0, 0.0, 0.0]
+    K_p_rotation: [10.0, 10.0, 10.0]
+    K_d_rotation: [1.0, 1.0, 1.0]
     K_i_rotation: [0.0, 0.0, 0.0]
     
     # Controllo orientamento (joint-space su polso)
-    control_wrist_orientation: true
+    control_wrist_orientation: false
     K_p_wrist_joints: [40.0, 40.0, 40.0]
     K_d_wrist_joints: [4.0, 4.0, 4.0]
     
     # Parametri generali
     integral_limit: 0.02
     torque_limit: 80.0
+
     safe_startup_duration: 3.0
-    max_step_distance: 0.40
+    max_step_distance: 0.2
     
     # Compensazione dinamica
     gravity_scale_factor_j2: 1.3
      
-    use_surface_frame: true            # ← DA false A true
-    desired_normal_offset: -0.20      
+    use_surface_frame: true           
+    desired_normal_offset: 0.25

@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+# leggi_posizione_fk.py
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import JointState
+import pinocchio as pin
+import numpy as np
+
+URDF_PATH = '/home/andrea/Ros2_repositories/unitree_z1_ws/install/z1_description/share/z1_description/urdf/z1.urdf'  # ← cambia questo
+EE_FRAME  = 'link06'
+
+class FKReader(Node):
+    def __init__(self):
+        super().__init__('fk_reader')
+        self.model = pin.buildModelFromUrdf(URDF_PATH)
+        self.data  = self.model.createData()
+        self.ee_id = self.model.getFrameId(EE_FRAME)
+
+        self.create_subscription(
+            JointState, '/joint_states', self.cb, 10)
+        self.get_logger().info('In attesa di joint_states...')
+
+    def cb(self, msg):
+        q = np.zeros(self.model.nq)
+        q[:6] = np.array(msg.position[:6])
+
+        pin.forwardKinematics(self.model, self.data, q)
+        pin.updateFramePlacements(self.model, self.data)
+
+        pos = self.data.oMf[self.ee_id].translation
+        self.get_logger().info(
+            f'📍 EE position (world frame):\n'
+            f'   x: {pos[0]:.4f}\n'
+            f'   y: {pos[1]:.4f}\n'
+            f'   z: {pos[2]:.4f}\n'
+            f'\n'
+            f'   👉 starting_position: [{pos[0]:.4f}, {pos[1]:.4f}, {pos[2]:.4f}]'
+        )
+
+rclpy.init()
+rclpy.spin(FKReader())
