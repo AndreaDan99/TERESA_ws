@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Z1 High-Level FSM
+Z1 High-Level FSM (pulita + refresh->WAITING)
 
-States:
+Stati:
 - WAITING
 - APPROACHING_JTC
 - WAIT_JTC
@@ -14,13 +14,6 @@ States:
 - RETURN_HOME_JTC
 - WAIT_RETURN
 - FAULT
-- FAULT_RECOVERY_HOME
-
-This FSM orchestrates:
-- IK → JointTrajectoryController
-- Safe controller switching
-- Impedance activation
-- Return home
 """
 
 import rclpy
@@ -40,20 +33,12 @@ class Z1FSM(Node):
 
         # ================= PARAMETERS =================
         self.declare_parameter('approach_offset', 0.20)
-        # Offset iniziale lungo la normale (p_surf + offset * n).
-        # Impostalo coerente con impedance_params.yaml (es: -0.205 se poi l'impedenza avanza 0.20 fino a -0.005).
         self.declare_parameter('pre_contact_normal_offset', -0.205)
-
-        # Se True: usa /torso_surface_frame per approach (pos+orientazione).
-        # Se False: fallback alla vecchia logica (z-world).
         self.declare_parameter('use_surface_for_approach', True)
 
         self.declare_parameter('home_position', [0.0411, 0.0103, 0.5133])
-
-        # Home orientation quaternion [x,y,z,w] (frame: world)
         self.declare_parameter('home_orientation', [0.0, 0.0, 0.0, 1.0])
 
-        # Startup: command HOME once after delay
         self.declare_parameter('startup_go_home', True)
         self.declare_parameter('startup_home_delay', 5.0)
 
@@ -63,16 +48,23 @@ class Z1FSM(Node):
         self.declare_parameter('jtc_timeout', 25.0)
         self.declare_parameter('switch_timeout', 3.0)
 
-        # Re-publish IK goal while waiting (robust to startup ordering)
+        # Re-publish IK goal while waiting (robust)
         self.declare_parameter('ik_goal_republish_rate', 5.0)  # Hz
 
+        # >>> NEW: refresh / replan threshold (m)
+        self.declare_parameter('refresh_replan_dist_thr', 0.15)
+
+        # ================= READ PARAMETERS =================
         self.approach_offset = float(self.get_parameter('approach_offset').value)
         self.pre_contact_normal_offset = float(self.get_parameter('pre_contact_normal_offset').value)
         self.use_surface_for_approach = bool(self.get_parameter('use_surface_for_approach').value)
+
         self.home_position = np.array(self.get_parameter('home_position').value, dtype=np.float64)
         self.home_orientation = self.get_parameter('home_orientation').value
+
         self.startup_go_home = bool(self.get_parameter('startup_go_home').value)
         self.startup_home_delay = float(self.get_parameter('startup_home_delay').value)
+
         self.hold_time = float(self.get_parameter('hold_time').value)
         self.retract_timeout = float(self.get_parameter('retract_timeout').value)
 
@@ -83,12 +75,17 @@ class Z1FSM(Node):
         if self.ik_goal_republish_rate <= 0.0:
             self.ik_goal_republish_rate = 5.0
 
+        self.refresh_replan_dist_thr = float(self.get_parameter('refresh_replan_dist_thr').value)
+
         # ================= SUBSCRIBERS =================
+        # Target lockato dal tracker (aggiornato quando “refresh/relock”)
         self.sub_target = self.create_subscription(
             PoseStamped, '/torso_target_ee_locked', self.cb_target, 10)
 
+        # Frame superficie (pos+orientazione), se usi approach su normale
         self.sub_surface = self.create_subscription(
             PoseStamped, '/torso_surface_frame', self.cb_surface, 10)
+
         self.sub_lock_valid = self.create_subscription(
             Bool, '/target_lock_valid', self.cb_lock_valid, 10)
 
@@ -103,6 +100,7 @@ class Z1FSM(Node):
         self.sub_retract_done = self.create_subscription(
             Bool, '/impedance_retract_done', self.cb_retract_done, 10
         )
+
         # ================= PUBLISHERS =================
         self.pub_ik_goal = self.create_publisher(PoseStamped, '/ik_goal_pose', 10)
         self.pub_state = self.create_publisher(String, '/torso_sm_state', 10)
@@ -110,61 +108,64 @@ class Z1FSM(Node):
         # ================= STATE =================
         self.state = 'WAITING'
         self.start_time = self.get_clock().now()
+        self.state_start_time = self.get_clock().now()
+
         self.startup_home_sent = False
+
         self.target_world = None
         self.surface_frame = None
         self.target_lock_valid = False
+
         self.contact_detected = False
         self.ik_done = False
         self.ik_success = False
-        self.hold_start_time = None
 
-        self.state_start_time = self.get_clock().now()
         self.retract_done = False
 
-        # Avoid spamming FAULT logs
         self._fault_logged = False
 
-        # Last IK goal (for periodic re-publish while waiting)
+        # Last IK goal for republish
         self.last_ik_goal_pose = None  # type: PoseStamped | None
         self._last_goal_pub_time = self.get_clock().now()
 
-        self.timer = self.create_timer(1.0/30.0, self.step)
+        # >>> NEW: store “source” used to compute the current goal
+        # If surface approach: store surface position used
+        # Else: store target position used
+        self._goal_source_pos = None  # np.array(3,) or None
 
-        self.get_logger().info('🧠 NEW Z1 FSM READY')
+        self.timer = self.create_timer(1.0 / 30.0, self.step)
+        self.get_logger().info('🧠 Z1 FSM READY (refresh->WAITING enabled)')
 
     # ================= CALLBACKS =================
-
-    def cb_target(self, msg):
+    def cb_target(self, msg: PoseStamped):
         self.target_world = msg
 
-    def cb_surface(self, msg):
+    def cb_surface(self, msg: PoseStamped):
         self.surface_frame = msg
 
     def cb_lock_valid(self, msg: Bool):
         self.target_lock_valid = bool(msg.data)
 
-    def cb_contact(self, msg):
+    def cb_contact(self, msg: Bool):
         self.contact_detected = bool(msg.data)
 
-    def cb_ik_done(self, msg):
+    def cb_ik_done(self, msg: Bool):
         self.ik_done = bool(msg.data)
-    
+
     def cb_ik_success(self, msg: Bool):
         self.ik_success = bool(msg.data)
 
     def cb_retract_done(self, msg: Bool):
         self.retract_done = bool(msg.data)
+
     # ================= UTIL =================
-
     def publish_state(self):
-        m = String()
-        m.data = self.state
-        self.pub_state.publish(m)
+        self.pub_state.publish(String(data=self.state))
 
-    def publish_ik_goal(self, pose_msg):
+    def publish_ik_goal(self, pose_msg: PoseStamped, source_pos: np.ndarray | None):
         # Store last goal so we can re-publish it while waiting
         self.last_ik_goal_pose = pose_msg
+        self._goal_source_pos = None if source_pos is None else source_pos.copy()
         self.pub_ik_goal.publish(pose_msg)
         self._last_goal_pub_time = self.get_clock().now()
 
@@ -172,7 +173,6 @@ class Z1FSM(Node):
         """Re-publish the last IK goal at a fixed rate while waiting for completion."""
         if self.last_ik_goal_pose is None:
             return
-        # Only re-publish while waiting for JTC result
         if self.state not in ['WAIT_JTC', 'WAIT_RETURN']:
             return
         if self.ik_done:
@@ -181,7 +181,6 @@ class Z1FSM(Node):
         dt = (now - self._last_goal_pub_time).nanoseconds / 1e9
         period = 1.0 / float(self.ik_goal_republish_rate)
         if dt >= period:
-            # Re-publish the exact last goal (do not modify it)
             self.pub_ik_goal.publish(self.last_ik_goal_pose)
             self._last_goal_pub_time = now
 
@@ -208,24 +207,54 @@ class Z1FSM(Node):
             self.get_logger().error(f"❌ Errore eseguendo switch {direction}: {e}")
             return False
 
-    def enter_state(self, new_state):
+    def enter_state(self, new_state: str):
         self.get_logger().info(f"🔄 {self.state} → {new_state}")
         self.state = new_state
         self.state_start_time = self.get_clock().now()
-        if new_state == 'RETURN_HOME_JTC':
-            self.contact_detected = False
+
+        # Reset flags where it matters
+        if new_state in ['WAITING']:
+            self.last_ik_goal_pose = None
+            self._goal_source_pos = None
             self.ik_done = False
             self.ik_success = False
-        if new_state == 'WAITING':
-            self.last_ik_goal_pose = None
+
+        if new_state in ['RETURN_HOME_JTC', 'APPROACHING_JTC']:
+            self.ik_done = False
+            self.ik_success = False
+
         if new_state == 'FAULT':
             self._fault_logged = False
 
+    def _current_source_pos(self) -> np.ndarray | None:
+        """Return current target/surface position used for refresh check."""
+        if self.use_surface_for_approach:
+            if self.surface_frame is None:
+                return None
+            p = self.surface_frame.pose.position
+            return np.array([p.x, p.y, p.z], dtype=np.float64)
+        else:
+            if self.target_world is None:
+                return None
+            p = self.target_world.pose.position
+            return np.array([p.x, p.y, p.z], dtype=np.float64)
+
+    def _refresh_should_replan(self) -> bool:
+        """True if the target/surface moved enough from the source used to compute the current goal."""
+        if self._goal_source_pos is None:
+            return False
+        cur = self._current_source_pos()
+        if cur is None:
+            return False
+        dist = float(np.linalg.norm(cur - self._goal_source_pos))
+        return dist >= self.refresh_replan_dist_thr
+
     # ================= MAIN FSM =================
-
     def step(self):
-
         now = self.get_clock().now()
+
+        # Always republish goal (robustness) when waiting for JTC
+        self._maybe_republish_goal(now)
 
         # ================= WAITING =================
         if self.state == 'WAITING':
@@ -235,9 +264,10 @@ class Z1FSM(Node):
                 if startup_elapsed >= self.startup_home_delay:
                     self.startup_home_sent = True
                     self.enter_state('RETURN_HOME_JTC')
+                    self.publish_state()
                     return
 
-            # Normal operation: proceed only when the required inputs are available
+            # proceed only when inputs are available
             if self.use_surface_for_approach:
                 if self.target_lock_valid and (self.surface_frame is not None):
                     self.enter_state('APPROACHING_JTC')
@@ -247,10 +277,16 @@ class Z1FSM(Node):
 
         # ================= APPROACHING_JTC =================
         elif self.state == 'APPROACHING_JTC':
+            # If lock lost -> go waiting
+            if not self.target_lock_valid:
+                self.enter_state('WAITING')
+                self.publish_state()
+                return
+
             pose = PoseStamped()
 
             if self.use_surface_for_approach and self.surface_frame is not None:
-                # Usa la superficie: orientazione allineata alla normale (asse Z del frame superficie)
+                # Use surface orientation (normal = Z axis of surface frame)
                 pose.header = self.surface_frame.header
                 pose.header.stamp = now.to_msg()
                 pose.pose = self.surface_frame.pose
@@ -271,30 +307,50 @@ class Z1FSM(Node):
                 pose.pose.position.y = float(p_goal[1])
                 pose.pose.position.z = float(p_goal[2])
 
+                source_pos = p  # store surface position used for refresh
             else:
-                # Fallback: vecchia logica (offset su -Z world)
+                # Fallback: old logic (offset on -Z world)
                 if self.target_world is None:
+                    self.publish_state()
                     return
                 pose.header = self.target_world.header
                 pose.header.stamp = now.to_msg()
                 pose.pose = self.target_world.pose
                 pose.pose.position.z -= self.approach_offset
 
-            self.ik_done = False
-            self.ik_success = False
-            # Allow immediate re-publish while waiting
-            self._last_goal_pub_time = self.get_clock().now()
-            self.publish_ik_goal(pose)
+                p = pose.pose.position
+                source_pos = np.array([p.x, p.y, p.z], dtype=np.float64)
+
+            # publish goal and go wait
+            self._last_goal_pub_time = now
+            self.publish_ik_goal(pose, source_pos=source_pos)
             self.enter_state('WAIT_JTC')
 
         # ================= WAIT_JTC =================
         elif self.state == 'WAIT_JTC':
+            # If lock lost -> go waiting
+            if not self.target_lock_valid:
+                self.get_logger().warn('🔁 Lock perso durante WAIT_JTC → WAITING')
+                self.enter_state('WAITING')
+                self.publish_state()
+                return
+
+            # >>> NEW: if target/surface moved enough -> refresh by restarting from WAITING
+            if self._refresh_should_replan():
+                self.get_logger().warn(
+                    f'🔁 Target moved >= {self.refresh_replan_dist_thr:.2f}m during WAIT_JTC → WAITING (replan)'
+                )
+                self.enter_state('WAITING')
+                self.publish_state()
+                return
+
             if self.ik_done:
                 if self.ik_success:
                     self.enter_state('SWITCH_TO_TORQUE')
                 else:
                     self.get_logger().error('❌ JTC finished but NOT successful')
                     self.enter_state('FAULT')
+                self.publish_state()
                 return
 
             elapsed = (now - self.state_start_time).nanoseconds / 1e9
@@ -322,17 +378,18 @@ class Z1FSM(Node):
                 self.retract_done = False
                 self.enter_state('IMPEDANCE_RETRACT')
 
+        # ================= IMPEDANCE_RETRACT =================
         elif self.state == 'IMPEDANCE_RETRACT':
-            # aspetta che l'impedance controller dica “ok, sono tornato indietro”
             if self.retract_done:
                 self.enter_state('SWITCH_TO_JTC')
+                self.publish_state()
                 return
 
             elapsed = (now - self.state_start_time).nanoseconds / 1e9
             if elapsed > self.retract_timeout:
                 self.get_logger().error('❌ RETRACT timeout')
                 self.enter_state('FAULT')
-                
+
         # ================= SWITCH_TO_JTC =================
         elif self.state == 'SWITCH_TO_JTC':
             ok = self.switch_controller('to_jtc')
@@ -351,18 +408,15 @@ class Z1FSM(Node):
             pose.pose.position.y = float(self.home_position[1])
             pose.pose.position.z = float(self.home_position[2])
 
-            # Fixed home orientation (x,y,z,w)
             qx, qy, qz, qw = self.home_orientation
             pose.pose.orientation.x = float(qx)
             pose.pose.orientation.y = float(qy)
             pose.pose.orientation.z = float(qz)
             pose.pose.orientation.w = float(qw)
 
-            self.ik_done = False
-            self.ik_success = False
-            # Allow immediate re-publish while waiting
-            self._last_goal_pub_time = self.get_clock().now()
-            self.publish_ik_goal(pose)
+            self._last_goal_pub_time = now
+            # source_pos here is home pos (not used for refresh but ok)
+            self.publish_ik_goal(pose, source_pos=self.home_position)
             self.enter_state('WAIT_RETURN')
 
         # ================= WAIT_RETURN =================
@@ -373,6 +427,7 @@ class Z1FSM(Node):
                 else:
                     self.get_logger().error('❌ RETURN finished but NOT successful')
                     self.enter_state('FAULT')
+                self.publish_state()
                 return
 
             elapsed = (now - self.state_start_time).nanoseconds / 1e9
@@ -387,7 +442,6 @@ class Z1FSM(Node):
                 self._fault_logged = True
 
         self.publish_state()
-
 
 
 def main():

@@ -71,9 +71,9 @@ class Z1YoloTorsoTracker(Node):
         self.declare_parameter('lock_stable_frames', 20)
         self.declare_parameter('lock_variance_thr',  0.005)
         self.declare_parameter('lock_stable_checks', 5)
-        self.declare_parameter('lock_drift_thr',     0.08)   # lasciati invariati (anche se ora non usati per RETURN)
-        self.declare_parameter('lock_drift_frames',  5)      # lasciati invariati (anche se ora non usati per RETURN)
-        self.declare_parameter('recovery_frames',    10)     # lasciato invariato
+        self.declare_parameter('lock_drift_thr',     0.25)   
+        self.declare_parameter('lock_drift_frames',  5)   
+        self.declare_parameter('recovery_frames',    10)     
 
         # ── Parametri velocità ─────────────────────────────────────
         self.declare_parameter('tracking_speed',     0.05)   # invariato (interpolazione verso target)
