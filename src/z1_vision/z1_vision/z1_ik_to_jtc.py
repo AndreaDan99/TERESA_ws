@@ -97,6 +97,13 @@ class Z1IKToJTC(Node):
 
         # Action goal tracking
         self.goal_in_flight = False
+        self.current_goal_handle = None
+        self.goal_sent_time = None
+
+        # Safety: if the controller never returns a result, unlock after timeout
+        self.declare_parameter('goal_timeout_sec', 8.0)
+        self.goal_timeout_sec = float(self.get_parameter('goal_timeout_sec').value)
+        self._goal_watchdog_timer = self.create_timer(0.2, self._goal_watchdog)
 
         self.q_min = None
         self.q_max = None
@@ -135,6 +142,34 @@ class Z1IKToJTC(Node):
         self.pub_success.publish(m)
 
     def _done(self, done: bool):
+        m = Bool()
+        m.data = bool(done)
+        self.pub_done.publish(m)
+        
+    def _unlock_goal(self, reason: str):
+        # helper to consistently unlock goal state
+        self.get_logger().warn(f"🔓 Unlock goal_in_flight ({reason})")
+        self.goal_in_flight = False
+        self.current_goal_handle = None
+        self.goal_sent_time = None
+
+    def _goal_watchdog(self):
+        # If a goal is in flight but no result arrives, unlock after timeout
+        if not self.goal_in_flight or self.goal_sent_time is None:
+            return
+        now = self.get_clock().now()
+        elapsed = (now - self.goal_sent_time).nanoseconds / 1e9
+        if elapsed > self.goal_timeout_sec:
+            self._status('goal_timeout')
+            self._success(False)
+            self._done(True)
+            # Try to cancel, but unlock regardless
+            try:
+                if self.current_goal_handle is not None:
+                    self.current_goal_handle.cancel_goal_async()
+            except Exception as e:
+                self.get_logger().warn(f"⚠️ cancel_goal_async failed: {e}")
+            self._unlock_goal('timeout')
         m = Bool()
         m.data = bool(done)
         self.pub_done.publish(m)
@@ -306,9 +341,15 @@ class Z1IKToJTC(Node):
     def cb_goal_pose(self, goal_pose: PoseStamped):
         self.get_logger().info(f"🎯 Nuovo goal IK ricevuto: pos= {goal_pose.header.frame_id}, p = {goal_pose.pose.position.x:.3f}, {goal_pose.pose.position.y:.3f}, {goal_pose.pose.position.z:.3f}")
         if self.goal_in_flight:
-            self.get_logger().warn('⚠️ Nuovo goal ricevuto ma un goal JTC è già in corso: ignorato')
-            self._status('goal_ignored_in_flight')
-            return
+            self.get_logger().warn('⚠️ Nuovo goal ricevuto mentre un goal JTC è in corso: provo a cancellare il precedente')
+            self._status('goal_preempt_requested')
+            try:
+                if self.current_goal_handle is not None:
+                    self.current_goal_handle.cancel_goal_async()
+            except Exception as e:
+                self.get_logger().warn(f"⚠️ cancel_goal_async failed: {e}")
+            # Unlock locally to allow the new goal to be sent
+            self._unlock_goal('preempt')
 
         self._done(False)
         self._success(False)
@@ -370,13 +411,15 @@ class Z1IKToJTC(Node):
 
         self._status("sending_goal")
         self.goal_in_flight = True
+        self.goal_sent_time = self.get_clock().now()
         send_future = self.action_client.send_goal_async(goal)
 
         def _goal_response_cb(fut):
             goal_handle = fut.result()
+            self.current_goal_handle = goal_handle
             if not goal_handle.accepted:
                 self.get_logger().error("❌ Goal JTC rifiutato dal server.")
-                self.goal_in_flight = False
+                self._unlock_goal('rejected')
                 self._success(False)
                 self._done(True)
                 return
@@ -387,7 +430,7 @@ class Z1IKToJTC(Node):
                 self._status('goal_succeeded' if ok else f'goal_failed_status_{res.status if res else "none"}')
                 self._success(ok)
                 self._done(True)
-                self.goal_in_flight = False
+                self._unlock_goal('result')
 
             goal_handle.get_result_async().add_done_callback(_result_cb)
 
