@@ -1,34 +1,37 @@
 #!/usr/bin/env python3
 """ 
-Z1 YOLO Torso Tracker (percezione + filtro + LOCK interno)
+Z1 YOLO Torso Tracker (percezione + filtro + LOCK interno) — versione "reattiva" come il vecchio tracker.
 
-Obiettivo: tornare al comportamento “di prima” (marker RViz stabili, stato leggibile,
-meno sfarfallio) MA con topic/publisher/subscriber adattati alla nuova FSM.
+Obiettivo
+- Ripristinare il comportamento RViz "di prima": marker stabili, colore che cambia subito con lo stato,
+  niente inseguimento lento del pallino.
+- Adattare I/O alla NUOVA FSM esterna (che gestisce approaching/controllo).
 
-Pubblica:
-- /torso_target_camera        (PointStamped, camera_depth_optical_frame)
-- /torso_target_ee            (PoseStamped, world)                 [stima filtrata in world]
-- /torso_target_ee_locked     (PoseStamped, world)                 [target LOCKED]
-- /target_lock_valid          (Bool)
-- /target_lock_state          (String: SEARCHING/ESTIMATING/LOCKED/LOST)
+Pubblica
+- /torso_target_camera        (PointStamped, camera_depth_optical_frame)  # stima filtrata in camera frame
+- /torso_target_ee            (PoseStamped, world)                        # stima filtrata in world
+- /torso_target_ee_locked     (PoseStamped, world)                        # target LOCKED (world)
+- /target_lock_valid          (Bool)                                      # True solo quando LOCKED
+- /target_lock_state          (String)                                    # IDLE/ESTIMATING/LOCKED
 - /torso_visible              (Bool)
 - /torso_avg_conf             (Float32)
 - /torso_n_valid_kp           (Int32)
-- /torso_tracker_state        (String: TRACKING/LOST)
+- /torso_tracker_state        (String)                                    # TRACKING/LOST
 - /torso_markers              (MarkerArray)
 
-Sottoscrive:
+Sottoscrive
 - /camera/camera/color/image_raw
 - /camera/camera/depth/image_rect_raw
 - /camera/camera/color/camera_info
-- /torso_sm_state             (String)  # stato FSM esterna (solo per colore/label RViz)
+- /torso_sm_state             (String)  # stato FSM esterna (solo per label/colore RViz)
 
-FSM interna (solo percezione/lock):
-SEARCHING -> ESTIMATING -> LOCKED
-               |             |
-               +--(lost)-----+
+FSM interna (solo lock, simile alla vecchia)
+- IDLE -> ESTIMATING -> LOCKED
+- Se detection valida manca: IDLE (ma il LOCKED resta pubblicato finché la FSM esterna non resetta in WAITING)
 
-Nota: l’“approaching” resta responsabilità della FSM generale.
+Nota
+- La FSM esterna decide quando usare /torso_target_ee (tracking) oppure /torso_target_ee_locked (lock) e quando
+  resettare (pubblicando WAITING su /torso_sm_state).
 """
 
 import rclpy
@@ -51,19 +54,24 @@ from tf2_geometry_msgs import do_transform_point
 from .kalman_filter import Kalman3D
 
 
-# COCO keypoints (spalle + fianchi)
+# COCO Keypoints: spalle + fianchi
 TORSO_KEYPOINTS = [5, 6, 11, 12]
-TORSO_EDGES = [(5, 6), (5, 11), (6, 12), (11, 12)]
+TORSO_EDGES = [
+    (5, 6),
+    (5, 11),
+    (6, 12),
+    (11, 12),
+]
 
+# Colori stile "vecchio" (stati interni)
+STATE_COLORS_INTERNAL = {
+    'IDLE':       ColorRGBA(r=0.5, g=0.5, b=0.5, a=0.5),  # grigio
+    'ESTIMATING': ColorRGBA(r=1.0, g=0.5, b=0.0, a=0.9),  # arancione
+    'LOCKED':     ColorRGBA(r=0.0, g=1.0, b=0.0, a=0.9),  # verde
+}
 
-STATE_COLORS = {
-    # lock FSM interna
-    'SEARCHING':  ColorRGBA(r=1.0, g=0.0, b=0.0, a=0.9),
-    'ESTIMATING': ColorRGBA(r=1.0, g=0.6, b=0.0, a=0.9),
-    'LOCKED':     ColorRGBA(r=0.0, g=1.0, b=0.0, a=0.9),
-    'LOST':       ColorRGBA(r=0.6, g=0.6, b=0.6, a=0.9),
-
-    # fallback se vuoi colorare con FSM esterna
+# (opzionale) colori stati FSM esterna
+STATE_COLORS_EXTERNAL = {
     'WAITING':         ColorRGBA(r=0.5, g=0.5, b=0.5, a=0.8),
     'APPROACHING_JTC': ColorRGBA(r=0.2, g=0.6, b=1.0, a=0.9),
     'WAIT_JTC':        ColorRGBA(r=0.1, g=0.4, b=1.0, a=0.9),
@@ -82,7 +90,8 @@ STATE_COLORS = {
 def _median_depth(depth: np.ndarray, u: int, v: int, window: int, max_depth: float):
     h, w = depth.shape[:2]
     half = window // 2
-    patch = depth[max(v-half, 0):min(v+half+1, h), max(u-half, 0):min(u+half+1, w)]
+    patch = depth[max(v - half, 0):min(v + half + 1, h),
+                  max(u - half, 0):min(u + half + 1, w)]
     valid = patch[(patch > 0.05) & (patch < max_depth)]
     if valid.size < 3:
         return None
@@ -97,45 +106,48 @@ class Z1YoloTorsoTracker(Node):
         # ── Parametri base
         self.declare_parameter('model_path', 'yolo11n-pose.pt')
         self.declare_parameter('conf_thr', 0.3)
-        self.declare_parameter('imgsz', 416)
-        self.declare_parameter('device', 'cpu')
         self.declare_parameter('max_depth', 2.5)
+        self.declare_parameter('device', 'cpu')
+        self.declare_parameter('imgsz', 416)
 
         # ── Kalman
         self.declare_parameter('kf_process_noise', 5e-5)
         self.declare_parameter('kf_meas_noise', 1.0)
         self.declare_parameter('kf_vel_damping', 0.9)
 
-        # ── Lock / stabilità
+        # ── Lock (come vecchio)
         self.declare_parameter('min_detection_conf', 0.6)
         self.declare_parameter('min_keypoints', 3)
         self.declare_parameter('lock_stable_frames', 20)
         self.declare_parameter('lock_variance_thr', 0.005)
         self.declare_parameter('lock_stable_checks', 5)
-        self.declare_parameter('lock_alpha', 0.02)
         self.declare_parameter('recovery_frames', 10)
 
         # ── Marker
         self.declare_parameter('starting_position', [0.0411, 0.0103, 0.5133])
 
+        # Se True: colore marker segue FSM esterna quando presente
+        self.declare_parameter('rviz_color_use_external_fsm', False)
+
         # ── Lettura parametri
         self.model_path = str(self.get_parameter('model_path').value)
         self.conf_thr = float(self.get_parameter('conf_thr').value)
-        self.imgsz = int(self.get_parameter('imgsz').value)
-        self.device = str(self.get_parameter('device').value)
         self.max_depth = float(self.get_parameter('max_depth').value)
+        self.device = str(self.get_parameter('device').value)
+        self.imgsz = int(self.get_parameter('imgsz').value)
 
+        self.kf_vel_damping = float(self.get_parameter('kf_vel_damping').value)
         self.kf_process_noise = float(self.get_parameter('kf_process_noise').value)
         self.kf_meas_noise = float(self.get_parameter('kf_meas_noise').value)
-        self.kf_vel_damping = float(self.get_parameter('kf_vel_damping').value)
 
         self.min_det_conf = float(self.get_parameter('min_detection_conf').value)
         self.min_keypoints = int(self.get_parameter('min_keypoints').value)
         self.lock_stable_frames = int(self.get_parameter('lock_stable_frames').value)
         self.lock_variance_thr = float(self.get_parameter('lock_variance_thr').value)
         self.lock_stable_checks = int(self.get_parameter('lock_stable_checks').value)
-        self.lock_alpha = float(self.get_parameter('lock_alpha').value)
         self.recovery_frames = int(self.get_parameter('recovery_frames').value)
+
+        self.rviz_color_use_external_fsm = bool(self.get_parameter('rviz_color_use_external_fsm').value)
 
         raw_sp = self.get_parameter('starting_position').value
         self.starting_position = np.array(raw_sp, dtype=np.float64)
@@ -163,55 +175,68 @@ class Z1YoloTorsoTracker(Node):
         self.sub_rgb = Subscriber(self, Image, '/camera/camera/color/image_raw')
         self.sub_depth = Subscriber(self, Image, '/camera/camera/depth/image_rect_raw')
         self.sync = ApproximateTimeSynchronizer([self.sub_rgb, self.sub_depth], queue_size=5, slop=0.05)
-        self.sync.registerCallback(self.cb_sync)
+        self.sync.registerCallback(self.cb_synchronized)
 
         self.sub_info = self.create_subscription(CameraInfo, '/camera/camera/color/camera_info', self.cb_info, 1)
+
+        # FSM esterna
         self.sub_fsm_state = self.create_subscription(String, '/torso_sm_state', self.cb_fsm_state, 10)
 
+        # Publishers nuovi
         self.pub_torso_camera = self.create_publisher(PointStamped, '/torso_target_camera', 10)
         self.pub_torso_ee = self.create_publisher(PoseStamped, '/torso_target_ee', 10)
         self.pub_torso_ee_locked = self.create_publisher(PoseStamped, '/torso_target_ee_locked', 10)
+
         self.pub_lock_valid = self.create_publisher(Bool, '/target_lock_valid', 10)
         self.pub_lock_state = self.create_publisher(String, '/target_lock_state', 10)
+
         self.pub_visible = self.create_publisher(Bool, '/torso_visible', 10)
         self.pub_avg_conf = self.create_publisher(Float32, '/torso_avg_conf', 10)
         self.pub_n_valid_kp = self.create_publisher(Int32, '/torso_n_valid_kp', 10)
         self.pub_tracker_state = self.create_publisher(String, '/torso_tracker_state', 10)
+
         self.pub_markers = self.create_publisher(MarkerArray, '/torso_markers', 10)
 
-        # ── Stato interno
+        # ── Stato
         self.cam_info: CameraInfo | None = None
-        self.fsm_state = 'WAITING'        # esterna (solo RViz)
+        self.fsm_state_external: str = 'WAITING'
 
-        self.lock_state = 'SEARCHING'     # SEARCHING / ESTIMATING / LOCKED / LOST
-        self.locked_world: np.ndarray | None = None
+        self.state: str = 'IDLE'  # IDLE / ESTIMATING / LOCKED
+        self.locked_target: np.ndarray | None = None  # world
 
         self.position_history: list[np.ndarray] = []
-        self.stable_counter = 0
-        self.lost_counter = 0
+        self.stable_counter: int = 0
+        self.lost_counter: int = 0
 
         self.last_stamp_sec: float | None = None
 
-        self.get_logger().info('🚀 Torso tracker pronto (FSM interna + marker RViz come prima)')
+        self._publish_lock_outputs()
+
+        self.get_logger().info(
+            '🚀 Torso tracker pronto (logica vecchia + I/O nuova)\n'
+            f'   starting_position (marker): {self.starting_position.tolist()}\n'
+            f'   rviz_color_use_external_fsm: {self.rviz_color_use_external_fsm}'
+        )
 
     # ──────────────────────────────────────────────
     def cb_info(self, msg: CameraInfo):
         self.cam_info = msg
 
     def cb_fsm_state(self, msg: String):
-        self.fsm_state = msg.data
+        prev = self.fsm_state_external
+        self.fsm_state_external = msg.data
 
-        # reset lock solo quando la FSM esterna torna a WAITING
-        if self.fsm_state == 'WAITING':
-            self._reset_lock(keep_locked=False)
+        # Reset ciclo quando la FSM esterna torna a WAITING
+        if self.fsm_state_external == 'WAITING' and prev != 'WAITING':
+            self._reset_internal(reset_lock=True)
 
     # ──────────────────────────────────────────────
-    def cb_sync(self, rgb_msg: Image, depth_msg: Image):
+    def cb_synchronized(self, rgb_msg: Image, depth_msg: Image):
         if self.cam_info is None:
             self.get_logger().warn('CameraInfo non ancora ricevuta', throttle_duration_sec=2.0)
             return
 
-        # dt “reale” per Kalman (riduce jitter)
+        # dt reale per Kalman
         now_sec = rgb_msg.header.stamp.sec + rgb_msg.header.stamp.nanosec * 1e-9
         if self.last_stamp_sec is not None:
             real_dt = now_sec - self.last_stamp_sec
@@ -223,18 +248,14 @@ class Z1YoloTorsoTracker(Node):
         try:
             rgb = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding='bgr8')
             depth = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='passthrough')
-
-            # depth uint16 (mm) -> m
             if depth.dtype == np.uint16:
                 depth = depth.astype(np.float32) / 1000.0
 
-            # allinea risoluzione depth se serve
             h_rgb, w_rgb = rgb.shape[:2]
             if depth.shape[:2] != (h_rgb, w_rgb):
                 depth = cv2.resize(depth, (w_rgb, h_rgb), interpolation=cv2.INTER_NEAREST)
-
         except Exception as e:
-            self.get_logger().error(f'Errore conversione immagini: {e}')
+            self.get_logger().error(f'Errore immagini: {e}')
             return
 
         # YOLO
@@ -257,19 +278,19 @@ class Z1YoloTorsoTracker(Node):
         self.pub_avg_conf.publish(Float32(data=float(avg_conf)))
         self.pub_n_valid_kp.publish(Int32(data=int(n_valid)))
 
-        # tracking ok?
         ok_det = (torso_raw is not None and n_valid >= self.min_keypoints and avg_conf >= self.min_det_conf)
 
         if not ok_det:
             self._handle_lost()
-            # publish marker anche in lost: se lock esiste, rimane visibile
-            self._publish_markers(self.locked_world, kp_3d_cam, rgb_msg.header)
+            # marker: se lock esiste, rimane visibile
+            if self.locked_target is not None:
+                self._publish_markers(self.locked_target, kp_3d_cam, rgb_msg.header)
             return
 
-        # reset contatore lost
+        # detection ok
         self.lost_counter = 0
 
-        # Kalman
+        # Kalman update
         if not self.kf.initialized:
             self.kf.reset()
             self.kf.initialize(torso_raw)
@@ -291,32 +312,37 @@ class Z1YoloTorsoTracker(Node):
         # camera -> world
         est_world = self._camera_to_world(est_cam)
         if est_world is None:
-            # TF mancante: per sicurezza consideriamo lost (ma non distruggiamo lock se già lockato)
             self.get_logger().warn('TF camera->world non disponibile', throttle_duration_sec=2.0)
             self.pub_visible.publish(Bool(data=False))
-            self._publish_markers(self.locked_world, kp_3d_cam, rgb_msg.header)
+            self.pub_tracker_state.publish(String(data='LOST'))
+            self._publish_lock_outputs()
+            if self.locked_target is not None:
+                self._publish_markers(self.locked_target, kp_3d_cam, rgb_msg.header)
             return
 
-        # publish stima world (compat)
-        self._publish_target_world(est_world)
+        # publish base outputs
         self.pub_visible.publish(Bool(data=True))
         self.pub_tracker_state.publish(String(data='TRACKING'))
 
-        # FSM lock
-        self._update_lock_fsm(est_world)
+        # FSM interna (vecchia logica)
+        self._update_state(est_world)
 
-        # marker
-        marker_target = self.locked_world if self.locked_world is not None else est_world
+        # publish stima world (NO interpolazione)
+        self._publish_target_world(est_world)
+
+        # marker: se lock esiste mostra lock, altrimenti mostra stima
+        marker_target = self.locked_target if self.locked_target is not None else est_world
         self._publish_markers(marker_target, kp_3d_cam, rgb_msg.header)
 
     # ──────────────────────────────────────────────
-    def _reset_lock(self, keep_locked: bool = False):
+    def _reset_internal(self, reset_lock: bool = True):
+        self.state = 'IDLE'
         self.position_history = []
         self.stable_counter = 0
         self.lost_counter = 0
-        self.lock_state = 'SEARCHING'
-        if not keep_locked:
-            self.locked_world = None
+        self.kf.reset()
+        if reset_lock:
+            self.locked_target = None
         self._publish_lock_outputs()
 
     def _handle_lost(self):
@@ -325,26 +351,27 @@ class Z1YoloTorsoTracker(Node):
 
         self.lost_counter += 1
 
-        # se non siamo lockati, resta SEARCHING
-        if self.lock_state != 'LOCKED':
-            self.lock_state = 'SEARCHING'
+        # Se non siamo LOCKED, torna IDLE subito (come nel vecchio comportamento)
+        if self.state != 'LOCKED':
+            self.state = 'IDLE'
             self.position_history = []
             self.stable_counter = 0
-        else:
-            # se siamo lockati, tollera un po' di perdita
-            if self.lost_counter >= self.recovery_frames:
-                self.lock_state = 'LOST'
+            self.kf.reset()
+        # Se siamo LOCKED, teniamo il lock finché la FSM esterna non resetta in WAITING
 
         self._publish_lock_outputs()
 
-    def _update_lock_fsm(self, est_world: np.ndarray):
-        if self.lock_state in ('SEARCHING', 'LOST'):
-            # appena rivedo detection valida, passo a ESTIMATING
-            self.lock_state = 'ESTIMATING'
+    def _update_state(self, est_world: np.ndarray):
+        prev_state = self.state
+
+        # IDLE -> ESTIMATING
+        if self.state == 'IDLE':
+            self.state = 'ESTIMATING'
             self.position_history = []
             self.stable_counter = 0
 
-        if self.lock_state == 'ESTIMATING':
+        # ESTIMATING: accumula history e lock se stabile
+        if self.state == 'ESTIMATING':
             self.position_history.append(est_world.copy())
             if len(self.position_history) > self.lock_stable_frames:
                 self.position_history.pop(0)
@@ -357,27 +384,27 @@ class Z1YoloTorsoTracker(Node):
                     self.stable_counter = 0
 
                 if self.stable_counter >= self.lock_stable_checks:
-                    self.lock_state = 'LOCKED'
-                    self.locked_world = est_world.copy()
+                    self.state = 'LOCKED'
+                    self.locked_target = est_world.copy()  # LOCK FISSO (NO inseguimento)
 
-        elif self.lock_state == 'LOCKED':
-            # aggiorna lock in modo “lento” per ridurre jitter
-            if self.locked_world is None:
-                self.locked_world = est_world.copy()
-            else:
-                self.locked_world = (1.0 - self.lock_alpha) * self.locked_world + self.lock_alpha * est_world
+        # LOCKED: resta fisso
+        elif self.state == 'LOCKED':
+            if self.locked_target is None:
+                self.locked_target = est_world.copy()
 
-        # se siamo LOCKED pubblichiamo sempre il locked
+        if self.state != prev_state:
+            self.get_logger().info(f'🔄 {prev_state} → {self.state}')
+
         self._publish_lock_outputs()
 
     def _publish_lock_outputs(self):
-        valid = (self.lock_state == 'LOCKED')
+        valid = (self.state == 'LOCKED' and self.locked_target is not None)
 
         self.pub_lock_valid.publish(Bool(data=bool(valid)))
-        self.pub_lock_state.publish(String(data=str(self.lock_state)))
+        self.pub_lock_state.publish(String(data=str(self.state)))
 
-        if valid and self.locked_world is not None:
-            self._publish_target_world_locked(self.locked_world)
+        if valid:
+            self._publish_target_world_locked(self.locked_target)
 
     # ──────────────────────────────────────────────
     def _publish_target_world(self, point_world: np.ndarray):
@@ -410,7 +437,12 @@ class Z1YoloTorsoTracker(Node):
         pt.point.z = float(point_cam[2])
 
         try:
-            tf = self.tf_buffer.lookup_transform('world', 'camera_depth_optical_frame', rclpy.time.Time())
+            tf = self.tf_buffer.lookup_transform(
+                'world',
+                'camera_depth_optical_frame',
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.1),
+            )
             out = do_transform_point(pt, tf)
             return np.array([out.point.x, out.point.y, out.point.z], dtype=np.float64)
         except TransformException as e:
@@ -419,7 +451,6 @@ class Z1YoloTorsoTracker(Node):
 
     # ──────────────────────────────────────────────
     def _extract_torso(self, results, depth: np.ndarray):
-        """Estrae centro torso in camera frame + keypoint 3D in camera frame."""
         if len(results) == 0 or results[0].keypoints is None:
             return None, {}, 0, 0.0
 
@@ -465,16 +496,22 @@ class Z1YoloTorsoTracker(Node):
         return torso, kp_3d, len(pts), avg_conf
 
     # ──────────────────────────────────────────────
-    def _publish_markers(self, torso_center_world: np.ndarray | None, kp_3d_cam: dict, header):
-        """Marker RViz come prima: pallino centrale + keypoints + edges + testo + starting_position."""
+    def _pick_marker_color(self) -> ColorRGBA:
+        if self.rviz_color_use_external_fsm:
+            return STATE_COLORS_EXTERNAL.get(
+                self.fsm_state_external,
+                STATE_COLORS_INTERNAL.get(self.state, STATE_COLORS_INTERNAL['IDLE'])
+            )
+        return STATE_COLORS_INTERNAL.get(self.state, STATE_COLORS_INTERNAL['IDLE'])
+
+    def _publish_markers(self, torso_center_world: np.ndarray, kp_3d_cam: dict, header):
         if torso_center_world is None:
             return
 
-        # scegli colore: preferisci FSM esterna se presente, altrimenti lock_state
-        color = STATE_COLORS.get(self.fsm_state, STATE_COLORS.get(self.lock_state, STATE_COLORS['SEARCHING']))
-
-        stamp = header.stamp
         frame = 'world'
+        stamp = self.get_clock().now().to_msg()  # come nel tuo file "buono"
+        color = self._pick_marker_color()
+
         markers = MarkerArray()
 
         # keypoints -> world
@@ -502,8 +539,7 @@ class Z1YoloTorsoTracker(Node):
         markers.markers.append(cm)
 
         # 2) keypoints spheres
-        i = 0
-        for idx in TORSO_KEYPOINTS:
+        for i, idx in enumerate(TORSO_KEYPOINTS):
             if idx not in kp_3d_w:
                 continue
             kp = kp_3d_w[idx]
@@ -522,7 +558,6 @@ class Z1YoloTorsoTracker(Node):
             m.color = ColorRGBA(r=0.0, g=0.5, b=1.0, a=0.8)
             m.lifetime.nanosec = 200_000_000
             markers.markers.append(m)
-            i += 1
 
         # 3) edges
         lm = Marker()
@@ -543,7 +578,27 @@ class Z1YoloTorsoTracker(Node):
         if lm.points:
             markers.markers.append(lm)
 
-        # 4) text
+        # 4) spokes
+        sm = Marker()
+        sm.header.frame_id = frame
+        sm.header.stamp = stamp
+        sm.ns = 'torso_spokes'
+        sm.id = 11
+        sm.type = Marker.LINE_LIST
+        sm.action = Marker.ADD
+        sm.scale.x = 0.008
+        sm.color = ColorRGBA(r=1.0, g=0.3, b=0.0, a=0.6)
+        sm.pose.orientation.w = 1.0
+        sm.lifetime.nanosec = 200_000_000
+        pc = Point(x=float(torso_center_world[0]), y=float(torso_center_world[1]), z=float(torso_center_world[2]))
+        for idx in TORSO_KEYPOINTS:
+            if idx in kp_3d_w:
+                sm.points.append(pc)
+                sm.points.append(Point(x=float(kp_3d_w[idx][0]), y=float(kp_3d_w[idx][1]), z=float(kp_3d_w[idx][2])))
+        if sm.points:
+            markers.markers.append(sm)
+
+        # 5) testo
         tm = Marker()
         tm.header.frame_id = frame
         tm.header.stamp = stamp
@@ -557,11 +612,11 @@ class Z1YoloTorsoTracker(Node):
         tm.pose.orientation.w = 1.0
         tm.scale.z = 0.05
         tm.color = color
-        tm.text = f"FSM:{self.fsm_state} | LOCK:{self.lock_state}"
+        tm.text = f"EXT:{self.fsm_state_external} | INT:{self.state}"
         tm.lifetime.nanosec = 200_000_000
         markers.markers.append(tm)
 
-        # 5) starting_position marker
+        # 6) starting_position marker
         sp = Marker()
         sp.header.frame_id = frame
         sp.header.stamp = stamp
