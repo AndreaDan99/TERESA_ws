@@ -123,6 +123,10 @@ class Z1YoloTorsoTracker(Node):
         self.declare_parameter('lock_stable_checks', 5)
         self.declare_parameter('recovery_frames', 10)
 
+        # ── Re-lock (comportamento file “buono”)
+        self.declare_parameter('min_lock_frames', 8)
+        self.declare_parameter('relock_translation_thresh', 0.05)  # [m]
+
         # ── Marker
         self.declare_parameter('starting_position', [0.0411, 0.0103, 0.5133])
 
@@ -151,6 +155,11 @@ class Z1YoloTorsoTracker(Node):
 
         raw_sp = self.get_parameter('starting_position').value
         self.starting_position = np.array(raw_sp, dtype=np.float64)
+
+        self.min_lock_frames = int(self.get_parameter('min_lock_frames').value)
+        self.relock_translation_thresh = float(self.get_parameter('relock_translation_thresh').value)
+
+        self.relock_counter: int = 0
 
         # ── YOLO
         self.model = YOLO(self.model_path)
@@ -341,6 +350,7 @@ class Z1YoloTorsoTracker(Node):
         self.stable_counter = 0
         self.lost_counter = 0
         self.kf.reset()
+        self.relock_counter = 0
         if reset_lock:
             self.locked_target = None
         self._publish_lock_outputs()
@@ -356,6 +366,7 @@ class Z1YoloTorsoTracker(Node):
             self.state = 'IDLE'
             self.position_history = []
             self.stable_counter = 0
+            self.relock_counter = 0
             self.kf.reset()
         # Se siamo LOCKED, teniamo il lock finché la FSM esterna non resetta in WAITING
 
@@ -385,12 +396,26 @@ class Z1YoloTorsoTracker(Node):
 
                 if self.stable_counter >= self.lock_stable_checks:
                     self.state = 'LOCKED'
-                    self.locked_target = est_world.copy()  # LOCK FISSO (NO inseguimento)
+                    self.locked_target = est_world.copy()
+                    self.relock_counter = 0
 
-        # LOCKED: resta fisso
         elif self.state == 'LOCKED':
             if self.locked_target is None:
                 self.locked_target = est_world.copy()
+                self.relock_counter = 0
+            else:
+                diff = float(np.linalg.norm(est_world - self.locked_target))
+
+                # Se la stima è lontana abbastanza, contiamo frame consecutivi candidato
+                if diff > self.relock_translation_thresh:
+                    self.relock_counter += 1
+                    if self.relock_counter >= self.min_lock_frames:
+                        # RE-LOCK: salto immediato (niente inseguimento lento)
+                        self.locked_target = est_world.copy()
+                        self.relock_counter = 0
+                else:
+                    # Se torna vicino, reset contatore
+                    self.relock_counter = 0
 
         if self.state != prev_state:
             self.get_logger().info(f'🔄 {prev_state} → {self.state}')
@@ -401,8 +426,12 @@ class Z1YoloTorsoTracker(Node):
         valid = (self.state == 'LOCKED' and self.locked_target is not None)
 
         self.pub_lock_valid.publish(Bool(data=bool(valid)))
-        self.pub_lock_state.publish(String(data=str(self.state)))
+        if self.state == 'LOCKED' and self.relock_counter > 0:
+            lock_state_str = 'LOCKING'
+        else:
+            lock_state_str = str(self.state)
 
+        self.pub_lock_state.publish(String(data=lock_state_str))
         if valid:
             self._publish_target_world_locked(self.locked_target)
 
