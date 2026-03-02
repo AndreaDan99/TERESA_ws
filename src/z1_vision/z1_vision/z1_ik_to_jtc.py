@@ -424,9 +424,32 @@ class Z1IKToJTC(Node):
 
             def _result_cb(rf):
                 res = rf.result()
-                ok = (res is not None and res.status == 4 and res.result.error_code == 0)
-                self.get_logger().info(f"JTC result status={res.status} error_code={res.result.error_code} err='{res.result.error_string}'")
-                self._status('goal_succeeded' if ok else f'goal_failed_status_{res.status if res else "none"}')
+
+                # ROS2 action status codes (GoalStatus):
+                # 4 = SUCCEEDED, 5 = CANCELED
+                status = res.status if res is not None else None
+
+                # Defensive logging (res.result may be None in some edge cases)
+                try:
+                    err_code = res.result.error_code if (res is not None and res.result is not None) else None
+                    err_str  = res.result.error_string if (res is not None and res.result is not None) else ''
+                except Exception:
+                    err_code = None
+                    err_str  = ''
+
+                self.get_logger().info(
+                    f"JTC result status={status} error_code={err_code} err='{err_str}'"
+                )
+
+                # IMPORTANT: if a goal was preempted/canceled, do NOT publish done=True/success=False.
+                # Otherwise the FSM may see an immediate failure and go FAULT even though the NEW goal succeeds.
+                if status == 5:
+                    self._status('goal_canceled')
+                    self._unlock_goal('canceled')
+                    return
+
+                ok = (status == 4 and err_code == 0)
+                self._status('goal_succeeded' if ok else f'goal_failed_status_{status}')
                 self._success(ok)
                 self._done(True)
                 self._unlock_goal('result')

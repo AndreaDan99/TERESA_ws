@@ -54,6 +54,8 @@ class Z1FSM(Node):
         # >>> NEW: refresh / replan threshold (m)
         self.declare_parameter('refresh_replan_dist_thr', 0.15)
 
+        self.declare_parameter('enable_goal_republish', False)
+
         # ================= READ PARAMETERS =================
         self.approach_offset = float(self.get_parameter('approach_offset').value)
         self.pre_contact_normal_offset = float(self.get_parameter('pre_contact_normal_offset').value)
@@ -77,6 +79,7 @@ class Z1FSM(Node):
 
         self.refresh_replan_dist_thr = float(self.get_parameter('refresh_replan_dist_thr').value)
 
+        self.enable_goal_republish = bool(self.get_parameter('enable_goal_republish').value)
         # ================= SUBSCRIBERS =================
         # Target lockato dal tracker (aggiornato quando “refresh/relock”)
         self.sub_target = self.create_subscription(
@@ -170,6 +173,8 @@ class Z1FSM(Node):
         self._last_goal_pub_time = self.get_clock().now()
 
     def _maybe_republish_goal(self, now):
+        if not self.enable_goal_republish:
+            return
         """Re-publish the last IK goal at a fixed rate while waiting for completion."""
         if self.last_ik_goal_pose is None:
             return
