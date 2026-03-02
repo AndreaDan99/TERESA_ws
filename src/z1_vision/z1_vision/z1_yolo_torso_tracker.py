@@ -246,6 +246,7 @@ class Z1YoloTorsoTracker(Node):
         if kp.xy is None or kp.xy.shape[0] == 0:
             return None
 
+        h, w = depth.shape[:2]
         kp_xy = kp.xy.cpu().numpy()[0]
         kp_conf = kp.conf.cpu().numpy()[0]
 
@@ -258,6 +259,13 @@ class Z1YoloTorsoTracker(Node):
             if kp_conf[idx] < self.conf_thr:
                 continue
             u, v = int(kp_xy[idx][0]), int(kp_xy[idx][1])
+            u = np.clip(u, 0, w-1)
+            v = np.clip(v, 0, h-1)
+
+            # Controllo bounds + indexing sicuro
+            if not (0 <= v < h and 0 <= u < w):
+                self.get_logger().warn(f"Keypoint {idx} out of bounds: u={u},v={v} vs {w}x{h}")
+                continue
             d = depth[v, u]
             if d <= 0.05 or d > self.max_depth:
                 continue
@@ -269,6 +277,7 @@ class Z1YoloTorsoTracker(Node):
             return None
 
         return np.mean(pts, axis=0)
+
 
 
 def main():
