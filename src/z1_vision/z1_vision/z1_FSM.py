@@ -63,6 +63,9 @@ class Z1FSM(Node):
         self.declare_parameter('jtc_timeout', 25.0)
         self.declare_parameter('switch_timeout', 3.0)
 
+        # Re-publish IK goal while waiting (robust to startup ordering)
+        self.declare_parameter('ik_goal_republish_rate', 5.0)  # Hz
+
         self.approach_offset = float(self.get_parameter('approach_offset').value)
         self.pre_contact_normal_offset = float(self.get_parameter('pre_contact_normal_offset').value)
         self.use_surface_for_approach = bool(self.get_parameter('use_surface_for_approach').value)
@@ -75,6 +78,10 @@ class Z1FSM(Node):
 
         self.jtc_timeout = float(self.get_parameter('jtc_timeout').value)
         self.switch_timeout = float(self.get_parameter('switch_timeout').value)
+
+        self.ik_goal_republish_rate = float(self.get_parameter('ik_goal_republish_rate').value)
+        if self.ik_goal_republish_rate <= 0.0:
+            self.ik_goal_republish_rate = 5.0
 
         # ================= SUBSCRIBERS =================
         self.sub_target = self.create_subscription(
@@ -116,6 +123,10 @@ class Z1FSM(Node):
         self.jtc_goal_sent = False
         self.retract_done = False
 
+        # Last IK goal (for periodic re-publish while waiting)
+        self.last_ik_goal_pose = None  # type: PoseStamped | None
+        self._last_goal_pub_time = self.get_clock().now()
+
         self.timer = self.create_timer(1.0/30.0, self.step)
 
         self.get_logger().info('🧠 NEW Z1 FSM READY')
@@ -150,7 +161,26 @@ class Z1FSM(Node):
         self.pub_state.publish(m)
 
     def publish_ik_goal(self, pose_msg):
+        # Store last goal so we can re-publish it while waiting
+        self.last_ik_goal_pose = pose_msg
         self.pub_ik_goal.publish(pose_msg)
+        self._last_goal_pub_time = self.get_clock().now()
+
+    def _maybe_republish_goal(self, now):
+        """Re-publish the last IK goal at a fixed rate while waiting for completion."""
+        if self.last_ik_goal_pose is None:
+            return
+        # Only re-publish while waiting for JTC result
+        if self.state not in ['WAIT_JTC', 'WAIT_RETURN']:
+            return
+        if self.ik_done:
+            return
+
+        dt = (now - self._last_goal_pub_time).nanoseconds / 1e9
+        period = 1.0 / float(self.ik_goal_republish_rate)
+        if dt >= period:
+            self.pub_ik_goal.publish(self.last_ik_goal_pose)
+            self._last_goal_pub_time = now
 
     def switch_controller(self, direction) -> bool:
         """Blocking controller switch. Returns True if switch succeeded."""
@@ -183,12 +213,15 @@ class Z1FSM(Node):
             self.contact_detected = False
             self.ik_done = False
             self.ik_success = False
+        if new_state == 'WAITING':
+            self.last_ik_goal_pose = None
 
     # ================= MAIN FSM =================
 
     def step(self):
 
         now = self.get_clock().now()
+        self._maybe_republish_goal(now)
 
         # ================= WAITING =================
         if self.state == 'WAITING':
@@ -243,6 +276,8 @@ class Z1FSM(Node):
 
             self.ik_done = False
             self.ik_success = False
+            # Allow immediate re-publish while waiting
+            self._last_goal_pub_time = self.get_clock().now()
             self.publish_ik_goal(pose)
             self.jtc_goal_sent = True
             self.enter_state('WAIT_JTC')
@@ -320,6 +355,8 @@ class Z1FSM(Node):
 
             self.ik_done = False
             self.ik_success = False
+            # Allow immediate re-publish while waiting
+            self._last_goal_pub_time = self.get_clock().now()
             self.publish_ik_goal(pose)
             self.enter_state('WAIT_RETURN')
 
