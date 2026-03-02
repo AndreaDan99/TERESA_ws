@@ -17,7 +17,6 @@ import tf2_ros
 from tf2_geometry_msgs import do_transform_pose
 
 import pinocchio as pin
-from pinocchio.robot_wrapper import RobotWrapper
 
 
 def _clamp(x, lo, hi):
@@ -92,7 +91,6 @@ class Z1IKToJTC(Node):
 
         # ---------------- State ----------------
         self.last_joint_state = None
-        self.robot = None
         self.model = None
         self.data = None
         self.ee_id = None
@@ -150,20 +148,32 @@ class Z1IKToJTC(Node):
             return
 
         try:
-            self.model, self.collision_model, self.visual_model = pin.buildModelsFromUrdf(urdf_path)
+            self.model = pin.buildModelFromUrdf(urdf_path) 
+            self.nq_ctrl = len(self.joint_names)                     
+            self._to_full   = lambda qc: np.append(qc, 0.0)          
+            self._from_full = lambda qf: qf[:self.nq_ctrl]   
             self.data = self.model.createData()
-            self.robot = None
             self.ee_id = self.model.getFrameId(self.ee_frame)
 
-            # joint limits
+            if self.ee_id >= self.model.nframes:
+                self.get_logger().error(
+                    f"❌ Frame '{self.ee_frame}' non trovato. "
+                    f"Frames disponibili: {[self.model.frames[i].name for i in range(self.model.nframes)]}"
+                )
+                self._status("ee_frame_not_found")
+                return
+
             self.q_min = self.model.lowerPositionLimit.copy()
             self.q_max = self.model.upperPositionLimit.copy()
 
-            self.get_logger().info(f"✅ Modello URDF caricato da: {urdf_path}")
+            self.get_logger().info(
+                f"✅ Modello URDF caricato da: {urdf_path} | nq={self.model.nq} | ee_id={self.ee_id}"
+            )
             self._status("robot_model_loaded")
         except Exception as e:
             self.get_logger().error(f"❌ Errore caricando URDF da '{urdf_path}': {e}")
             self._status("robot_model_error")
+
 
 
     def cb_joint_states(self, msg: JointState):
@@ -212,71 +222,65 @@ class Z1IKToJTC(Node):
             return None
 
     def _ik_solve(self, target_SE3: pin.SE3, q0: np.ndarray):
-        """
-        Damped least squares IK on end-effector frame.
-        Returns: q_sol, success(bool), final_err
-        """
-        if self.robot is None or self.model is None or self.data is None or self.ee_id is None:
+        if self.model is None or self.data is None or self.ee_id is None:
             return None, False, None
 
-        # Pinocchio expects q size = model.nq; but our q0 is only for controlled joints.
-        # We assume the robot has exactly these joints in order in model (typical).
-        # If your model has extra joints, serve mapping serio. Per ora: best-effort.
-        if self.model.nq != len(q0):
-            # attempt if model has same count of actuated joints as ours
-            # otherwise fail loudly
-            self.get_logger().error(
-                f"❌ model.nq={self.model.nq} ma joint_names={len(q0)}. "
-                "Serve mapping tra joint state e Pinocchio model."
-            )
-            return None, False, None
+        self.get_logger().info(
+            f"IK start: q0={q0.round(3).tolist()} "
+            f"target_t={target_SE3.translation.round(3).tolist()}"
+        )
 
-        q = q0.copy()
-        damp = self.ik_damping
-        step = self.ik_step
+        q_full = self._to_full(q0)
+        lo = self.q_min[:self.nq_ctrl] + self.ik_joint_limit_margin
+        hi = self.q_max[:self.nq_ctrl] - self.ik_joint_limit_margin
+        err6 = np.ones(6)
 
-        # limits
-        lo = self.q_min + self.ik_joint_limit_margin
-        hi = self.q_max - self.ik_joint_limit_margin
-
-        for it in range(self.ik_max_iter):
-            pin.forwardKinematics(self.model, self.data, q)
+        for _ in range(self.ik_max_iter):
+            pin.forwardKinematics(self.model, self.data, q_full)
             pin.updateFramePlacements(self.model, self.data)
 
             current = self.data.oMf[self.ee_id]
-            # error in SE3 (log map)
-            dMi = current.actInv(target_SE3)  # current^{-1} * target
-            err6 = pin.log6(dMi).vector       # 6D error: [v, w]
+            dMi  = current.actInv(target_SE3)
+            err6 = pin.log6(dMi).vector          # errore in frame LOCAL dell'EE
+
+            # porta l'errore in world frame con la rotazione corrente
+            R    = current.rotation
+            err6_world = np.concatenate([R @ err6[:3], R @ err6[3:]])
 
             if not self.use_orientation:
-                err6[3:] = 0.0  # ignore orientation
+                err6_world[3:] = 0.0
 
-            err_norm = float(np.linalg.norm(err6))
-            if err_norm < self.ik_tol:
-                return q, True, err_norm
+            if np.linalg.norm(err6_world) < self.ik_tol:
+                return self._from_full(q_full), True, float(np.linalg.norm(err6_world))
 
-            # frame jacobian (LOCAL frame)
-            J6 = pin.computeFrameJacobian(self.model, self.data, q, self.ee_id, pin.ReferenceFrame.LOCAL)
-
+            J = pin.computeFrameJacobian(self.model, self.data, q_full, self.ee_id,
+                                        pin.ReferenceFrame.LOCAL_WORLD_ALIGNED)[:, :self.nq_ctrl]
             if not self.use_orientation:
-                J6[3:, :] = 0.0
+                J[3:, :] = 0.0
 
-            # damped least squares: dq = - J^T (J J^T + λ^2 I)^{-1} err
-            JJt = J6 @ J6.T
-            A = JJt + (damp**2) * np.eye(6)
-            try:
-                y = np.linalg.solve(A, err6)
-            except np.linalg.LinAlgError:
-                y = np.linalg.lstsq(A, err6, rcond=None)[0]
-            dq = - J6.T @ y
+            JJt = J @ J.T
+            A   = JJt + (self.ik_damping**2) * np.eye(6)
+            try:    y = np.linalg.solve(A, err6_world)
+            except: y = np.linalg.lstsq(A, err6_world, rcond=None)[0]
 
-            q = q + step * dq
+            # segno POSITIVO: dq = J^T (J J^T + λI)^{-1} * err  (gradient descent verso target)
+            qc = self._from_full(q_full) + self.ik_step * J.T @ y
+            qc = np.array([_clamp(qc[i], lo[i], hi[i]) for i in range(self.nq_ctrl)])
+            q_full = self._to_full(qc)
 
-            # clamp
-            q = np.array([_clamp(q[i], lo[i], hi[i]) for i in range(len(q))], dtype=np.float64)
 
-        # not converged
-        return q, False, float(np.linalg.norm(err6))
+        # debug finale
+        pin.forwardKinematics(self.model, self.data, q_full)
+        pin.updateFramePlacements(self.model, self.data)
+        current = self.data.oMf[self.ee_id]
+        err_pos = np.linalg.norm(current.translation - target_SE3.translation)
+        self.get_logger().warn(
+            f"IK fail | err_pos={err_pos:.4f}m | err_rot={float(np.linalg.norm(err6[3:])):.4f}rad | "
+            f"ee_pos={current.translation.round(3).tolist()}"
+        )
+        return self._from_full(q_full), False, float(np.linalg.norm(err6))
+
+
 
     def _build_trajectory(self, q_start: np.ndarray, q_goal: np.ndarray) -> JointTrajectory:
         traj = JointTrajectory()
@@ -300,6 +304,7 @@ class Z1IKToJTC(Node):
 
     # ---------------- Main callback ----------------
     def cb_goal_pose(self, goal_pose: PoseStamped):
+        self.get_logger().info(f"🎯 Nuovo goal IK ricevuto: pos= {goal_pose.header.frame_id}, p = {goal_pose.pose.position.x:.3f}, {goal_pose.pose.position.y:.3f}, {goal_pose.pose.position.z:.3f}")
         if self.goal_in_flight:
             self.get_logger().warn('⚠️ Nuovo goal ricevuto ma un goal JTC è già in corso: ignorato')
             self._status('goal_ignored_in_flight')
@@ -310,8 +315,9 @@ class Z1IKToJTC(Node):
         self._success(False)
 
         # basic readiness
-        if self.robot is None:
+        if self.model is None or self.data is None or self.ee_id is None:
             self._status("robot_model_not_ready")
+            self.get_logger().error("❌ Modello robot non pronto." f"model_is_none = {self.model is None} data_is_none = {self.data is None} ee_id_is_none = {self.ee_id is None}" f"(ee_frame='{self.ee_frame}')") 
             self._done(True)
             self._success(False)
             return
@@ -332,6 +338,16 @@ class Z1IKToJTC(Node):
             return
 
         target = self._pose_to_SE3(pose_base)
+        target = self._pose_to_SE3(pose_base)
+
+        if not self.use_orientation:
+            # sostituisce la rotazione target con quella corrente dell'EE
+            # così l'IK risolve solo posizione, errore rotazionale parte da 0
+            pin.forwardKinematics(self.model, self.data, self._to_full(q0))
+            pin.updateFramePlacements(self.model, self.data)
+            R_current = self.data.oMf[self.ee_id].rotation.copy()
+            target = pin.SE3(R_current, target.translation)
+
 
         q_sol, ok, err = self._ik_solve(target, q0)
         if not ok:
