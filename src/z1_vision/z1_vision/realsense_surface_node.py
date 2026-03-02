@@ -13,6 +13,10 @@ from tf2_ros import Buffer, TransformListener
 from tf_transformations import quaternion_from_matrix
 import tf_transformations as tf
 
+from visualization_msgs.msg import Marker, MarkerArray
+from geometry_msgs.msg import Point
+from builtin_interfaces.msg import Duration
+
 class RealSenseSurfaceNode(Node):
     def __init__(self):
         super().__init__("realsense_surface_node")
@@ -30,6 +34,13 @@ class RealSenseSurfaceNode(Node):
         self.declare_parameter("max_depth", 2.0)
         self.declare_parameter("desired_normal_offset", -0.005)
 
+        # Debug / test params
+        self.declare_parameter("require_lock_valid", True)
+        self.declare_parameter("require_torso_visible", False)
+        self.declare_parameter("use_latest_tf", True)  # if True, ignore msg stamp and use latest TF
+        self.declare_parameter("publish_debug_markers", True)
+        self.declare_parameter("debug_marker_ns", "torso_surface")
+
         self.camera_frame = self.get_parameter("camera_frame").get_parameter_value().string_value
         self.ee_frame = self.get_parameter("ee_frame").get_parameter_value().string_value
         self.base_frame = self.get_parameter("base_frame").get_parameter_value().string_value
@@ -37,6 +48,12 @@ class RealSenseSurfaceNode(Node):
         self.min_depth = self.get_parameter("min_depth").get_parameter_value().double_value
         self.max_depth = self.get_parameter("max_depth").get_parameter_value().double_value
         self.desired_normal_offset = self.get_parameter("desired_normal_offset").get_parameter_value().double_value
+
+        self.require_lock_valid = self.get_parameter("require_lock_valid").get_parameter_value().bool_value
+        self.require_torso_visible = self.get_parameter("require_torso_visible").get_parameter_value().bool_value
+        self.use_latest_tf = self.get_parameter("use_latest_tf").get_parameter_value().bool_value
+        self.publish_debug_markers = self.get_parameter("publish_debug_markers").get_parameter_value().bool_value
+        self.debug_marker_ns = self.get_parameter("debug_marker_ns").get_parameter_value().string_value
 
         self.fx = self.fy = self.ppx = self.ppy = None
 
@@ -64,6 +81,8 @@ class RealSenseSurfaceNode(Node):
         # Publisher
         self.surface_pub = self.create_publisher(PoseStamped, "/torso_surface_frame", 10)
         self.dist_pub = self.create_publisher(Float32, "/surface_signed_distance", 10)
+        self.marker_pub = self.create_publisher(MarkerArray, "/torso_surface_markers", 10)
+        self.surface_point_pub = self.create_publisher(PointStamped, "/torso_surface_point", 10)
 
         # State torso
         self.torso_center_cam = None
@@ -135,7 +154,11 @@ class RealSenseSurfaceNode(Node):
 
     def depth_callback(self, msg: Image):
         
-        if not self.target_lock_valid or self.torso_center_cam is None:
+        if self.require_lock_valid and (not self.target_lock_valid):
+            return
+        if self.require_torso_visible and (not self.torso_visible):
+            return
+        if self.torso_center_cam is None:
             return
 
         if self.fx is None:
@@ -182,12 +205,14 @@ class RealSenseSurfaceNode(Node):
 
         # TF base → camera
         try:
+            tf_time = rclpy.time.Time() if self.use_latest_tf else rclpy.time.Time.from_msg(msg.header.stamp)
             tf_base_cam = self.tf_buffer.lookup_transform(
                 self.base_frame, self.camera_frame,
-                rclpy.time.Time.from_msg(msg.header.stamp),
-                timeout=rclpy.duration.Duration(seconds=0.1)
+                tf_time,
+                timeout=rclpy.duration.Duration(seconds=0.2)
             )
-        except:
+        except Exception as e:
+            self.get_logger().warn(f"⚠️ TF {self.base_frame}<-{self.camera_frame} non disponibile: {e}", throttle_duration_sec=2.0)
             return
 
         R_bc = self.quat_to_rot(tf_base_cam.transform.rotation)
@@ -200,12 +225,14 @@ class RealSenseSurfaceNode(Node):
 
         # Distanza TCP-superficie
         try:
+            tf_time = rclpy.time.Time() if self.use_latest_tf else rclpy.time.Time.from_msg(msg.header.stamp)
             tf_base_ee = self.tf_buffer.lookup_transform(
                 self.base_frame, self.ee_frame,
-                rclpy.time.Time.from_msg(msg.header.stamp),
-                timeout=rclpy.duration.Duration(seconds=0.1)
+                tf_time,
+                timeout=rclpy.duration.Duration(seconds=0.2)
             )
-        except:
+        except Exception as e:
+            self.get_logger().warn(f"⚠️ TF {self.base_frame}<-{self.ee_frame} non disponibile: {e}", throttle_duration_sec=2.0)
             return
 
         tcp_base = np.array([tf_base_ee.transform.translation.x,
@@ -247,6 +274,62 @@ class RealSenseSurfaceNode(Node):
         dist_msg = Float32()
         dist_msg.data = float(d)
         self.dist_pub.publish(dist_msg)
+        
+        # Debug point
+        ptm = PointStamped()
+        ptm.header = surf_msg.header
+        ptm.point.x = float(p0_base[0])
+        ptm.point.y = float(p0_base[1])
+        ptm.point.z = float(p0_base[2])
+        self.surface_point_pub.publish(ptm)
+
+        # Debug markers for RViz
+        if self.publish_debug_markers:
+            ma = MarkerArray()
+
+            # Sphere at surface point
+            m0 = Marker()
+            m0.header = surf_msg.header
+            m0.ns = self.debug_marker_ns
+            m0.id = 0
+            m0.type = Marker.SPHERE
+            m0.action = Marker.ADD
+            m0.pose = surf_msg.pose
+            m0.scale.x = 0.05
+            m0.scale.y = 0.05
+            m0.scale.z = 0.05
+            m0.color.r = 0.0
+            m0.color.g = 1.0
+            m0.color.b = 0.0
+            m0.color.a = 0.9
+            m0.lifetime = Duration(sec=0, nanosec=250_000_000)
+            ma.markers.append(m0)
+
+            # Arrow for normal
+            m1 = Marker()
+            m1.header = surf_msg.header
+            m1.ns = self.debug_marker_ns
+            m1.id = 1
+            m1.type = Marker.ARROW
+            m1.action = Marker.ADD
+            p_start = Point(x=float(p0_base[0]), y=float(p0_base[1]), z=float(p0_base[2]))
+            p_end = Point(
+                x=float(p0_base[0] + 0.15 * z_axis[0]),
+                y=float(p0_base[1] + 0.15 * z_axis[1]),
+                z=float(p0_base[2] + 0.15 * z_axis[2]),
+            )
+            m1.points = [p_start, p_end]
+            m1.scale.x = 0.01  # shaft diameter
+            m1.scale.y = 0.02  # head diameter
+            m1.scale.z = 0.02  # head length
+            m1.color.r = 1.0
+            m1.color.g = 0.6
+            m1.color.b = 0.0
+            m1.color.a = 0.9
+            m1.lifetime = Duration(sec=0, nanosec=250_000_000)
+            ma.markers.append(m1)
+
+            self.marker_pub.publish(ma)
         
         self.get_logger().info(
             f"✅ TORSO SURFACE [{p0_base[0]:.3f}, {p0_base[1]:.3f}, {p0_base[2]:.3f}] "
