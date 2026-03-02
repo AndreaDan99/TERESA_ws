@@ -344,6 +344,7 @@ class Z1YoloTorsoTracker(Node):
                                 self.locked_target        = locked_world
                                 self.tracking_current_pos = None
                                 self.state                = 'LOCKED'
+                                self.drift_counter        = 0
                     else:
                         self.stable_counter = 0
             else:
@@ -360,6 +361,33 @@ class Z1YoloTorsoTracker(Node):
             interpolated = self._interpolate_to_target(self.locked_target)
             self._publish_target_world(interpolated)
             self._publish_visible(True)
+
+            ok_det = (torso_raw is not None and n_valid >= self.min_keypoints and avg_conf >= self.min_det_conf)
+            if ok_det and self.locked_target is not None:
+                torso_world = self._camera_to_world(torso_raw)
+                if torso_world is not None:
+                    dist = float(np.linalg.norm(torso_world - self.locked_target))
+
+                    if dist > self.lock_drift_thr:
+                        self.drift_counter += 1
+                    else:
+                        self.drift_counter = 0
+
+                    if self.drift_counter >= self.lock_drift_frames:
+                        self.get_logger().info(
+                            f'🔓 UNLOCK: torso moved {dist:.3f}m (> {self.lock_drift_thr:.3f}m) → ESTIMATING'
+                        )
+                        # riparti da ESTIMATING sul nuovo punto
+                        self.state = 'ESTIMATING'
+                        self.locked_target = None
+                        self.tracking_current_pos = None
+                        self.position_history = [torso_raw.copy()]
+                        self.stable_counter = 0
+                        self.drift_counter = 0
+
+                        # re-init KF dal measurement corrente (come in IDLE→ESTIMATING)
+                        self.kf.reset()
+                        self.kf.initialize(torso_raw)
 
         # ── Log cambio stato ──────────────────────────────────────
         if self.state != prev_state:
