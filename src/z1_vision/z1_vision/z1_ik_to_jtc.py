@@ -308,7 +308,6 @@ class Z1IKToJTC(Node):
         if self.goal_in_flight:
             self.get_logger().warn('⚠️ Nuovo goal ricevuto ma un goal JTC è già in corso: ignorato')
             self._status('goal_ignored_in_flight')
-            self._success(False)
             return
 
         self._done(False)
@@ -337,7 +336,6 @@ class Z1IKToJTC(Node):
             self._success(False)
             return
 
-        target = self._pose_to_SE3(pose_base)
         target = self._pose_to_SE3(pose_base)
 
         if not self.use_orientation:

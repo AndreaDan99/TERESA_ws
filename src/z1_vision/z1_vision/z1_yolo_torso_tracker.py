@@ -172,6 +172,7 @@ class Z1YoloTorsoTracker(Node):
     # ──────────────────────────────────────────────────────────────
     def cb_info(self, msg):
         self.cam_info = msg
+    # ──────────────────────────────────────────────────────────────
 
     def cb_fsm_state(self, msg: String):
         prev = self.fsm_state
@@ -186,39 +187,48 @@ class Z1YoloTorsoTracker(Node):
             self._publish_lock_state(self.lock_state)
 
     # ──────────────────────────────────────────────────────────────
-    # (Removed: cb_ee_pose)
 
-    # ──────────────────────────────────────────────────────────────
     def _camera_to_world(self, point_camera, stamp_msg=None):
-        """
-        Converte punto da camera_depth_optical_frame a world frame.
-        Restituisce np.array([x, y, z]) o None se TF non disponibile.
-        """
         pt = PointStamped()
         pt.header.frame_id = 'camera_depth_optical_frame'
-        pt.header.stamp    = stamp_msg if stamp_msg is not None else self.get_clock().now().to_msg()
+        pt.header.stamp = stamp_msg if stamp_msg is not None else self.get_clock().now().to_msg()
         pt.point.x = float(point_camera[0])
         pt.point.y = float(point_camera[1])
         pt.point.z = float(point_camera[2])
+
+        # 1) prova col timestamp del frame
+        if stamp_msg is not None:
+            try:
+                tf = self.tf_buffer.lookup_transform(
+                    'world',
+                    'camera_depth_optical_frame',
+                    rclpy.time.Time.from_msg(stamp_msg),
+                    timeout=rclpy.duration.Duration(seconds=0.05)
+                )
+                out = do_transform_point(pt, tf)
+                return np.array([out.point.x, out.point.y, out.point.z], dtype=np.float64)
+            except TransformException as e:
+                self.get_logger().warn(
+                    f"TF camera→world (stamped) fallita, provo latest: {e}",
+                    throttle_duration_sec=2.0
+                )
+
+        # 2) fallback: latest
         try:
-            # Usa timestamp del messaggio quando disponibile
-            transform = self.tf_buffer.lookup_transform(
+            tf = self.tf_buffer.lookup_transform(
                 'world',
                 'camera_depth_optical_frame',
-                rclpy.time.Time() if stamp_msg is None else rclpy.time.Time.from_msg(stamp_msg),
-                timeout=rclpy.duration.Duration(seconds=0.1))
-            transformed = do_transform_point(pt, transform)
-            return np.array([
-                transformed.point.x,
-                transformed.point.y,
-                transformed.point.z
-            ])
+                rclpy.time.Time(),  # latest
+                timeout=rclpy.duration.Duration(seconds=0.1)
+            )
+            out = do_transform_point(pt, tf)
+            return np.array([out.point.x, out.point.y, out.point.z], dtype=np.float64)
         except TransformException as e:
             self.get_logger().warn(
-                f'TF camera→world fallita: {e}',
-                throttle_duration_sec=2.0)
+                f"TF camera→world (latest) fallita: {e}",
+                throttle_duration_sec=2.0
+            )
             return None
-
     # ──────────────────────────────────────────────────────────────
     def cb_synchronized(self, rgb_msg, depth_msg):
         if self.cam_info is None:

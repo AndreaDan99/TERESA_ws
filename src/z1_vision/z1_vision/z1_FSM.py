@@ -120,8 +120,10 @@ class Z1FSM(Node):
         self.hold_start_time = None
 
         self.state_start_time = self.get_clock().now()
-        self.jtc_goal_sent = False
         self.retract_done = False
+
+        # Avoid spamming FAULT logs
+        self._fault_logged = False
 
         # Last IK goal (for periodic re-publish while waiting)
         self.last_ik_goal_pose = None  # type: PoseStamped | None
@@ -179,6 +181,7 @@ class Z1FSM(Node):
         dt = (now - self._last_goal_pub_time).nanoseconds / 1e9
         period = 1.0 / float(self.ik_goal_republish_rate)
         if dt >= period:
+            # Re-publish the exact last goal (do not modify it)
             self.pub_ik_goal.publish(self.last_ik_goal_pose)
             self._last_goal_pub_time = now
 
@@ -215,6 +218,8 @@ class Z1FSM(Node):
             self.ik_success = False
         if new_state == 'WAITING':
             self.last_ik_goal_pose = None
+        if new_state == 'FAULT':
+            self._fault_logged = False
 
     # ================= MAIN FSM =================
 
@@ -248,6 +253,7 @@ class Z1FSM(Node):
             if self.use_surface_for_approach and self.surface_frame is not None:
                 # Usa la superficie: orientazione allineata alla normale (asse Z del frame superficie)
                 pose.header = self.surface_frame.header
+                pose.header.stamp = now.to_msg()
                 pose.pose = self.surface_frame.pose
 
                 q = pose.pose.orientation
@@ -271,6 +277,7 @@ class Z1FSM(Node):
                 if self.target_world is None:
                     return
                 pose.header = self.target_world.header
+                pose.header.stamp = now.to_msg()
                 pose.pose = self.target_world.pose
                 pose.pose.position.z -= self.approach_offset
 
@@ -279,7 +286,6 @@ class Z1FSM(Node):
             # Allow immediate re-publish while waiting
             self._last_goal_pub_time = self.get_clock().now()
             self.publish_ik_goal(pose)
-            self.jtc_goal_sent = True
             self.enter_state('WAIT_JTC')
 
         # ================= WAIT_JTC =================
@@ -377,7 +383,9 @@ class Z1FSM(Node):
 
         # ================= FAULT =================
         elif self.state == 'FAULT':
-            self.get_logger().error("🚨 FSM in FAULT state")
+            if not self._fault_logged:
+                self.get_logger().error("🚨 FSM in FAULT state")
+                self._fault_logged = True
 
         self.publish_state()
 
