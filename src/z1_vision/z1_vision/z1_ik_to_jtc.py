@@ -170,9 +170,6 @@ class Z1IKToJTC(Node):
             except Exception as e:
                 self.get_logger().warn(f"⚠️ cancel_goal_async failed: {e}")
             self._unlock_goal('timeout')
-        m = Bool()
-        m.data = bool(done)
-        self.pub_done.publish(m)
 
     def _init_robot_from_urdf_param(self):
         urdf_path = self.get_parameter('urdf_path').value
@@ -395,7 +392,10 @@ class Z1IKToJTC(Node):
             self._done(True)
             self._success(False)
             return
-
+        
+        self.get_logger().info(
+            f"IK result: ok={ok}, err={err:.4g}, q_sol={q_sol.round(3).tolist() if q_sol is not None else 'None'}"
+        )
         # build and send trajectory
         traj = self._build_trajectory(q0, q_sol)
 

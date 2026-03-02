@@ -226,7 +226,6 @@ class Z1FSM(Node):
     def step(self):
 
         now = self.get_clock().now()
-        self._maybe_republish_goal(now)
 
         # ================= WAITING =================
         if self.state == 'WAITING':
