@@ -17,30 +17,3 @@ z1_yolo_torso_tracker:
     kf_process_noise:  0.00005
     kf_meas_noise:     1.0
     kf_vel_damping:    0.9
-
-    # ── Macchina a stati ───────────────────────────────────────────
-    min_detection_conf:  0.6    # conf minima YOLO per iniziare stima
-    min_keypoints:       3      # keypoint minimi validi (su 4)
-    lock_stable_frames:  15     # finestra storia per calcolare varianza
-    lock_variance_thr:   0.005  # varianza max per considerare stima stabile
-    lock_stable_checks:  5      # check consecutivi stabili prima del lock
-
-    # ── Rilevamento deriva in LOCKED ───────────────────────────────
-    lock_drift_thr:    0.08    # distanza max tollerata prima di andare in starting (m)
-    lock_drift_frames: 10       # frame consecutivi oltre soglia → starting
-
-    # ── Recovery ───────────────────────────────────────────────────
-    recovery_frames:   10       # frame in recovery prima di ri-lock
-
-    # ── Starting position (world frame xyz) ───────────────────────
-    starting_position: [0.1040, 0.0049, 0.4809]
-
-    # ── Ritorno lento ──────────────────────────────────────────────
-    return_speed:       0.03   # m/s — molto lento
-    return_timeout:     30.0   # sec — timeout sicurezza
-    return_arrival_thr: 0.05   # 5cm — soglia arrivo
-
-    lock_stall_check_period: 2.0   # controlla ogni 2 secondi
-    lock_stall_thr: 0.01           # se si è mosso meno di 1cm → stallo
-    lock_stall_duration: 6.0       # deve essere fermo per 4 secondi → RETURNING
-

@@ -28,13 +28,24 @@ class FKReader(Node):
         pin.updateFramePlacements(self.model, self.data)
 
         pos = self.data.oMf[self.ee_id].translation
+        # Orientation (rotation matrix -> quaternion)
+        rot = self.data.oMf[self.ee_id].rotation
+        quat = pin.Quaternion(rot).coeffs()  # [x, y, z, w]
+
         self.get_logger().info(
-            f'📍 EE position (world frame):\n'
-            f'   x: {pos[0]:.4f}\n'
-            f'   y: {pos[1]:.4f}\n'
-            f'   z: {pos[2]:.4f}\n'
+            f'📍 EE pose (world frame):\n'
+            f'   Position:\n'
+            f'      x: {pos[0]:.4f}\n'
+            f'      y: {pos[1]:.4f}\n'
+            f'      z: {pos[2]:.4f}\n'
+            f'   Orientation (quaternion):\n'
+            f'      x: {quat[0]:.4f}\n'
+            f'      y: {quat[1]:.4f}\n'
+            f'      z: {quat[2]:.4f}\n'
+            f'      w: {quat[3]:.4f}\n'
             f'\n'
-            f'   👉 starting_position: [{pos[0]:.4f}, {pos[1]:.4f}, {pos[2]:.4f}]'
+            f'   👉 home_position: [{pos[0]:.4f}, {pos[1]:.4f}, {pos[2]:.4f}]\n'
+            f'   👉 home_orientation: [{quat[0]:.4f}, {quat[1]:.4f}, {quat[2]:.4f}, {quat[3]:.4f}]'
         )
 
 rclpy.init()

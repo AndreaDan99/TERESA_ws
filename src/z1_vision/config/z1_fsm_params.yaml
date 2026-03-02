@@ -1,0 +1,28 @@
+z1_FSM:
+  ros__parameters:
+    # ── High-level approach settings ───────────────────────
+    approach_offset: 0.20        # [m] pre-contatto (20 cm prima del target)
+
+    startup_go_home: true
+    startup_home_delay: 5.0
+    
+    # ── Home pose (EE in world) ────────────────────────────
+    home_position: [0.0411, 0.0103, 0.5133]
+    home_orientation: [0.0, 0.0, 0.0, 1.0]  
+
+    # ── Impedance contact hold ─────────────────────────────
+    hold_time: 5.0              # [s] tempo in contatto
+
+    # switch_timeout non è più necessario (switch è blocking),
+    # ma lo lasciamo per compatibilità e futura estensione.
+    switch_timeout: 3.0
+
+    use_surface_for_approach: true
+    
+    pre_contact_normal_offset: -0.205
+
+    # ── Timeouts ───────────────────────────────────────────
+    jtc_timeout: 25.0            # [s] attesa massima per /ik_jtc/done
+    retract_timeout: 25.0
+
+    fault_go_home: true

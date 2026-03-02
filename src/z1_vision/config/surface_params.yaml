@@ -1,0 +1,10 @@
+realsense_surface_node:
+  ros__parameters:
+    base_frame: world
+    camera_frame: camera_depth_optical_frame
+    ee_frame: link06
+
+    min_depth: 0.20
+    max_depth: 2.0
+
+    desired_normal_offset: -0.005

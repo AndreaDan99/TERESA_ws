@@ -4,31 +4,36 @@ impedance_controller_realsense:
     end_effector_frame: 'link06'
     control_rate: 500.0
     log_rate: 2.0
-    
+
     # Controllo posizione (cartesiano)
     K_p_translation: [200.0, 200.0, 300.0]
     K_d_translation: [20.0, 20.0, 30.0]
     K_i_translation: [0.3, 0.3, 0.5]
-    
+
     # Rotazioni cartesiane (non usate, mantenute per compatibilità)
     K_p_rotation: [10.0, 10.0, 10.0]
     K_d_rotation: [1.0, 1.0, 1.0]
     K_i_rotation: [0.0, 0.0, 0.0]
-    
+
     # Controllo orientamento (joint-space su polso)
-    control_wrist_orientation: false
+    control_wrist_orientation: true
     K_p_wrist_joints: [40.0, 40.0, 40.0]
     K_d_wrist_joints: [4.0, 4.0, 4.0]
-    
+
     # Parametri generali
     integral_limit: 0.02
-    torque_limit: 80.0
+    torque_limit: 70.0
 
     safe_startup_duration: 3.0
-    max_step_distance: 0.2
-    
+
+    # Nuovi parametri per approach lungo la normale
+    max_approach_distance: 0.20
+    approach_speed: 0.01
+
     # Compensazione dinamica
     gravity_scale_factor_j2: 1.3
-     
-    use_surface_frame: true           
-    desired_normal_offset: 0.25
+
+    use_surface_frame: true
+
+    # Coerente con FSM (pre_contact_normal_offset=-0.205) + impedenza (0.20m) => finale -0.005
+    desired_normal_offset: -0.205

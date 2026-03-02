@@ -1,7 +1,18 @@
 #!/usr/bin/env python3
-"""
-Z1 YOLO Torso Tracker + Impedance Control
-Stati: IDLE → ESTIMATING → LOCKED → RETURNING → IDLE
+""" 
+Z1 YOLO Torso Tracker (solo percezione + filtro)
+
+Pubblica:
+- /torso_target_camera  (PointStamped, camera_depth_optical_frame)
+- /torso_target_ee      (PoseStamped, world)  [stima torso in world]
+- /torso_target_ee_locked (PoseStamped, world)  [target LOCKED]
+- /target_lock_valid      (Bool)
+- /target_lock_state      (String: SEARCHING/CANDIDATE/LOCKED)
+- /torso_visible        (Bool)
+- /torso_avg_conf       (Float32)
+- /torso_n_valid_kp     (Int32)
+- /torso_tracker_state  (String: TRACKING/LOST)
+- /torso_markers        (MarkerArray)
 """
 
 import rclpy
@@ -10,7 +21,7 @@ from message_filters import Subscriber, ApproximateTimeSynchronizer
 
 from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import PointStamped, PoseStamped, Point
-from std_msgs.msg import Bool, ColorRGBA, String
+from std_msgs.msg import Bool, ColorRGBA, String, Float32, Int32
 from visualization_msgs.msg import Marker, MarkerArray
 from cv_bridge import CvBridge
 
@@ -35,10 +46,23 @@ TORSO_EDGES = [
 ]
 
 STATE_COLORS = {
-    'IDLE':       ColorRGBA(r=0.5, g=0.5, b=0.5, a=0.5),  # grigio
-    'ESTIMATING': ColorRGBA(r=1.0, g=0.5, b=0.0, a=0.9),  # arancione
-    'LOCKED':     ColorRGBA(r=0.0, g=1.0, b=0.0, a=0.9),  # verde
-    'RETURNING':  ColorRGBA(r=0.5, g=0.0, b=1.0, a=0.9),  # viola
+    # Tracker-only
+    'TRACKING':        ColorRGBA(r=0.0, g=1.0, b=0.0, a=0.9),  # verde
+    'LOST':            ColorRGBA(r=1.0, g=0.3, b=0.0, a=0.9),  # arancione/rosso
+
+    # FSM states (per RViz)
+    'WAITING':         ColorRGBA(r=0.5, g=0.5, b=0.5, a=0.8),  # grigio
+    'APPROACHING_JTC': ColorRGBA(r=0.2, g=0.6, b=1.0, a=0.9),  # azzurro
+    'WAIT_JTC':        ColorRGBA(r=0.1, g=0.4, b=1.0, a=0.9),  # blu
+    'SWITCH_TO_TORQUE':        ColorRGBA(r=1.0, g=0.5, b=0.0, a=0.9),  # arancione
+    'WAIT_SWITCH_TO_TORQUE':   ColorRGBA(r=1.0, g=0.8, b=0.0, a=0.9),  # giallo
+    'IMPEDANCE_CONTACT': ColorRGBA(r=0.8, g=0.0, b=1.0, a=0.9),  # viola
+    'HOLD_CONTACT':      ColorRGBA(r=1.0, g=0.0, b=0.6, a=0.9),  # magenta
+    'SWITCH_TO_JTC':     ColorRGBA(r=0.0, g=1.0, b=1.0, a=0.9),  # ciano
+    'WAIT_SWITCH_TO_JTC':ColorRGBA(r=0.0, g=0.7, b=0.7, a=0.9),  # ciano scuro
+    'RETURN_HOME_JTC':   ColorRGBA(r=0.0, g=0.8, b=0.0, a=0.9),  # verde scuro
+    'WAIT_RETURN':       ColorRGBA(r=0.0, g=0.5, b=0.0, a=0.9),  # verde molto scuro
+    'FAULT':             ColorRGBA(r=1.0, g=0.0, b=0.0, a=0.95), # rosso
 }
 
 
@@ -59,68 +83,32 @@ class Z1YoloTorsoTracker(Node):
         self.declare_parameter('kf_meas_noise',      1.0)
         self.declare_parameter('kf_vel_damping',     0.9)
 
-        # ── Parametri macchina a stati ─────────────────────────────
-        self.declare_parameter('min_detection_conf', 0.6)
-        self.declare_parameter('min_keypoints',      3)
-        self.declare_parameter('lock_stable_frames', 20)
-        self.declare_parameter('lock_variance_thr',  0.005)
-        self.declare_parameter('lock_stable_checks', 5)
-        self.declare_parameter('lock_drift_thr',     0.08)
-        self.declare_parameter('lock_drift_frames',  5)
-        self.declare_parameter('recovery_frames',    10)
-
-        # ── Parametri velocità ─────────────────────────────────────
-        self.declare_parameter('tracking_speed',     0.05)   # m/s verso torso
-        self.declare_parameter('return_speed',       0.03)   # m/s verso starting_position
-
-        # ── Parametri RETURNING ────────────────────────────────────
+        # ── Parametri posizione marker ─────────────────────────────
         self.declare_parameter('starting_position',  [0.0411, 0.0103, 0.5133])
-        self.declare_parameter('return_timeout',     15.0)
-        self.declare_parameter('return_arrival_thr', 0.02)
-
-        self.declare_parameter('lock_stall_check_period', 2.0)
-        self.declare_parameter('lock_stall_thr',          0.01)
-        self.declare_parameter('lock_stall_duration',     4.0)
-
+        # ── Target Lock (NO temporal hold) ───────────────────────
+        self.declare_parameter('min_lock_frames', 8)
+        self.declare_parameter('relock_translation_thresh', 0.05)  # [m]
 
         # ── Leggi parametri ────────────────────────────────────────
-        self.conf_thr           = float(self.get_parameter('conf_thr').value)
-        self.max_depth          = float(self.get_parameter('max_depth').value)
-        self.imgsz              = int(self.get_parameter('imgsz').value)
-        self.vel_damping        = float(self.get_parameter('kf_vel_damping').value)
-        self.min_det_conf       = float(self.get_parameter('min_detection_conf').value)
-        self.min_keypoints      = int(self.get_parameter('min_keypoints').value)
-        self.lock_stable_frames = int(self.get_parameter('lock_stable_frames').value)
-        self.lock_variance_thr  = float(self.get_parameter('lock_variance_thr').value)
-        self.lock_stable_checks = int(self.get_parameter('lock_stable_checks').value)
-        self.lock_drift_thr     = float(self.get_parameter('lock_drift_thr').value)
-        self.lock_drift_frames  = int(self.get_parameter('lock_drift_frames').value)
-        self.recovery_frames    = int(self.get_parameter('recovery_frames').value)
-        self.tracking_speed     = float(self.get_parameter('tracking_speed').value)
-        self.return_speed       = float(self.get_parameter('return_speed').value)
-        self.return_timeout     = float(self.get_parameter('return_timeout').value)
-        self.return_arrival_thr = float(self.get_parameter('return_arrival_thr').value)
-        self.lock_stall_check_period = float(self.get_parameter('lock_stall_check_period').value)
-        self.lock_stall_thr          = float(self.get_parameter('lock_stall_thr').value)
-        self.lock_stall_duration     = float(self.get_parameter('lock_stall_duration').value)
-
-
-        raw_sp = self.get_parameter('starting_position').value
-        self.starting_position  = np.array(raw_sp, dtype=np.float64)
-
-        device = self.get_parameter('device').value
-
+        self.conf_thr      = float(self.get_parameter('conf_thr').value)
+        self.max_depth     = float(self.get_parameter('max_depth').value)
+        self.imgsz         = int(self.get_parameter('imgsz').value)
+        self.vel_damping   = float(self.get_parameter('kf_vel_damping').value)
+        raw_sp             = self.get_parameter('starting_position').value
+        self.starting_position = np.array(raw_sp, dtype=np.float64)
+        self.device        = self.get_parameter('device').value
+        self.min_lock_frames = int(self.get_parameter('min_lock_frames').value)
+        self.relock_translation_thresh = float(self.get_parameter('relock_translation_thresh').value)
         # ── YOLO ──────────────────────────────────────────────────
         model_path = self.get_parameter('model_path').value
         self.model = YOLO(model_path)
         try:
-            self.model.to(device)
-            self.get_logger().info(f'✅ OOOOOOOOO YOLO su device: {device}')
+            self.model.to(self.device)
+            self.get_logger().info(f'✅ YOLO su device: {self.device}')
         except Exception as e:
             self.get_logger().warn(f'⚠️ Fallback CPU: {e}')
-            device = 'cpu'
+            self.device = 'cpu'
             self.model.to('cpu')
-        self.device = device
 
         # ── Kalman ────────────────────────────────────────────────
         self.kf = Kalman3D(
@@ -144,10 +132,11 @@ class Z1YoloTorsoTracker(Node):
         self.sub_info = self.create_subscription(
             CameraInfo, '/camera/camera/color/camera_info', self.cb_info, 1)
 
-        self.sub_ee_pose = self.create_subscription(
-            PoseStamped, '/current_ee_pose', self.cb_ee_pose, 10)
-        self.sub_unreachable = self.create_subscription(
-            Bool, '/target_unreachable', self.cb_unreachable, 10)
+        # Stato FSM esterna (per colorare marker in RViz)
+        self.sub_fsm_state = self.create_subscription(
+            String, '/torso_sm_state', self.cb_fsm_state, 10)
+
+        # (Removed: /current_ee_pose and /target_unreachable subscriptions)
 
         # ── Publishers ────────────────────────────────────────────
         self.pub_torso_camera = self.create_publisher(PointStamped, '/torso_target_camera', 10)
@@ -155,71 +144,68 @@ class Z1YoloTorsoTracker(Node):
         self.pub_visible      = self.create_publisher(Bool,         '/torso_visible',        10)
         self.pub_markers      = self.create_publisher(MarkerArray,  '/torso_markers',        10)
         self.pub_state        = self.create_publisher(String,       '/torso_tracker_state',  10)
-
-        # ── Macchina a stati ──────────────────────────────────────
-        self.state            = 'IDLE'
-        self.stable_counter   = 0
-        self.recovery_counter = 0
-        self.drift_counter    = 0
-        self.position_history = []
-        self.locked_target    = None  # world frame
-
-        # ── Interpolazione tracking ────────────────────────────────
-        self.tracking_current_pos = None  # posizione interpolata corrente (world frame)
-
-        # ── Stato RETURNING ───────────────────────────────────────
-        self.return_current_pos = None
-        self.return_start_time  = None
-        self.current_ee_pos     = None  # world frame, da /current_ee_pose
-
+        self.pub_avg_conf     = self.create_publisher(Float32, '/torso_avg_conf', 10)
+        self.pub_n_valid_kp   = self.create_publisher(Int32,   '/torso_n_valid_kp', 10)
+        self.pub_torso_ee_locked = self.create_publisher(PoseStamped, '/torso_target_ee_locked', 10)
+        self.pub_lock_valid      = self.create_publisher(Bool,        '/target_lock_valid', 10)
+        self.pub_lock_state      = self.create_publisher(String,      '/target_lock_state', 10)
         # ── Stato generico ────────────────────────────────────────
         self.cam_info   = None
         self.last_kp_3d = {}
         self.last_stamp = None
 
+        # Stato tracker (per marker/testo)
+        self.tracker_state = 'LOST'
+        self.fsm_state = 'WAITING'
 
-        self.stall_last_ee_pos    = None
-        self.stall_last_check     = None
-        self.stall_still_duration = 0.0
+        #stato locked 
+        self.lock_state = 'SEARCHING'
+        self.lock_candidate_count = 0
+        self.locked_world = None  # np.array([x,y,z])
 
         self.get_logger().info(
-            f'🚀 Z1 YOLO Torso Tracker pronto!\n'
-            f'   starting_position: {self.starting_position}\n'
-            f'   tracking_speed:    {self.tracking_speed} m/s\n'
-            f'   return_speed:      {self.return_speed} m/s\n'
-            f'   return_timeout:    {self.return_timeout} s'
+            '🚀 Z1 YOLO Torso Tracker pronto! (solo percezione + filtro)\n'
+            f'   starting_position (solo marker): {self.starting_position}\n'
+            f'   YOLO device: {self.device}'
         )
 
     # ──────────────────────────────────────────────────────────────
     def cb_info(self, msg):
         self.cam_info = msg
 
-    # ──────────────────────────────────────────────────────────────
-    def cb_ee_pose(self, msg):
-        """Aggiorna posizione EE corrente (world frame) dal controller."""
-        self.current_ee_pos = np.array([
-            msg.pose.position.x,
-            msg.pose.position.y,
-            msg.pose.position.z
-        ])
+    def cb_fsm_state(self, msg: String):
+        prev = self.fsm_state
+        self.fsm_state = msg.data
+
+        # reset lock solo a fine ciclo
+        if self.fsm_state == 'WAITING' and prev != 'WAITING':
+            self.lock_state = 'SEARCHING'
+            self.lock_candidate_count = 0
+            self.locked_world = None
+            self._publish_lock_valid(False)
+            self._publish_lock_state(self.lock_state)
 
     # ──────────────────────────────────────────────────────────────
-    def _camera_to_world(self, point_camera):
+    # (Removed: cb_ee_pose)
+
+    # ──────────────────────────────────────────────────────────────
+    def _camera_to_world(self, point_camera, stamp_msg=None):
         """
         Converte punto da camera_depth_optical_frame a world frame.
         Restituisce np.array([x, y, z]) o None se TF non disponibile.
         """
         pt = PointStamped()
         pt.header.frame_id = 'camera_depth_optical_frame'
-        pt.header.stamp    = self.get_clock().now().to_msg()
+        pt.header.stamp    = stamp_msg if stamp_msg is not None else self.get_clock().now().to_msg()
         pt.point.x = float(point_camera[0])
         pt.point.y = float(point_camera[1])
         pt.point.z = float(point_camera[2])
         try:
+            # Usa timestamp del messaggio quando disponibile
             transform = self.tf_buffer.lookup_transform(
                 'world',
                 'camera_depth_optical_frame',
-                rclpy.time.Time(),
+                rclpy.time.Time() if stamp_msg is None else rclpy.time.Time.from_msg(stamp_msg),
                 timeout=rclpy.duration.Duration(seconds=0.1))
             transformed = do_transform_point(pt, transform)
             return np.array([
@@ -234,36 +220,9 @@ class Z1YoloTorsoTracker(Node):
             return None
 
     # ──────────────────────────────────────────────────────────────
-    def _interpolate_to_target(self, target_world):
-        """
-        Muove tracking_current_pos verso target_world a velocità
-        massima tracking_speed. Restituisce la posizione interpolata.
-        """
-        if self.tracking_current_pos is None:
-            # Prima volta — inizializza alla posizione EE corrente
-            if self.current_ee_pos is not None:
-                self.tracking_current_pos = self.current_ee_pos.copy()
-            else:
-                self.tracking_current_pos = target_world.copy()
-
-        direction = target_world - self.tracking_current_pos
-        distance  = np.linalg.norm(direction)
-
-        dt       = self.kf.dt if hasattr(self.kf, 'dt') else 0.033
-        max_step = self.tracking_speed * dt
-
-        if distance <= max_step:
-            self.tracking_current_pos = target_world.copy()
-        else:
-            self.tracking_current_pos = (self.tracking_current_pos
-                                         + (direction / distance) * max_step)
-        return self.tracking_current_pos
-
-    # ──────────────────────────────────────────────────────────────
     def cb_synchronized(self, rgb_msg, depth_msg):
         if self.cam_info is None:
-            self.get_logger().warn('CameraInfo non ancora ricevuta',
-                                   throttle_duration_sec=2.0)
+            self.get_logger().warn('CameraInfo non ancora ricevuta',throttle_duration_sec=2.0)
             return
 
         # ── Misura dt reale ────────────────────────────────────────
@@ -300,17 +259,109 @@ class Z1YoloTorsoTracker(Node):
         # ── Estrai misura torso (camera frame) ────────────────────
         torso_raw, kp_3d, n_valid, avg_conf = self._extract_torso(results, depth)
 
-        # ── Macchina a stati ──────────────────────────────────────
-        self._update_state(torso_raw, n_valid, avg_conf, rgb_msg.header)
+        # ── Filtro + pubblicazione osservazioni ───────────────────
+        if torso_raw is not None and n_valid >= 2:
+            if not self.kf.initialized:
+                self.kf.reset()
+                self.kf.initialize(torso_raw)
+            else:
+                self.kf.predict(self.vel_damping)
+                self.kf.update(torso_raw)
+
+            est_cam = self.kf.get_position()  # camera frame
+
+            # Pubblica in camera frame
+            cam_msg = PointStamped()
+            cam_msg.header.stamp    = self.get_clock().now().to_msg()
+            cam_msg.header.frame_id = 'camera_depth_optical_frame'
+            cam_msg.point.x = float(est_cam[0])
+            cam_msg.point.y = float(est_cam[1])
+            cam_msg.point.z = float(est_cam[2])
+            self.pub_torso_camera.publish(cam_msg)
+
+            # Pubblica in world frame (su /torso_target_ee per compatibilità)
+            est_world = self._camera_to_world(est_cam, rgb_msg.header.stamp)
+            if est_world is not None:
+                self._publish_target_world(est_world)
+                self._publish_visible(True)
+                est_w = np.array(est_world, dtype=np.float64)
+
+                if self.lock_state in ('SEARCHING', 'CANDIDATE'):
+                    self.lock_candidate_count += 1
+                    self.lock_state = 'CANDIDATE'
+                    if self.lock_candidate_count >= self.min_lock_frames:
+                        self.lock_state = 'LOCKED'
+                        self.locked_world = est_w.copy()
+                        self.lock_candidate_count = 0
+
+                elif self.lock_state == 'LOCKED':
+                    if self.locked_world is None:
+                        self.locked_world = est_w.copy()
+                        self.lock_candidate_count = 0
+                    else:
+                        diff = float(np.linalg.norm(est_w - self.locked_world))
+                        if diff > self.relock_translation_thresh:
+                            self.lock_candidate_count += 1
+                            if self.lock_candidate_count >= self.min_lock_frames:
+                                self.locked_world = est_w.copy()
+                                self.lock_candidate_count = 0
+                        else:
+                            self.lock_candidate_count = 0
+
+                # publish lock (se esiste)
+                if self.locked_world is not None:
+                    self._publish_target_world_locked(self.locked_world)
+                    self._publish_lock_valid(True)
+                    self._publish_lock_state(self.lock_state)
+                else:
+                    self._publish_lock_valid(False)
+                    self._publish_lock_state(self.lock_state)
+            else:
+                self._publish_visible(False)
+                if self.locked_world is not None:
+                    self._publish_target_world_locked(self.locked_world)
+                    self._publish_lock_valid(True)
+                    self._publish_lock_state(self.lock_state)
+                else:
+                    self._publish_lock_valid(False)
+                    self._publish_lock_state(self.lock_state)
+
+            # Diagnostica
+            conf_msg = Float32(); conf_msg.data = float(avg_conf)
+            kp_msg   = Int32();   kp_msg.data   = int(n_valid)
+            self.pub_avg_conf.publish(conf_msg)
+            self.pub_n_valid_kp.publish(kp_msg)
+
+            self.tracker_state = 'TRACKING'
+            state_msg = String(); state_msg.data = 'TRACKING'
+            self.pub_state.publish(state_msg)
+
+        else:
+            # Nessuna detection valida
+            self._publish_visible(False)
+            # Continua a pubblicare il target LOCKED anche se YOLO perde il torso
+            if self.locked_world is not None:
+                self._publish_target_world_locked(self.locked_world)
+                self._publish_lock_valid(True)
+                self._publish_lock_state(self.lock_state)
+            else:
+                self._publish_lock_valid(False)
+                self._publish_lock_state(self.lock_state)
+            conf_msg = Float32(); conf_msg.data = float(avg_conf)
+            kp_msg   = Int32();   kp_msg.data   = int(n_valid)
+            self.pub_avg_conf.publish(conf_msg)
+            self.pub_n_valid_kp.publish(kp_msg)
+
+            self.tracker_state = 'LOST'
+            state_msg = String(); state_msg.data = 'LOST'
+            self.pub_state.publish(state_msg)
 
         # ── Markers ───────────────────────────────────────────────
-        target = self.locked_target if self.locked_target is not None \
-                 else (self._camera_to_world(self.kf.get_position())
-                       if self.kf.initialized else None)
-        if target is not None:
-            self._publish_markers(target, kp_3d, rgb_msg.header)
-        
-       
+        marker_target = self.locked_world if self.locked_world is not None else (
+            self._camera_to_world(self.kf.get_position(), rgb_msg.header.stamp) if self.kf.initialized else None
+        )
+        if marker_target is not None:
+            self._publish_markers(marker_target, kp_3d, rgb_msg.header)
     # ──────────────────────────────────────────────────────────────
     def _extract_torso(self, results, depth):
         """Estrae centro torso in camera frame."""
@@ -348,229 +399,10 @@ class Z1YoloTorsoTracker(Node):
 
         return np.mean(torso_pts, axis=0), kp_3d, len(torso_pts), float(np.mean(confs))
 
-    # ──────────────────────────────────────────────────────────────
-    def _update_state(self, torso_raw, n_valid, avg_conf, header):
-        prev_state = self.state
 
-        # ── IDLE ──────────────────────────────────────────────────
-        if self.state == 'IDLE':
-            if (torso_raw is not None
-                    and n_valid >= self.min_keypoints
-                    and avg_conf >= self.min_det_conf):
-                self.state            = 'ESTIMATING'
-                self.kf.reset()
-                self.kf.initialize(torso_raw)
-                self.position_history = [torso_raw.copy()]
-                self.stable_counter   = 0
-                self.tracking_current_pos = None  # reset interpolazione
-
-        # ── ESTIMATING ────────────────────────────────────────────
-        elif self.state == 'ESTIMATING':
-            if (torso_raw is not None
-                    and n_valid >= self.min_keypoints
-                    and avg_conf >= self.min_det_conf):
-
-                self.kf.predict(self.vel_damping)
-                self.kf.update(torso_raw)
-                estimated_cam = self.kf.get_position()  # camera frame
-
-                self.position_history.append(estimated_cam.copy())
-                if len(self.position_history) > self.lock_stable_frames:
-                    self.position_history.pop(0)
-
-                # ✅ Converti in world e interpola lentamente
-                target_world = self._camera_to_world(estimated_cam)
-                if target_world is not None:
-                    interpolated = self._interpolate_to_target(target_world)
-                    self._publish_target_world(interpolated)
-                    self._publish_visible(True)
-
-                # Controlla lock
-                if len(self.position_history) >= self.lock_stable_frames:
-                    variance = np.var(self.position_history, axis=0).sum()
-                    if variance < self.lock_variance_thr:
-                        self.stable_counter += 1
-                        if self.stable_counter >= self.lock_stable_checks:
-                            locked_world = self._camera_to_world(estimated_cam)
-                            if locked_world is not None:
-                                self.locked_target        = locked_world
-                                self.tracking_current_pos = None 
-                                self.stall_last_ee_pos    = None  
-                                self.stall_last_check     = None   
-                                self.stall_still_duration = 0.0    
-                                self.state                = 'LOCKED'
-                    else:
-                        self.stable_counter = 0
-            else:
-                self.get_logger().warn('⚠️ Torso perso durante stima → IDLE')
-                self.state = 'IDLE'
-                self.kf.reset()
-                self.position_history     = []
-                self.tracking_current_pos = None
-                self._publish_visible(False)
-
-        elif self.state == 'LOCKED':
-
-            interpolated = self._interpolate_to_target(self.locked_target)
-            self._publish_target_world(interpolated)
-            self._publish_visible(True)
-
-            if self.current_ee_pos is not None:
-                ee_dist       = np.linalg.norm(self.current_ee_pos - self.locked_target)
-                robot_arrived = ee_dist < 0.05  # ← calcolato UNA volta sola
-
-                # Stall — solo se non ancora arrivato
-                if not robot_arrived:
-                    now = self.get_clock().now()
-                    if self.stall_last_check is None:
-                        self.stall_last_check  = now
-                        self.stall_last_ee_pos = self.current_ee_pos.copy()
-                    else:
-                        elapsed = (now - self.stall_last_check).nanoseconds / 1e9
-                        if elapsed > self.lock_stall_check_period:
-                            movement = np.linalg.norm(
-                                self.current_ee_pos - self.stall_last_ee_pos)
-                            
-                            # ← LOG per capire cosa succede
-                            self.get_logger().info(
-                                f'[STALL] elapsed={elapsed:.2f}s  '
-                                f'movement={movement*1000:.1f}mm  '
-                                f'still_dur={self.stall_still_duration:.1f}s  '
-                                f'ee_dist={ee_dist*100:.1f}cm  '
-                                f'robot_arrived={robot_arrived}')
-
-                            if movement < self.lock_stall_thr:
-                                self.stall_still_duration += elapsed
-                            else:
-                                self.stall_still_duration = 0.0
-
-                            self.stall_last_check  = now
-                            self.stall_last_ee_pos = self.current_ee_pos.copy()
-
-                            if self.stall_still_duration > self.lock_stall_duration:
-                                self.get_logger().warn('⏱️ Robot stagnante → RETURNING')
-                                self._start_returning()
-                                return
-
-
-                # Drift — solo se arrivato
-                if robot_arrived and torso_raw is not None \
-                        and n_valid >= self.min_keypoints \
-                        and avg_conf >= self.min_det_conf:
-                    torso_world = self._camera_to_world(torso_raw)
-                    if torso_world is not None:
-                        alpha = 0.02
-                        self.locked_target = (1 - alpha) * self.locked_target \
-                                            + alpha * torso_world
-                        drift = np.linalg.norm(torso_world - self.locked_target)
-                        if drift > self.lock_drift_thr:
-                            self.drift_counter += 1
-                            if self.drift_counter >= self.lock_drift_frames:
-                                self.get_logger().info(
-                                    f'⚠️ Deriva {drift:.3f}m → RETURNING')
-                                self._start_returning()
-                        else:
-                            self.drift_counter = 0
-            else:
-                robot_arrived = False
-
-        # ── RETURNING ─────────────────────────────────────────────
-        elif self.state == 'RETURNING':
-            self._update_returning()
-
-        # ── Log cambio stato ──────────────────────────────────────
-        if self.state != prev_state:
-            self.get_logger().info(
-                f'🔄 {prev_state} → {self.state} '
-                f'(kp={n_valid} conf={avg_conf:.2f})'
-            )
-
-        msg = String()
-        msg.data = self.state
-        self.pub_state.publish(msg)
-
-    # ──────────────────────────────────────────────────────────────
-    def cb_unreachable(self, msg: Bool):
-        if msg.data and self.state == 'LOCKED':
-            self.get_logger().warn('⚠️ Target irraggiungibile → RETURNING')
-            self._start_returning()
-
-    def _start_returning(self):
-        """Inizializza stato RETURNING."""
-        self.state             = 'RETURNING'
-        self.drift_counter     = 0
-        self.locked_target     = None
-        self.return_start_time = self.get_clock().now()
-        self.position_history  = []
-        self.tracking_current_pos = None  # reset interpolazione tracking
-        self.kf.reset()
-        self._publish_visible(False)
-
-        self.stall_last_ee_pos    = None
-        self.stall_last_check     = None
-        self.stall_still_duration = 0.0
-
-        # Punto di partenza = EE corrente (world frame)
-        if self.current_ee_pos is not None:
-            self.return_current_pos = self.current_ee_pos.copy()
-        else:
-            self.return_current_pos = self.starting_position.copy()
-
-        self.get_logger().info(
-            f'🟣 RETURNING | da: {self.return_current_pos} '
-            f'→ a: {self.starting_position} | '
-            f'speed: {self.return_speed} m/s'
-        )
-
-    # ──────────────────────────────────────────────────────────────
-    def _update_returning(self):
-        """
-        Interpola lentamente verso starting_position a velocità costante.
-        Tutto in world frame. Quando arriva → IDLE.
-        """
-        now     = self.get_clock().now()
-        elapsed = (now - self.return_start_time).nanoseconds / 1e9
-
-        # ── Timeout sicurezza ─────────────────────────────────────
-        if elapsed > self.return_timeout:
-            self.get_logger().warn(
-                f'⏱️ RETURNING timeout ({self.return_timeout}s) → IDLE')
-            self.state = 'IDLE'
-            return
-
-        # ── Check arrivo con EE reale ─────────────────────────────
-        if self.current_ee_pos is not None:
-            real_dist = np.linalg.norm(
-                self.current_ee_pos - self.starting_position)
-            if real_dist < self.return_arrival_thr:
-                self.get_logger().info(
-                    f'✅ EE arrivato (dist={real_dist*1000:.1f}mm) → IDLE')
-                self.state = 'IDLE'
-                return
-
-        # ── Interpolazione velocità costante ──────────────────────
-        direction = self.starting_position - self.return_current_pos
-        distance  = np.linalg.norm(direction)
-
-        dt       = self.kf.dt if hasattr(self.kf, 'dt') else 0.033
-        max_step = self.return_speed * dt
-
-        if distance <= max_step or distance < self.return_arrival_thr:
-            self.return_current_pos = self.starting_position.copy()
-            self.get_logger().info('✅ Interpolazione completata → IDLE')
-            self.state = 'IDLE'
-        else:
-            step = (direction / distance) * max_step
-            self.return_current_pos = self.return_current_pos + step
-
-        # ── Pubblica target interpolato ───────────────────────────
-        self._publish_target_world(self.return_current_pos)
-
-    # ──────────────────────────────────────────────────────────────
     def _publish_target_world(self, point_world):
         """
-        Pubblica PoseStamped in world frame su /torso_target_ee.
-        Usato da ESTIMATING, LOCKED e RETURNING.
+        Pubblica la stima del torso in world frame su /torso_target_ee (compatibilità).
         """
         pose = PoseStamped()
         pose.header.stamp    = self.get_clock().now().to_msg()
@@ -586,7 +418,26 @@ class Z1YoloTorsoTracker(Node):
         msg = Bool()
         msg.data = visible
         self.pub_visible.publish(msg)
-
+    # ──────────────────────────────────────────────────────────────
+    def _publish_lock_valid(self, valid: bool):
+        m = Bool()
+        m.data = bool(valid)
+        self.pub_lock_valid.publish(m)
+    # ──────────────────────────────────────────────────────────────
+    def _publish_lock_state(self, state: str):
+        s = String()
+        s.data = str(state)
+        self.pub_lock_state.publish(s)
+    # ──────────────────────────────────────────────────────────────
+    def _publish_target_world_locked(self, point_world_locked):
+        pose = PoseStamped()
+        pose.header.stamp    = self.get_clock().now().to_msg()
+        pose.header.frame_id = 'world'
+        pose.pose.position.x = float(point_world_locked[0])
+        pose.pose.position.y = float(point_world_locked[1])
+        pose.pose.position.z = float(point_world_locked[2])
+        pose.pose.orientation.w = 1.0
+        self.pub_torso_ee_locked.publish(pose)
     # ──────────────────────────────────────────────────────────────
     def _get_depth_robust(self, depth, u, v, window=5):
         h, w  = depth.shape
@@ -602,13 +453,14 @@ class Z1YoloTorsoTracker(Node):
     def _publish_markers(self, torso_center_world, kp_3d, header):
         """Tutti i marker sono in world frame."""
 
-        kp_3d_w = {idx: self._camera_to_world(pt) for idx, pt in kp_3d.items()}
+        kp_3d_w = {idx: self._camera_to_world(pt, header.stamp) for idx, pt in kp_3d.items()}
         kp_3d_w = {idx: w for idx, w in kp_3d_w.items() if w is not None}
 
         frame   = 'world'
-        stamp   = self.get_clock().now().to_msg()
+        stamp   = header.stamp
+        # Preferisci colore FSM se noto, altrimenti usa tracker_state
+        color = STATE_COLORS.get(self.fsm_state, STATE_COLORS.get(self.tracker_state, STATE_COLORS['LOST']))
         markers = MarkerArray()
-        color   = STATE_COLORS.get(self.state, STATE_COLORS['IDLE'])
 
         # 1. Pallino centrale
         cm = Marker()
@@ -709,7 +561,7 @@ class Z1YoloTorsoTracker(Node):
         tm.pose.orientation.w = 1.0
         tm.scale.z            = 0.05
         tm.color              = color
-        tm.text               = self.state
+        tm.text               = f"{self.fsm_state} | {self.tracker_state} | {self.lock_state}"
         tm.lifetime.nanosec   = 200_000_000
         markers.markers.append(tm)
 

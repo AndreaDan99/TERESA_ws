@@ -3,7 +3,6 @@ import rclpy
 from rclpy.node import Node
 
 import numpy as np
-import cv2
 
 from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import PoseStamped, PointStamped
@@ -29,6 +28,7 @@ class RealSenseSurfaceNode(Node):
         self.declare_parameter("patch_radius_px", 30)
         self.declare_parameter("min_depth", 0.10)
         self.declare_parameter("max_depth", 2.0)
+        self.declare_parameter("desired_normal_offset", -0.005)
 
         self.camera_frame = self.get_parameter("camera_frame").get_parameter_value().string_value
         self.ee_frame = self.get_parameter("ee_frame").get_parameter_value().string_value
@@ -36,6 +36,7 @@ class RealSenseSurfaceNode(Node):
         self.patch_r = self.get_parameter("patch_radius_px").get_parameter_value().integer_value
         self.min_depth = self.get_parameter("min_depth").get_parameter_value().double_value
         self.max_depth = self.get_parameter("max_depth").get_parameter_value().double_value
+        self.desired_normal_offset = self.get_parameter("desired_normal_offset").get_parameter_value().double_value
 
         self.fx = self.fy = self.ppx = self.ppy = None
 
@@ -45,6 +46,9 @@ class RealSenseSurfaceNode(Node):
         )
         self.visible_sub = self.create_subscription(
             Bool, "/torso_visible", self.visible_callback, 10
+        )
+        self.lock_valid_sub = self.create_subscription(
+            Bool, "/target_lock_valid", self.lock_valid_callback, 10
         )
 
         # Subscriber Realsense
@@ -58,17 +62,21 @@ class RealSenseSurfaceNode(Node):
         )
 
         # Publisher
-        self.surface_pub = self.create_publisher(PoseStamped, "surface_frame", 10)
-        self.dist_pub = self.create_publisher(Float32, "surface_signed_distance", 10)
+        self.surface_pub = self.create_publisher(PoseStamped, "/torso_surface_frame", 10)
+        self.dist_pub = self.create_publisher(Float32, "/surface_signed_distance", 10)
 
         # State torso
         self.torso_center_cam = None
         self.torso_visible = False
+        self.target_lock_valid = False
 
         self.get_logger().info("="*70)
         self.get_logger().info("🚀 TORSO-SPECIFIC Surface Node")
         self.get_logger().info("ROI dinamico su /torso_target_camera")
         self.get_logger().info("="*70)
+
+    def lock_valid_callback(self, msg: Bool):
+        self.target_lock_valid = msg.data
 
     def info_callback(self, msg):
         if self.fx is None:
@@ -126,8 +134,8 @@ class RealSenseSurfaceNode(Node):
         return tf.quaternion_matrix([q.x, q.y, q.z, q.w])[:3, :3]
 
     def depth_callback(self, msg: Image):
-        # ✅ CRITICO: Skip se no torso!
-        if not self.torso_visible or self.torso_center_cam is None:
+        
+        if not self.target_lock_valid or self.torso_center_cam is None:
             return
 
         if self.fx is None:
@@ -176,7 +184,8 @@ class RealSenseSurfaceNode(Node):
         try:
             tf_base_cam = self.tf_buffer.lookup_transform(
                 self.base_frame, self.camera_frame,
-                rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=0.1)
+                rclpy.time.Time.from_msg(msg.header.stamp),
+                timeout=rclpy.duration.Duration(seconds=0.1)
             )
         except:
             return
@@ -193,7 +202,8 @@ class RealSenseSurfaceNode(Node):
         try:
             tf_base_ee = self.tf_buffer.lookup_transform(
                 self.base_frame, self.ee_frame,
-                rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=0.1)
+                rclpy.time.Time.from_msg(msg.header.stamp),
+                timeout=rclpy.duration.Duration(seconds=0.1)
             )
         except:
             return
@@ -205,6 +215,7 @@ class RealSenseSurfaceNode(Node):
 
         # Costruisci Pose superficie
         z_axis = n_base / np.linalg.norm(n_base)
+        p0_base = p0_base + self.desired_normal_offset * z_axis
         aux = np.array([1.0, 0.0, 0.0])
         if abs(np.dot(aux, z_axis)) > 0.9:
             aux = np.array([0.0, 1.0, 0.0])
@@ -242,9 +253,9 @@ class RealSenseSurfaceNode(Node):
             f"ROI@({u_ee},{v_ee}) dist: {d*1000:.1f}mm"
         )
         self.get_logger().info(
-            f'🔍 normale world: [{n_base[0]:.3f}, {n_base[1]:.3f}, {n_base[2]:.3f}] | '
-            f'target Z: {p0_base[2] + self.desired_normal_offset * n_base[2]:.3f}m'
-)
+            f"🔍 normale world: [{n_base[0]:.3f}, {n_base[1]:.3f}, {n_base[2]:.3f}] | "
+            f"offset: {self.desired_normal_offset:+.4f}m"
+        )
 
 def main(args=None):
     rclpy.init(args=args)

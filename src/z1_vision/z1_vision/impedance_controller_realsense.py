@@ -61,7 +61,8 @@ class ImpedanceController(Node):
                 # Integrazione RealSense/superficie
                 ('use_surface_frame', False),
                 ('desired_normal_offset', -0.005),  # [m] offset lungo normale superficie
-
+                ('max_approach_distance', 0.20),
+                ('approach_speed', 0.01),
             ]
         )
         
@@ -117,6 +118,12 @@ class ImpedanceController(Node):
         self.get_logger().info(f'   desired_normal_offset = {self.desired_normal_offset}')
         self.get_logger().info('='*70)
 
+        self.max_approach_distance = self.get_parameter('max_approach_distance').value
+        self.approach_speed = self.get_parameter('approach_speed').value
+
+        self.approach_distance_accum = 0.0
+        self.contact_detected = False
+
         # Stato robot
         self.n_joints = 6
         self.q = np.zeros(self.model.nq)
@@ -157,15 +164,17 @@ class ImpedanceController(Node):
         self.surface_frame = None
         self.surface_signed_distance = 0.0
         self.torso_visible = False  
+        self.target_lock_valid = False
 
-        self.tracker_state = "IDLE"
+        self.sm_state = "WAITING"
+        self.prev_sm_state = self.sm_state
 
         # Subscribers
         self.joint_state_sub = self.create_subscription(
             JointState, '/joint_states', self.joint_state_callback, 10
         )
         self.desired_pose_sub = self.create_subscription(
-            PoseStamped, '/torso_target_ee', self.desired_pose_callback, 10
+            PoseStamped, '/torso_command_ee', self.desired_pose_callback, 10
         )
         self.impedance_params_sub = self.create_subscription(
             Float64MultiArray, '/set_impedance', self.impedance_callback, 10
@@ -174,14 +183,14 @@ class ImpedanceController(Node):
         # Surface estimation from RealSense
         self.surface_sub = self.create_subscription(
             PoseStamped,
-            'surface_frame',
+            '/torso_surface_frame',
             self.surface_callback,
             10
         )
 
         self.surface_dist_sub = self.create_subscription(
             Float32,
-            'surface_signed_distance',
+            '/surface_signed_distance',
             self.surface_dist_callback,
             10
         )
@@ -189,8 +198,11 @@ class ImpedanceController(Node):
             Bool, '/torso_visible', self.torso_visible_callback, 10
         )
         
-        self.tracker_state_sub = self.create_subscription(
-            String, '/torso_tracker_state', self.tracker_state_callback, 10
+        self.sm_state_sub = self.create_subscription(
+            String, '/torso_sm_state', self.sm_state_callback, 10
+        )
+        self.sub_lock_valid = self.create_subscription(
+            Bool, '/target_lock_valid', self.cb_lock_valid, 10
         )
 
         # Publishers
@@ -198,7 +210,9 @@ class ImpedanceController(Node):
         self.current_pose_pub = self.create_publisher(PoseStamped, '/current_ee_pose', 10)
         self.wrench_pub = self.create_publisher(WrenchStamped, '/cartesian_wrench', 10)
         self.pub_unreachable = self.create_publisher(Bool, '/target_unreachable', 10)
-
+        self.pub_contact = self.create_publisher(Bool, '/impedance_contact_detected', 10)
+        self.pub_retract_done = self.create_publisher(Bool, '/impedance_retract_done', 10)
+        
         # Timers
         self.timer = self.create_timer(self.control_dt, self.control_loop)
         self.log_timer = self.create_timer(1.0 / self.log_rate, self.print_status)
@@ -250,90 +264,9 @@ class ImpedanceController(Node):
     
     def desired_pose_callback(self, msg):
         """Callback per aggiornare la posa desiderata con validazione"""
-        if self.tracker_state not in ("LOCKED", "RETURNING"):
-            return
-        position = np.array([msg.pose.position.x, msg.pose.position.y, msg.pose.position.z])
-        
-        # Verifica workspace
-        reach = np.linalg.norm(position[:2])
-        reach_3d = np.linalg.norm(position)
-        reach_xy = np.linalg.norm(position[:2])
-        if not (reach_3d > 0.05 and reach_xy < 0.8 and
-                -0.4 < position[1] < 0.4 and
-                0.05 < position[2] < 0.85):
-            self.get_logger().error(
-                f'❌ Target FUORI workspace: [{position[0]:.3f}, {position[1]:.3f}, {position[2]:.3f}]'
-            )
-            self.get_logger().error(
-                f'   reach_3d={reach_3d:.3f}m, reach_xy={reach_xy:.3f}m, z={position[2]:.3f}m'
-            )
-            return
-        
-        # Verifica distanza da posizione corrente
-        if hasattr(self, 'data') and self.x_desired_initialized:
-            x_current = self.data.oMf[self.ee_frame_id]
-            distance = np.linalg.norm(position - x_current.translation)
-            
-            if distance > self.max_step_distance:
-                # Non rifiutare: cappa il target alla distanza massima
-                direction = (position - x_current.translation) / distance
-                position = x_current.translation + direction * self.max_step_distance
-                self.get_logger().debug(
-                    f'⚠️ Target cappato a {self.max_step_distance*1000:.0f}mm '
-                    f'(originale: {distance*1000:.0f}mm)'
-                )
-                # NON pubblicare unreachable, NON fare return
-            
-        if self.use_surface_frame and self.torso_visible and self.surface_frame is not None:
-            surf_pos = np.array([
-                self.surface_frame.pose.position.x,
-                self.surface_frame.pose.position.y,
-                self.surface_frame.pose.position.z,
-            ])
-            q_surf = self.surface_frame.pose.orientation
-            R = quaternion_matrix([q_surf.x, q_surf.y, q_surf.z, q_surf.w])[:3, :3]
-            normal = R[:, 2]  # Z axis = normale al torso
-            position = surf_pos + self.desired_normal_offset * normal
-            self.get_logger().debug(
-                f'🎯 Target su torso offset={self.desired_normal_offset*1000:.1f}mm'
-            )
-
-        # Imposta target posizione
-        quaternion = pin.Quaternion(
-            msg.pose.orientation.w, msg.pose.orientation.x,
-            msg.pose.orientation.y, msg.pose.orientation.z
-        )
-        quaternion.normalize()
-        
-        self.x_desired = pin.SE3(quaternion.toRotationMatrix(), position)
-        self.x_desired_initialized = True
-        self.error_integral = np.zeros(6)
-        
-        # ========================================
-        # CALCOLA TARGET ORIENTAMENTO POLSO (Joint-Space)
-        # ========================================
-        if self.control_wrist:
-            # Opzione semplice: mantieni orientamento corrente dei joint del polso
-            # (puoi sostituire con IK completo se necessario)
-            self.q_desired_wrist = self.q[3:6].copy()
-            
-            self.get_logger().info(
-                f'🎯 Target polso [j4,j5,j6]: [{np.rad2deg(self.q_desired_wrist[0]):.1f}°, '
-                f'{np.rad2deg(self.q_desired_wrist[1]):.1f}°, {np.rad2deg(self.q_desired_wrist[2]):.1f}°]'
-            )
-        
-        # Log posizione
-        if hasattr(self, 'data'):
-            x_current = self.data.oMf[self.ee_frame_id]
-            distance = np.linalg.norm(position - x_current.translation)
-            self.get_logger().info('-'*70)
-            self.get_logger().info(
-                f'✅ NUOVO TARGET POS: [{position[0]:.3f}, {position[1]:.3f}, {position[2]:.3f}] '
-                f'(distanza: {distance*1000:.0f}mm)'
-            )
-            self.get_logger().info('-'*70)
-        else:
-            self.get_logger().info(f'Nuovo target: [{position[0]:.3f}, {position[1]:.3f}, {position[2]:.3f}]')
+        # Impedance controller does not use torso_command_ee anymore
+        # Movement is driven only by surface normal during IMPEDANCE state
+        return
     
     def impedance_callback(self, msg):
         """Callback per modificare parametri di impedenza online"""
@@ -356,16 +289,31 @@ class ImpedanceController(Node):
 
     def surface_callback(self, msg: PoseStamped):
         """Callback per superficie stimata da RealSense"""
-        if self.torso_visible:  
-            self.surface_frame = msg
+        self.surface_frame = msg
 
+    def cb_lock_valid(self, msg: Bool):
+        self.target_lock_valid = bool(msg.data)
+        
     def surface_dist_callback(self, msg: Float32):
         """Callback per distanza firmata TCP-superficie"""
         self.surface_signed_distance = msg.data
 
-    def tracker_state_callback(self, msg):
-        self.tracker_state = msg.data
+    def sm_state_callback(self, msg: String):
+        self.sm_state = msg.data
 
+
+    def _is_impedance_active(self, state: str) -> bool:
+        return state in ("IMPEDANCE_CONTACT", "HOLD_CONTACT", "IMPEDANCE_RETRACT")
+
+    def publish_contact(self, detected: bool):
+        msg = Bool()
+        msg.data = bool(detected)
+        self.pub_contact.publish(msg)
+
+    def publish_retract_done(self, done: bool):
+        msg = Bool()
+        msg.data = bool(done)
+        self.pub_retract_done.publish(msg)
 
     def control_loop(self):
         """Loop principale di controllo"""
@@ -466,6 +414,18 @@ class ImpedanceController(Node):
         x_current = self.data.oMf[self.ee_frame_id]
         self.publish_current_pose(x_current)
 
+        # =====================================================
+        # LATCH WRIST ORIENTATION ON ENTRY TO IMPEDANCE MODE
+        # =====================================================
+        if self.control_wrist and (not self._is_impedance_active(self.prev_sm_state)) and self._is_impedance_active(self.sm_state):
+            # Blocca l'orientamento del polso (J4-J5-J6) esattamente nella configurazione corrente.
+            # Questo garantisce orientazione costante durante gli ultimi 20 cm in impedenza.
+            self.q_desired_wrist = self.q[3:6].copy()
+            self.get_logger().info('🔒 Wrist orientation latched (J4-J6) at impedance entry')
+
+        # Aggiorna prev state
+        self.prev_sm_state = self.sm_state
+
         if not self.x_desired_initialized:
             self.x_desired = x_current.copy()
             self.x_desired_initialized = True
@@ -475,36 +435,74 @@ class ImpedanceController(Node):
             self.get_logger().info(f'Target iniziale: [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]')
 
 
-        # ========================================
-        # INTEGRAZIONE SUPERFICIE (REALSENSE)
-        # ========================================
-        if self.use_surface_frame and self.torso_visible and self.surface_frame is not None:
-            surf_frame = self.surface_frame 
-            surf_pose = surf_frame.pose
-            # Costruisci SE3 dalla superficie
-            q_surf = [
-                surf_pose.orientation.x,
-                surf_pose.orientation.y,
-                surf_pose.orientation.z,
-                surf_pose.orientation.w,
-            ]
-            T_surf = quaternion_matrix(q_surf)
-            R_surf = T_surf[:3, :3]
-            p_surf = np.array([
-                surf_pose.position.x,
-                surf_pose.position.y,
-                surf_pose.position.z
-            ])
-            
-            # Normale = asse z del frame superficie
-            n = R_surf[:, 2]
-            
-            # Applica offset lungo la normale
-            offset = self.desired_normal_offset
-            p_d_surf = p_surf + offset * n
-            
-            # Sovrascrivi x_desired con superficie + offset
-            self.x_desired = pin.SE3(R_surf, p_d_surf)
+        # =====================================================
+        # IMPEDANCE MODE ACTIVE ONLY IN SPECIFIC FSM STATES
+        # =====================================================
+        if self.sm_state not in ("IMPEDANCE_CONTACT", "HOLD_CONTACT", "IMPEDANCE_RETRACT"):
+            # Stay passive: hold current position and reset approach/contact
+            self.x_desired = x_current.copy()
+            self.approach_distance_accum = 0.0
+            self.contact_detected = False
+            self.publish_contact(False)
+            self.publish_retract_done(False)
+
+            # Rilascia latch polso quando esci dall'impedenza
+            if self.control_wrist:
+                self.q_desired_wrist = None
+
+            return
+
+        # =====================================================
+        # APPROACH ALONG SURFACE NORMAL (MAX 20 cm)
+        # =====================================================
+        if self.surface_frame is None or not self.target_lock_valid:
+            return
+
+        surf_pose = self.surface_frame.pose
+        q_surf = [
+            surf_pose.orientation.x,
+            surf_pose.orientation.y,
+            surf_pose.orientation.z,
+            surf_pose.orientation.w,
+        ]
+        T_surf = quaternion_matrix(q_surf)
+        R_surf = T_surf[:3, :3]
+        p_surf = np.array([
+            surf_pose.position.x,
+            surf_pose.position.y,
+            surf_pose.position.z
+        ])
+
+        normal = R_surf[:, 2]
+
+        step = self.approach_speed * self.control_dt
+
+        if self.sm_state == "IMPEDANCE_CONTACT":
+            # Avanza lungo la normale fino a max_approach_distance
+            if not self.contact_detected:
+                self.approach_distance_accum = min(
+                    self.approach_distance_accum + step,
+                    self.max_approach_distance
+                )
+            self.publish_retract_done(False)
+
+        elif self.sm_state == "IMPEDANCE_RETRACT":
+            # Ritrai lungo la normale tornando indietro fino a 0
+            self.approach_distance_accum = max(
+                self.approach_distance_accum - step,
+                0.0
+            )
+            done = (self.approach_distance_accum <= 1e-6)
+            self.publish_retract_done(done)
+
+        else:
+            # HOLD_CONTACT: non modificare la distanza accumulata
+            self.publish_retract_done(False)
+
+        target_pos = p_surf + (self.desired_normal_offset + 
+                               self.approach_distance_accum) * normal
+
+        self.x_desired = pin.SE3(R_surf, target_pos)
 
 
         # ========================================
@@ -580,6 +578,18 @@ class ImpedanceController(Node):
                 f'{"="*70}'
             )
 
+        # =====================================================
+        # SIMPLE CONTACT DETECTION
+        # =====================================================
+        if self.sm_state in ("IMPEDANCE_CONTACT", "HOLD_CONTACT"):
+            if abs(self.surface_signed_distance) < 0.002:  # 2 mm threshold
+                self.contact_detected = True
+            self.publish_contact(self.contact_detected)
+        else:
+            # In retrazione non vogliamo tenere la FSM bloccata su "contact"
+            self.contact_detected = False
+            self.publish_contact(False)
+
         # Proietta forza cartesiana in coppie giunti
         tau_impedance = (J.T @ F_cartesian)[:self.n_joints]
 
@@ -593,15 +603,6 @@ class ImpedanceController(Node):
 
         # Compensazione dinamica
         tau_compensation = self.compute_compensation()
-        # ── Riduci gravity comp J2 durante RETURNING in zona verticale ──
-        reach_xy = np.linalg.norm(x_current.translation[:2])
-        if self.tracker_state == "RETURNING" and reach_xy < 0.35:
-            boost_scale = np.clip(1.0 - reach_xy / 0.35, 0.0, 1.0)
-            tau_compensation[1] *= (1.0 - 0.7 * boost_scale)  # riduce fino al 30%
-            # Boost diretto J2
-            Kp_j2_direct = 80.0 * boost_scale
-            tau_impedance[1] += Kp_j2_direct * (-x_error[0])
-            tau_impedance[1] += Kp_j2_direct * 0.5 * (-x_error[2])
 
         # ===== DEBUG LOG SEGNI =====
         if self.iteration_count % 500 == 0:
@@ -649,7 +650,7 @@ class ImpedanceController(Node):
         reach_xy_norm = np.clip(reach_xy / 0.3, 0.0, 1.0)  # satura a 0.3m
         scale_j2_raw = self.gravity_scale_j2 - (self.gravity_scale_j2 - 1.0) * reach_xy_norm
 
-                # Filtro passa-basso: alpha piccolo = variazione lenta
+        # Filtro passa-basso: alpha piccolo = variazione lenta
         alpha = 0.02  # era 0.005
 
         self.scale_j2_filtered = alpha * scale_j2_raw + (1.0 - alpha) * self.scale_j2_filtered

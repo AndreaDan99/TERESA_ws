@@ -1,0 +1,20 @@
+z1_ik_to_jtc:
+  ros__parameters:
+    robot_description_param: robot_description
+    base_frame: world
+    ee_frame: link06
+
+    controller_action: /joint_trajectory_controller/follow_joint_trajectory
+
+    joint_names: [joint1, joint2, joint3, joint4, joint5, joint6]
+
+    traj_duration: 10
+    traj_points: 60
+
+    ik_max_iter: 80
+    ik_tol: 1.0e-4
+    ik_damping: 1.0e-3
+    ik_step: 0.8
+    ik_joint_limit_margin: 1.0e-3
+
+    use_orientation: true
