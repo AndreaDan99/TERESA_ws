@@ -101,7 +101,7 @@ class Z1IKToJTC(Node):
         self.goal_sent_time = None
 
         # Safety: if the controller never returns a result, unlock after timeout
-        self.declare_parameter('goal_timeout_sec', 8.0)
+        self.declare_parameter('goal_timeout_sec', 60.0)
         self.goal_timeout_sec = float(self.get_parameter('goal_timeout_sec').value)
         self._goal_watchdog_timer = self.create_timer(0.2, self._goal_watchdog)
 
@@ -161,9 +161,7 @@ class Z1IKToJTC(Node):
         elapsed = (now - self.goal_sent_time).nanoseconds / 1e9
         if elapsed > self.goal_timeout_sec:
             self._status('goal_timeout')
-            self._success(False)
-            self._done(True)
-            # Try to cancel, but unlock regardless
+            # NON PUBBLICARE done/success qui (lascia decidere alla FSM)
             try:
                 if self.current_goal_handle is not None:
                     self.current_goal_handle.cancel_goal_async()
@@ -426,7 +424,8 @@ class Z1IKToJTC(Node):
 
             def _result_cb(rf):
                 res = rf.result()
-                ok = (res is not None and res.status == 4)  # 4 = SUCCEEDED
+                ok = (res is not None and res.status == 4 and res.result.error_code == 0)
+                self.get_logger().info(f"JTC result status={res.status} error_code={res.result.error_code} err='{res.result.error_string}'")
                 self._status('goal_succeeded' if ok else f'goal_failed_status_{res.status if res else "none"}')
                 self._success(ok)
                 self._done(True)
