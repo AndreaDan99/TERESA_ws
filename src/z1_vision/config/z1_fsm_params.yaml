@@ -3,7 +3,7 @@ z1_FSM:
     # ── High-level approach settings ───────────────────────
     approach_offset: 0.20        # [m] pre-contatto (20 cm prima del target)
 
-    startup_go_home: true
+    startup_go_home: false
     startup_home_delay: 5.0
     
     # ── Home pose (EE in world) ────────────────────────────

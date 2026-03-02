@@ -21,7 +21,7 @@ def generate_launch_description():
     impedance_params_file = PathJoinSubstitution([
         FindPackageShare('z1_vision'),
         'config',
-        'impedance_params.yaml'
+        'impedance_control_params.yaml'
     ])
 
     # =========================================================

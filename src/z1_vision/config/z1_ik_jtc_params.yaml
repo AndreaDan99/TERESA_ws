@@ -1,6 +1,7 @@
 z1_ik_to_jtc:
   ros__parameters:
-    robot_description_param: robot_description
+    urdf_path: '/home/andrea/Ros2_repositories/unitree_z1_ws/install/z1_description/share/z1_description/urdf/z1.urdf'
+    end_effector_frame: 'link06'
     base_frame: world
     ee_frame: link06
 

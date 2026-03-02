@@ -43,9 +43,8 @@ class Z1IKToJTC(Node):
 
     def __init__(self):
         super().__init__('z1_ik_to_jtc')
-
         # ---------------- Parameters ----------------
-        self.declare_parameter('robot_description_param', 'robot_description')
+        self.declare_parameter('urdf_path', '/home/andrea/Ros2_repositories/unitree_z1_ws/install/z1_description/share/z1_description/urdf/z1.urdf')
         self.declare_parameter('base_frame', 'world')
         self.declare_parameter('ee_frame', 'link06')          # EE frame in URDF
         self.declare_parameter('controller_action', '/joint_trajectory_controller/follow_joint_trajectory')
@@ -70,7 +69,7 @@ class Z1IKToJTC(Node):
         self.declare_parameter('use_orientation', True)
 
         # ---------------- Read parameters ----------------
-        self.robot_description_param = self.get_parameter('robot_description_param').value
+        urdf_path = self.get_parameter('urdf_path').value
         self.base_frame = self.get_parameter('base_frame').value
         self.ee_frame = self.get_parameter('ee_frame').value
         self.controller_action = self.get_parameter('controller_action').value
@@ -143,33 +142,15 @@ class Z1IKToJTC(Node):
         self.pub_done.publish(m)
 
     def _init_robot_from_urdf_param(self):
-        # Robot description must be available in this node namespace or global.
-        # Commonly published by robot_state_publisher.
-        urdf = None
-        try:
-            urdf = self.get_parameter(self.robot_description_param).value
-        except Exception:
-            urdf = None
+        urdf_path = self.get_parameter('urdf_path').value
 
-        if not urdf:
-            # try to declare and read (sometimes param not declared yet)
-            try:
-                self.declare_parameter(self.robot_description_param, '')
-                urdf = self.get_parameter(self.robot_description_param).value
-            except Exception:
-                urdf = None
-
-        if not urdf:
-            self.get_logger().error(
-                f"❌ robot_description non trovato come parametro '{self.robot_description_param}'. "
-                "Assicurati che robot_state_publisher lo pubblichi e che questo nodo lo veda."
-            )
-            self._status("robot_description_missing")
+        if not urdf_path:
+            self.get_logger().error("❌ Parametro 'urdf_path' non impostato o vuoto.")
+            self._status("urdf_path_missing")
             return
 
         try:
-            # `urdf` is an XML string (robot_description). Build model from XML.
-            self.model = pin.buildModelFromXML(urdf)
+            self.model, self.collision_model, self.visual_model = pin.buildModelsFromUrdf(urdf_path)
             self.data = self.model.createData()
             self.robot = None
             self.ee_id = self.model.getFrameId(self.ee_frame)
@@ -178,10 +159,12 @@ class Z1IKToJTC(Node):
             self.q_min = self.model.lowerPositionLimit.copy()
             self.q_max = self.model.upperPositionLimit.copy()
 
+            self.get_logger().info(f"✅ Modello URDF caricato da: {urdf_path}")
             self._status("robot_model_loaded")
         except Exception as e:
-            self.get_logger().error(f"❌ Errore caricando URDF XML in Pinocchio: {e}")
+            self.get_logger().error(f"❌ Errore caricando URDF da '{urdf_path}': {e}")
             self._status("robot_model_error")
+
 
     def cb_joint_states(self, msg: JointState):
         self.last_joint_state = msg
