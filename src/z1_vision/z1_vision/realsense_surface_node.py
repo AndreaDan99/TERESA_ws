@@ -61,6 +61,10 @@ class RealSenseSurfaceNode(Node):
         self.torso_sub = self.create_subscription(
             PointStamped, "/torso_target_camera", self.torso_callback, 10
         )
+        # Optional: torso target already in base/world frame (stable), useful if /torso_target_camera is not published
+        self.torso_world_sub = self.create_subscription(
+            PoseStamped, "/torso_target_ee_locked", self.torso_world_callback, 10
+        )
         self.visible_sub = self.create_subscription(
             Bool, "/torso_visible", self.visible_callback, 10
         )
@@ -85,7 +89,8 @@ class RealSenseSurfaceNode(Node):
         self.surface_point_pub = self.create_publisher(PointStamped, "/torso_surface_point", 10)
 
         # State torso
-        self.torso_center_cam = None
+        self.torso_center_cam = None          # np.array([x,y,z]) in camera frame
+        self.torso_center_base = None         # np.array([x,y,z]) in base/world frame
         self.torso_visible = False
         self.target_lock_valid = False
 
@@ -112,6 +117,12 @@ class RealSenseSurfaceNode(Node):
         """Centro torso 3D (camera frame) da YOLO"""
         self.torso_center_cam = np.array([
             msg.point.x, msg.point.y, msg.point.z
+        ])
+
+    def torso_world_callback(self, msg: PoseStamped):
+        """Centro torso 3D (base/world frame), es. da /torso_target_ee_locked"""
+        self.torso_center_base = np.array([
+            msg.pose.position.x, msg.pose.position.y, msg.pose.position.z
         ])
 
     def visible_callback(self, msg: Bool):
@@ -152,14 +163,46 @@ class RealSenseSurfaceNode(Node):
     def quat_to_rot(self, q):
         return tf.quaternion_matrix([q.x, q.y, q.z, q.w])[:3, :3]
 
+    def _base_point_to_camera(self, p_base, stamp_msg):
+        """Trasforma un punto (base/world) in camera frame usando TF."""
+        try:
+            tf_time = rclpy.time.Time() if self.use_latest_tf else rclpy.time.Time.from_msg(stamp_msg)
+            tf_cam_base = self.tf_buffer.lookup_transform(
+                self.camera_frame, self.base_frame,
+                tf_time,
+                timeout=rclpy.duration.Duration(seconds=0.2)
+            )
+        except Exception as e:
+            self.get_logger().warn(
+                f"⚠️ TF {self.camera_frame}<-{self.base_frame} non disponibile: {e}",
+                throttle_duration_sec=2.0,
+            )
+            return None
+
+        R_cb = self.quat_to_rot(tf_cam_base.transform.rotation)
+        t_cb = np.array([
+            tf_cam_base.transform.translation.x,
+            tf_cam_base.transform.translation.y,
+            tf_cam_base.transform.translation.z,
+        ])
+        p_cam = R_cb @ p_base + t_cb
+        return p_cam
+
     def depth_callback(self, msg: Image):
         
         if self.require_lock_valid and (not self.target_lock_valid):
             return
         if self.require_torso_visible and (not self.torso_visible):
             return
+
+        # We can use either a camera-frame torso point (preferred) OR a base/world-frame one.
         if self.torso_center_cam is None:
-            return
+            if self.torso_center_base is None:
+                return
+            p_cam = self._base_point_to_camera(self.torso_center_base, msg.header.stamp)
+            if p_cam is None:
+                return
+            self.torso_center_cam = p_cam
 
         if self.fx is None:
             return
@@ -175,6 +218,10 @@ class RealSenseSurfaceNode(Node):
             depth_img = depth_img.astype(np.float32)
 
         h, w = depth_img.shape
+
+        # If the depth message provides a frame_id, prefer it over the parameter (reduces TF mismatch issues)
+        if msg.header.frame_id:
+            self.camera_frame = msg.header.frame_id
 
         # ✅ ROI su PROIEZIONE TORSO
         torso_uv = self.project_to_image(self.torso_center_cam)
@@ -235,10 +282,17 @@ class RealSenseSurfaceNode(Node):
             self.get_logger().warn(f"⚠️ TF {self.base_frame}<-{self.ee_frame} non disponibile: {e}", throttle_duration_sec=2.0)
             return
 
-        tcp_base = np.array([tf_base_ee.transform.translation.x,
-                             tf_base_ee.transform.translation.y,
-                             tf_base_ee.transform.translation.z])
-        d = np.dot(tcp_base - p0_base, n_base)
+        tcp_base = np.array([
+            tf_base_ee.transform.translation.x,
+            tf_base_ee.transform.translation.y,
+            tf_base_ee.transform.translation.z,
+        ])
+
+        # Orient normal to point from the surface toward the TCP (stable sign convention)
+        if np.dot(n_base, (tcp_base - p0_base)) < 0.0:
+            n_base = -n_base
+
+        d = float(np.dot(tcp_base - p0_base, n_base))
 
         # Costruisci Pose superficie
         z_axis = n_base / np.linalg.norm(n_base)
@@ -336,7 +390,7 @@ class RealSenseSurfaceNode(Node):
             f"ROI@({u_ee},{v_ee}) dist: {d*1000:.1f}mm"
         )
         self.get_logger().info(
-            f"🔍 normale world: [{n_base[0]:.3f}, {n_base[1]:.3f}, {n_base[2]:.3f}] | "
+            f"🔍 normale {self.base_frame}: [{n_base[0]:.3f}, {n_base[1]:.3f}, {n_base[2]:.3f}] | "
             f"offset: {self.desired_normal_offset:+.4f}m"
         )
 
