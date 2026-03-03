@@ -60,7 +60,8 @@ class Z1IKToJTC(Node):
         
         # Reached criteria
         self.declare_parameter("reach_pos_tol", 0.05)    # m (5 cm) 
-        
+        self.declare_parameter("reach_hold_ticks", 5)   # numero di tick consecutivi per confermare il raggiungimento
+
         self.declare_parameter("current_pose_topic", "/ik_current_pose")
         self.declare_parameter("reached_topic", "/ik_reached")
 
@@ -193,28 +194,30 @@ class Z1IKToJTC(Node):
         if self._done_sent:
             return
         
-        # PoseStamped -> SE3
-        T = quaternion_matrix([
-            self.goal_pose.pose.orientation.x,
-            self.goal_pose.pose.orientation.y,
-            self.goal_pose.pose.orientation.z,
-            self.goal_pose.pose.orientation.w
-        ])
-        T[:3, 3] = [
+        # FK current (serve per prendere la rotazione attuale dell'EE)
+        pin.forwardKinematics(self.model, self.data, self.q)
+        pin.updateFramePlacements(self.model, self.data)
+        current = self.data.oMf[self.ee_id]
+
+        # Target POSITION dal goal (ignoro l'orientamento del goal)
+        target_pos = np.array([
             self.goal_pose.pose.position.x,
             self.goal_pose.pose.position.y,
             self.goal_pose.pose.position.z
-        ]
-        target = pin.SE3(T[:3, :3], T[:3, 3])
+        ], dtype=float)
+
+        # Target SE3: stessa rotazione attuale -> IK "position-only"
+        target = pin.SE3(current.rotation, target_pos)
 
         q_sol = self.solve_ik(target, self.q)
         if q_sol is None:
             self.get_logger().warn("⚠️ IK non converge (tick)", throttle_duration_sec=1.0)
             return
 
+        # (opzionale) aggiorna current dopo solve, ma non è obbligatorio
         pin.forwardKinematics(self.model, self.data, self.q)
         pin.updateFramePlacements(self.model, self.data)
-        current = self.data.oMf[self.ee_id] 
+        current = self.data.oMf[self.ee_id]
 
                 # Publish current EE pose (world frame)
         Tcw = np.eye(4)

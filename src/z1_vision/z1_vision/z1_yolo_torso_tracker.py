@@ -345,9 +345,12 @@ class Z1YoloTorsoTracker(Node):
                 # self._publish_visible(False)
 
         elif self.state == 'LOCKED':
-
+            if self.locked_target is None:
+                self.get_logger().warn("Locked ma locked_target è None", throttle_duration_sec=1.0)
+                return
             interpolated = self._interpolate_to_target(self.locked_target)
             self._publish_target_world(interpolated)
+            self._publish_target_world_locked(self.locked_target)
             # self._publish_visible(True)
 
             ok_det = (torso_raw is not None and n_valid >= self.min_keypoints and avg_conf >= self.min_det_conf)
@@ -385,13 +388,6 @@ class Z1YoloTorsoTracker(Node):
 
         # Pubblica stato tracker
         self.pub_tracker_state.publish(String(data=self.state))
-
-        # Pubblica lock outputs per FSM esterna
-        lock_valid = (self.state == 'LOCKED' and self.locked_target is not None)
-        self.pub_lock_valid.publish(Bool(data=bool(lock_valid)))
-
-        if lock_valid:
-            self._publish_target_world_locked(self.locked_target)
 
     # ──────────────────────────────────────────────────────────────
     def _publish_target_world(self, point_world):
