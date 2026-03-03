@@ -34,10 +34,10 @@ class Z1FSM(Node):
         # ================= PARAMETERS =================
         self.declare_parameter('approach_offset', 0.20)
         self.declare_parameter('pre_contact_normal_offset', -0.205)
-        self.declare_parameter('use_surface_for_approach', True)
+        self.declare_parameter('use_surface_for_approach', False)
 
-        self.declare_parameter('home_position', [0.0411, 0.0103, 0.5133])
-        self.declare_parameter('home_orientation', [0.0, 0.0, 0.0, 1.0])
+        self.declare_parameter('home_position', [0.0755, 0.070, 0.445])
+        self.declare_parameter('home_orientation', [-0.0170, 0.2940, 0.0442, 0.9545])
 
         self.declare_parameter('startup_go_home', True)
         self.declare_parameter('startup_home_delay', 5.0)

@@ -7,183 +7,190 @@ import pinocchio as pin
 
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Bool
-
-from control_msgs.action import FollowJointTrajectory
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
-from rclpy.action import ActionClient
 from rclpy.duration import Duration
 from tf_transformations import quaternion_matrix
 
 
 class Z1IKToJTC(Node):
+    """
+    Servo IK -> JointTrajectoryController (topic command)
+
+    Input:
+      - /ik_goal_pose (PoseStamped)  [pubblicato dalla FSM]
+      - /target_lock_valid (Bool)    [dal tracker]
+
+    Output:
+      - /joint_trajectory_controller/joint_trajectory (JointTrajectory)
+        con joint1..joint6 (q_target[:6])
+    """
 
     def __init__(self):
         super().__init__("z1_ik_to_jtc")
 
-        # ---------------- PARAMETERS ----------------
-        self.declare_parameter("urdf_path",
-            "/home/andrea/Ros2_repositories/unitree_z1_ws/install/z1_description/share/z1_description/urdf/z1.urdf")
-        self.declare_parameter("base_frame", "world")
+        # ---------------- Params ----------------
+        self.declare_parameter(
+            "urdf_path",
+            "/home/andrea/Ros2_repositories/unitree_z1_ws/install/z1_description/share/z1_description/urdf/z1.urdf",
+        )
         self.declare_parameter("ee_frame", "link06")
 
-        self.declare_parameter("ik_max_iter", 100)
+        # Servo
+        self.declare_parameter("servo_rate", 10.0)     # Hz (lento e stabile)
+        self.declare_parameter("traj_dt", 0.40)        # durata del micro-move (s)
+        self.declare_parameter("max_q_step", 0.008)     # rad per step (clamp)
+
+        # IK
+        self.declare_parameter("ik_max_iter", 80)
         self.declare_parameter("ik_tol", 1e-4)
         self.declare_parameter("ik_damping", 1e-3)
 
+        self.declare_parameter("slowdown_distance", 0.10)  # m
+        self.declare_parameter("min_step_scale", 0.15)     # non scendere sotto questo fattore
+
         urdf_path = self.get_parameter("urdf_path").value
-        self.base_frame = self.get_parameter("base_frame").value
         self.ee_frame = self.get_parameter("ee_frame").value
 
-        self.max_iter = self.get_parameter("ik_max_iter").value
-        self.tol = self.get_parameter("ik_tol").value
-        self.damping = self.get_parameter("ik_damping").value
+        self.servo_rate = float(self.get_parameter("servo_rate").value)
+        self.traj_dt = float(self.get_parameter("traj_dt").value)
+        self.max_q_step = float(self.get_parameter("max_q_step").value)
 
-        # ---------------- PINOCCHIO MODEL ----------------
+        self.ik_max_iter = int(self.get_parameter("ik_max_iter").value)
+        self.ik_tol = float(self.get_parameter("ik_tol").value)
+        self.ik_damping = float(self.get_parameter("ik_damping").value)
+
+        self.slowdown_distance = float(self.get_parameter("slowdown_distance").value)
+        self.min_step_scale = float(self.get_parameter("min_step_scale").value)
+
+        # ---------------- Pinocchio ----------------
         self.model = pin.buildModelFromUrdf(urdf_path)
         self.data = self.model.createData()
-
         self.ee_id = self.model.getFrameId(self.ee_frame)
 
         self.q = pin.neutral(self.model)
 
         self.get_logger().info(
-            f"✅ URDF caricato: {urdf_path} | nq={self.model.nq} | ee_id={self.ee_id}"
+            f"✅ URDF caricato: {urdf_path} | nq={self.model.nq} | ee_frame={self.ee_frame} (id={self.ee_id})"
         )
 
-        # ---------------- SUBSCRIBERS ----------------
-        self.sub_goal = self.create_subscription(
-            PoseStamped,
-            "/ik_goal_pose",
-            self.goal_callback,
+        # ---------------- State ----------------
+        self.lock_valid = False
+        self.goal_pose: PoseStamped | None = None
+
+        # ---------------- I/O ----------------
+        self.create_subscription(PoseStamped, "/ik_goal_pose", self.cb_goal_pose, 10)
+        self.create_subscription(Bool, "/target_lock_valid", self.cb_lock, 10)
+
+        # Topic command del JointTrajectoryController
+        self.pub_cmd = self.create_publisher(
+            JointTrajectory,
+            "/joint_trajectory_controller/joint_trajectory",
             10
         )
 
-        # ---------------- ACTION CLIENT ----------------
-        self.action_client = ActionClient(
-            self,
-            FollowJointTrajectory,
-            "/joint_trajectory_controller/follow_joint_trajectory"
+        # Servo timer
+        self.dt = 1.0 / self.servo_rate
+        self.timer = self.create_timer(self.dt, self.servo_tick)
+
+        self.get_logger().info(
+            f"🦾 Servo IK attivo: rate={self.servo_rate:.1f}Hz, traj_dt={self.traj_dt:.2f}s, joints=joint1..joint6"
         )
 
-        self.pub_done = self.create_publisher(Bool, "/ik_jtc/done", 10)
+    # ---------------- Callbacks ----------------
+    def cb_lock(self, msg: Bool):
+        self.lock_valid = bool(msg.data)
 
-    # ==========================================================
-    # IK SOLVER
-    # ==========================================================
-    def solve_ik(self, target_pose):
+    def cb_goal_pose(self, msg: PoseStamped):
+        self.goal_pose = msg
 
-        # Convert PoseStamped to SE3
-        T = quaternion_matrix([
-            target_pose.pose.orientation.x,
-            target_pose.pose.orientation.y,
-            target_pose.pose.orientation.z,
-            target_pose.pose.orientation.w,
-        ])
-        T[:3, 3] = [
-            target_pose.pose.position.x,
-            target_pose.pose.position.y,
-            target_pose.pose.position.z,
-        ]
+    # ---------------- IK ----------------
+    def solve_ik(self, target_SE3: pin.SE3, q_init: np.ndarray) -> np.ndarray | None:
+        q = q_init.copy()
 
-        target_SE3 = pin.SE3(T[:3, :3], T[:3, 3])
-
-        q = self.q.copy()
-
-        for i in range(self.max_iter):
-
+        for _ in range(self.ik_max_iter):
             pin.forwardKinematics(self.model, self.data, q)
             pin.updateFramePlacements(self.model, self.data)
 
             current = self.data.oMf[self.ee_id]
+            err = pin.log(current.inverse() * target_SE3).vector  # 6D
 
-            err = pin.log(current.inverse() * target_SE3).vector
-
-            if np.linalg.norm(err) < self.tol:
-                self.get_logger().info(f"🎯 IK converged in {i} iter")
-                self.q = q
+            if np.linalg.norm(err) < self.ik_tol:
                 return q
 
             J = pin.computeFrameJacobian(
-                self.model,
-                self.data,
-                q,
-                self.ee_id,
-                pin.ReferenceFrame.LOCAL
+                self.model, self.data, q, self.ee_id, pin.ReferenceFrame.LOCAL
             )
-
-            JJt = J @ J.T + self.damping * np.eye(6)
+            JJt = J @ J.T + self.ik_damping * np.eye(6)
             v = J.T @ np.linalg.solve(JJt, err)
 
             q = pin.integrate(self.model, q, v)
 
-        self.get_logger().warn("⚠️ IK did NOT converge")
         return None
 
-    # ==========================================================
-    # SEND TRAJECTORY
-    # ==========================================================
-    def send_trajectory(self, q_target):
-
-        joint_names = self.model.names[1:]  # skip universe
-
-        traj = JointTrajectory()
-        traj.joint_names = joint_names
-
-        point = JointTrajectoryPoint()
-        point.positions = q_target.tolist()
-        point.time_from_start = Duration(seconds=3.0).to_msg()
-
-        traj.points.append(point)
-
-        goal_msg = FollowJointTrajectory.Goal()
-        goal_msg.trajectory = traj
-
-        if not self.action_client.wait_for_server(timeout_sec=2.0):
-            self.get_logger().error("❌ JTC action server non disponibile")
+    # ---------------- Servo loop ----------------
+    def servo_tick(self):
+        if not self.lock_valid:
+            return
+        if self.goal_pose is None:
             return
 
-        self.get_logger().info("🚀 Sending trajectory to JTC")
+        # PoseStamped -> SE3
+        T = quaternion_matrix([
+            self.goal_pose.pose.orientation.x,
+            self.goal_pose.pose.orientation.y,
+            self.goal_pose.pose.orientation.z,
+            self.goal_pose.pose.orientation.w
+        ])
+        T[:3, 3] = [
+            self.goal_pose.pose.position.x,
+            self.goal_pose.pose.position.y,
+            self.goal_pose.pose.position.z
+        ]
+        target = pin.SE3(T[:3, :3], T[:3, 3])
 
-        send_goal_future = self.action_client.send_goal_async(goal_msg)
-        send_goal_future.add_done_callback(self.goal_response_callback)
-
-    # ==========================================================
-    def goal_response_callback(self, future):
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            self.get_logger().error("❌ Goal rejected")
+        q_sol = self.solve_ik(target, self.q)
+        if q_sol is None:
+            self.get_logger().warn("⚠️ IK non converge (tick)", throttle_duration_sec=1.0)
             return
 
-        self.get_logger().info("✅ Goal accepted")
+        pin.forwardKinematics(self.model, self.data, self.q)
+        pin.updateFramePlacements(self.model, self.data)
+        current = self.data.oMf[self.ee_id] 
+        pos_err = np.linalg.norm(current.translation - target.translation)
+        s = np.clip(pos_err / self.slowdown_distance, self.min_step_scale, 1.0)
 
-        result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(self.result_callback)
+        # Clamp step (per muoversi lentamente e senza scatti)
+        dq = pin.difference(self.model, self.q, q_sol)
+        dq = np.clip(dq, -self.max_q_step, self.max_q_step)
+        dq = dq * s
+        self.q = pin.integrate(self.model, self.q, dq)
 
-    def result_callback(self, future):
-        self.get_logger().info("🏁 Trajectory completed")
-        self.pub_done.publish(Bool(data=True))
+        # Pubblica comando al controller SOLO joint1..joint6
+        self.publish_jtc(self.q)
 
-    # ==========================================================
-    def goal_callback(self, msg: PoseStamped):
-        self.get_logger().info("📍 Nuovo target ricevuto")
+    def publish_jtc(self, q_cmd: np.ndarray):
+        msg = JointTrajectory()
+        msg.joint_names = ["joint1","joint2","joint3","joint4","joint5","joint6"]
 
-        q_target = self.solve_ik(msg)
+        pt = JointTrajectoryPoint()
+        pt.positions = q_cmd[:6].tolist()  # ✅ taglio 7° joint
+        pt.time_from_start = Duration(seconds=self.traj_dt).to_msg()
 
-        if q_target is None:
-            self.get_logger().error("❌ IK fallita")
-            return
-
-        self.send_trajectory(q_target)
+        msg.points = [pt]
+        self.pub_cmd.publish(msg)
 
 
-# ==============================================================
 def main(args=None):
     rclpy.init(args=args)
     node = Z1IKToJTC()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == "__main__":
