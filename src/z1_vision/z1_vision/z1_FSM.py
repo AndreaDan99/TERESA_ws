@@ -329,7 +329,6 @@ class Z1FSM(Node):
             # publish goal and go wait
             self._last_goal_pub_time = now
             self.publish_ik_goal(pose, source_pos=source_pos)
-            self.enter_state('WAIT_JTC')
 
         # ================= WAIT_JTC =================
         elif self.state == 'WAIT_JTC':
