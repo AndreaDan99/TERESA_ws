@@ -36,8 +36,8 @@ class Z1FSM(Node):
         self.declare_parameter('pre_contact_normal_offset', -0.205)
         self.declare_parameter('use_surface_for_approach', True)
 
-        self.declare_parameter('home_position', [0.0411, 0.0103, 0.5133])
-        self.declare_parameter('home_orientation', [0.0, 0.0, 0.0, 1.0])
+        self.declare_parameter('home_position', [0.0755, 0.0070, 0.445])
+        self.declare_parameter('home_orientation', [-0.0170, 0.2941, 0.0442, 0.9545])
 
         self.declare_parameter('startup_go_home', True)
         self.declare_parameter('startup_home_delay', 5.0)
@@ -303,15 +303,15 @@ class Z1FSM(Node):
                 self.publish_state()
                 return
 
-            # If currently approaching and the target/surface moved enough, replan
-            # (this captures the "refresh/relock" situation)
-            if self._refresh_should_replan():
-                self.get_logger().warn(
-                    f'🔁 Target moved >= {self.refresh_replan_dist_thr:.2f}m during APPROACHING_JTC → WAITING (replan)'
-                )
-                self.enter_state('WAITING')
-                self.publish_state()
-                return
+            # # If currently approaching and the target/surface moved enough, replan
+            # # (this captures the "refresh/relock" situation)
+            # if self._refresh_should_replan():
+            #     self.get_logger().warn(
+            #         f'🔁 Target moved >= {self.refresh_replan_dist_thr:.2f}m during APPROACHING_JTC → WAITING (replan)'
+            #     )
+            #     self.enter_state('WAITING')
+            #     self.publish_state()
+            #     return
 
             pose = PoseStamped()
 

@@ -89,7 +89,7 @@ def generate_launch_description():
                 ])
             ]),
             launch_arguments={
-                'sim_ignition': 'false',
+                'sim_ignition': 'true',
                 'starting_controller': 'joint_trajectory_controller',
                 'with_gripper': 'false',
                 'rviz': 'false',
