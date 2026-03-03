@@ -1,14 +1,8 @@
 #!/usr/bin/env python3
 """
-Z1 YOLO Torso Tracker (VERSIONE "BUONA" MA CON I/O NUOVA FSM ESTERNA)
+Z1 YOLO Torso Tracker 
+Stati interni: IDLE → ESTIMATING → LOCKED
 
-Stati interni (come file originale): IDLE → ESTIMATING → LOCKED
-NOTA: La FSM esterna gestisce approaching/returning/controllo.
-
-Cambi rispetto al file di partenza:
-- Cambiati SOLO i nomi dei publisher/subscriber per la nuova FSM esterna
-- Rimossa tutta la parte di movimento verso starting_position (RETURNING) e i relativi topic
-- Nessun'altra modifica di logica (YOLO/Kalman/lock/marker invariati salvo label stato)
 """
 
 import rclpy
@@ -137,14 +131,9 @@ class Z1YoloTorsoTracker(Node):
             String, '/torso_sm_state', self.cb_fsm_state, 10)
 
         # ── Publishers (NUOVA FSM) ─────────────────────────────────
-        self.pub_torso_camera      = self.create_publisher(PointStamped, '/torso_target_camera', 10)
         self.pub_torso_ee          = self.create_publisher(PoseStamped,  '/torso_target_ee',     10)
         self.pub_torso_ee_locked   = self.create_publisher(PoseStamped,  '/torso_target_ee_locked', 10)
 
-        self.pub_lock_valid        = self.create_publisher(Bool,   '/target_lock_valid', 10)
-        self.pub_lock_state        = self.create_publisher(String, '/target_lock_state', 10)
-
-        self.pub_visible           = self.create_publisher(Bool,        '/torso_visible',        10)
         self.pub_markers           = self.create_publisher(MarkerArray, '/torso_markers',        10)
         self.pub_tracker_state     = self.create_publisher(String,      '/torso_tracker_state',  10)
 
@@ -331,8 +320,8 @@ class Z1YoloTorsoTracker(Node):
                 target_world = self._camera_to_world(estimated_cam)
                 if target_world is not None:
                     interpolated = self._interpolate_to_target(target_world)
-                    self._publish_target_world(interpolated)
-                    self._publish_visible(True)
+                    # self._publish_target_world(interpolated)
+                    # self._publish_visible(True)
 
                 if len(self.position_history) >= self.lock_stable_frames:
                     variance = np.var(self.position_history, axis=0).sum()
@@ -353,14 +342,13 @@ class Z1YoloTorsoTracker(Node):
                 self.kf.reset()
                 self.position_history     = []
                 self.tracking_current_pos = None
-                self._publish_visible(False)
+                # self._publish_visible(False)
 
         elif self.state == 'LOCKED':
-            # In LOCKED continuiamo a pubblicare la freccia /torso_target_ee come prima
-            # (segue il locked_target con interpolazione invariata)
+
             interpolated = self._interpolate_to_target(self.locked_target)
             self._publish_target_world(interpolated)
-            self._publish_visible(True)
+            # self._publish_visible(True)
 
             ok_det = (torso_raw is not None and n_valid >= self.min_keypoints and avg_conf >= self.min_det_conf)
             if ok_det and self.locked_target is not None:
@@ -401,7 +389,6 @@ class Z1YoloTorsoTracker(Node):
         # Pubblica lock outputs per FSM esterna
         lock_valid = (self.state == 'LOCKED' and self.locked_target is not None)
         self.pub_lock_valid.publish(Bool(data=bool(lock_valid)))
-        self.pub_lock_state.publish(String(data=self.state))
 
         if lock_valid:
             self._publish_target_world_locked(self.locked_target)
@@ -427,8 +414,8 @@ class Z1YoloTorsoTracker(Node):
         pose.pose.orientation.w = 1.0
         self.pub_torso_ee_locked.publish(pose)
 
-    def _publish_visible(self, visible: bool):
-        self.pub_visible.publish(Bool(data=bool(visible)))
+    # def _publish_visible(self, visible: bool):
+    #     self.pub_visible.publish(Bool(data=bool(visible)))
 
     def _get_depth_robust(self, depth, u, v, window=5):
         h, w  = depth.shape

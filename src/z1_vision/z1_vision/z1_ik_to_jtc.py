@@ -10,7 +10,7 @@ from std_msgs.msg import Bool
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 from rclpy.duration import Duration
-from tf_transformations import quaternion_matrix
+from tf_transformations import quaternion_matrix, quaternion_from_matrix
 
 
 class Z1IKToJTC(Node):
@@ -18,12 +18,16 @@ class Z1IKToJTC(Node):
     Servo IK -> JointTrajectoryController (topic command)
 
     Input:
-      - /ik_goal_pose (PoseStamped)  [pubblicato dalla FSM]
-      - /target_lock_valid (Bool)    [dal tracker]
+      - /ik_goal_pose (PoseStamped)   [target pose, published by FSM]
+      - /ik_enable    (Bool)          [FSM enable/start approach]
+
 
     Output:
+      - /ik_done (Bool)               [True when target reached]
       - /joint_trajectory_controller/joint_trajectory (JointTrajectory)
         con joint1..joint6 (q_target[:6])
+        - /ik_current_pose (PoseStamped)
+        - /ik_reached (Bool)
     """
 
     def __init__(self):
@@ -49,6 +53,18 @@ class Z1IKToJTC(Node):
         self.declare_parameter("slowdown_distance", 0.10)  # m
         self.declare_parameter("min_step_scale", 0.15)     # non scendere sotto questo fattore
 
+        # FSM interface
+        self.declare_parameter("enable_topic", "/ik_enable")
+        self.declare_parameter("done_topic", "/ik_done")
+        self.declare_parameter("default_enabled", True)  # per non rompere il comportamento vecchio
+        
+        # Reached criteria
+        self.declare_parameter("reach_pos_tol", 0.05)    # m (5 cm) 
+        
+        self.declare_parameter("current_pose_topic", "/ik_current_pose")
+        self.declare_parameter("reached_topic", "/ik_reached")
+
+
         urdf_path = self.get_parameter("urdf_path").value
         self.ee_frame = self.get_parameter("ee_frame").value
 
@@ -63,6 +79,17 @@ class Z1IKToJTC(Node):
         self.slowdown_distance = float(self.get_parameter("slowdown_distance").value)
         self.min_step_scale = float(self.get_parameter("min_step_scale").value)
 
+
+        self.enable_topic = str(self.get_parameter("enable_topic").value)
+        self.done_topic = str(self.get_parameter("done_topic").value)
+        self.default_enabled = bool(self.get_parameter("default_enabled").value)
+
+        self.reach_pos_tol = float(self.get_parameter("reach_pos_tol").value)
+        self.reach_hold_ticks = int(self.get_parameter("reach_hold_ticks").value)
+
+        self.current_pose_topic = str(self.get_parameter("current_pose_topic").value)
+        self.reached_topic = str(self.get_parameter("reached_topic").value)
+
         # ---------------- Pinocchio ----------------
         self.model = pin.buildModelFromUrdf(urdf_path)
         self.data = self.model.createData()
@@ -75,12 +102,16 @@ class Z1IKToJTC(Node):
         )
 
         # ---------------- State ----------------
-        self.lock_valid = False
         self.goal_pose: PoseStamped | None = None
+
+        # FSM interface state
+        self.enabled = bool(self.default_enabled)
+        self._reach_counter = 0
+        self._done_sent = False
 
         # ---------------- I/O ----------------
         self.create_subscription(PoseStamped, "/ik_goal_pose", self.cb_goal_pose, 10)
-        self.create_subscription(Bool, "/target_lock_valid", self.cb_lock, 10)
+        self.create_subscription(Bool, self.enable_topic, self.cb_enable, 10)
 
         # Topic command del JointTrajectoryController
         self.pub_cmd = self.create_publisher(
@@ -88,6 +119,12 @@ class Z1IKToJTC(Node):
             "/joint_trajectory_controller/joint_trajectory",
             10
         )
+        self.pub_done = self.create_publisher(Bool, self.done_topic, 10)
+        self.pub_done.publish(Bool(data=False))  # init       
+
+        self.pub_current_pose = self.create_publisher(PoseStamped, self.current_pose_topic, 10)
+        self.pub_reached = self.create_publisher(Bool, self.reached_topic, 10)
+        self.pub_reached.publish(Bool(data=False))  # init
 
         # Servo timer
         self.dt = 1.0 / self.servo_rate
@@ -97,12 +134,29 @@ class Z1IKToJTC(Node):
             f"🦾 Servo IK attivo: rate={self.servo_rate:.1f}Hz, traj_dt={self.traj_dt:.2f}s, joints=joint1..joint6"
         )
 
-    # ---------------- Callbacks ----------------
-    def cb_lock(self, msg: Bool):
-        self.lock_valid = bool(msg.data)
 
     def cb_goal_pose(self, msg: PoseStamped):
         self.goal_pose = msg
+        # New target => reset done
+        self._reach_counter = 0
+        if self._done_sent:
+            self._done_sent = False
+            self.pub_done.publish(Bool(data=False))
+        self.pub_reached.publish(Bool(data=False))
+
+    def cb_enable(self, msg: Bool):
+        new_enabled = bool(msg.data)
+        if new_enabled != self.enabled:
+            self.enabled = new_enabled
+            # Reset done bookkeeping on transitions
+            self._reach_counter = 0
+            self._done_sent = False
+            self.pub_done.publish(Bool(data=False))
+            self.pub_reached.publish(Bool(data=False))
+            if self.enabled:
+                self.get_logger().info("🟦 IK ENABLED")
+            else:
+                self.get_logger().info("🟧 IK DISABLED")
 
     # ---------------- IK ----------------
     def solve_ik(self, target_SE3: pin.SE3, q_init: np.ndarray) -> np.ndarray | None:
@@ -130,11 +184,15 @@ class Z1IKToJTC(Node):
 
     # ---------------- Servo loop ----------------
     def servo_tick(self):
-        if not self.lock_valid:
+        if not self.enabled:
             return
+        
         if self.goal_pose is None:
             return
 
+        if self._done_sent:
+            return
+        
         # PoseStamped -> SE3
         T = quaternion_matrix([
             self.goal_pose.pose.orientation.x,
@@ -157,8 +215,47 @@ class Z1IKToJTC(Node):
         pin.forwardKinematics(self.model, self.data, self.q)
         pin.updateFramePlacements(self.model, self.data)
         current = self.data.oMf[self.ee_id] 
+
+                # Publish current EE pose (world frame)
+        Tcw = np.eye(4)
+        Tcw[:3, :3] = current.rotation
+        Tcw[:3, 3] = current.translation
+        qxyzw = quaternion_from_matrix(Tcw)
+
+        cur_msg = PoseStamped()
+        cur_msg.header.stamp = self.get_clock().now().to_msg()
+        cur_msg.header.frame_id = "world"
+        cur_msg.pose.position.x = float(current.translation[0])
+        cur_msg.pose.position.y = float(current.translation[1])
+        cur_msg.pose.position.z = float(current.translation[2])
+        cur_msg.pose.orientation.x = float(qxyzw[0])
+        cur_msg.pose.orientation.y = float(qxyzw[1])
+        cur_msg.pose.orientation.z = float(qxyzw[2])
+        cur_msg.pose.orientation.w = float(qxyzw[3])
+        self.pub_current_pose.publish(cur_msg)
+
         pos_err = np.linalg.norm(current.translation - target.translation)
         s = np.clip(pos_err / self.slowdown_distance, self.min_step_scale, 1.0)
+
+        # Reached criteria (position only)
+        if pos_err <= self.reach_pos_tol:
+            self._reach_counter += 1
+        else:
+            self._reach_counter = 0
+
+        if (self._reach_counter >= self.reach_hold_ticks) and (not self._done_sent):
+            self._done_sent = True
+
+            # reached = True (0/1)
+            self.pub_reached.publish(Bool(data=True))
+
+            # done = True (evento fine)
+            self.pub_done.publish(Bool(data=True))
+
+            # publish current pose at finish (già pubblicata sopra, ma ripubblico per sicurezza)
+            self.pub_current_pose.publish(cur_msg)
+
+            self.get_logger().info(f"✅ IK DONE (pos_err={pos_err:.4f} m)")
 
         # Clamp step (per muoversi lentamente e senza scatti)
         dq = pin.difference(self.model, self.q, q_sol)

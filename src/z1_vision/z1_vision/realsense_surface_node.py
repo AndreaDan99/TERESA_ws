@@ -36,7 +36,6 @@ class RealSenseSurfaceNode(Node):
 
         # Debug / test params
         self.declare_parameter("require_lock_valid", True)
-        self.declare_parameter("require_torso_visible", False)
         self.declare_parameter("use_latest_tf", True)  # if True, ignore msg stamp and use latest TF
         self.declare_parameter("publish_debug_markers", True)
         self.declare_parameter("debug_marker_ns", "torso_surface")
@@ -50,23 +49,15 @@ class RealSenseSurfaceNode(Node):
         self.desired_normal_offset = self.get_parameter("desired_normal_offset").get_parameter_value().double_value
 
         self.require_lock_valid = self.get_parameter("require_lock_valid").get_parameter_value().bool_value
-        self.require_torso_visible = self.get_parameter("require_torso_visible").get_parameter_value().bool_value
         self.use_latest_tf = self.get_parameter("use_latest_tf").get_parameter_value().bool_value
         self.publish_debug_markers = self.get_parameter("publish_debug_markers").get_parameter_value().bool_value
         self.debug_marker_ns = self.get_parameter("debug_marker_ns").get_parameter_value().string_value
 
         self.fx = self.fy = self.ppx = self.ppy = None
 
-        # ✅ SUBSCRIBER TORSO-SPECIFIC
-        self.torso_sub = self.create_subscription(
-            PointStamped, "/torso_target_camera", self.torso_callback, 10
-        )
         # Optional: torso target already in base/world frame (stable), useful if /torso_target_camera is not published
         self.torso_world_sub = self.create_subscription(
             PoseStamped, "/torso_target_ee_locked", self.torso_world_callback, 10
-        )
-        self.visible_sub = self.create_subscription(
-            Bool, "/torso_visible", self.visible_callback, 10
         )
         self.lock_valid_sub = self.create_subscription(
             Bool, "/target_lock_valid", self.lock_valid_callback, 10
@@ -89,18 +80,19 @@ class RealSenseSurfaceNode(Node):
         self.surface_point_pub = self.create_publisher(PointStamped, "/torso_surface_point", 10)
 
         # State torso
-        self.torso_center_cam = None          # np.array([x,y,z]) in camera frame
         self.torso_center_base = None         # np.array([x,y,z]) in base/world frame
-        self.torso_visible = False
         self.target_lock_valid = False
 
         self.get_logger().info("="*70)
         self.get_logger().info("🚀 TORSO-SPECIFIC Surface Node")
-        self.get_logger().info("ROI dinamico su /torso_target_camera")
+        self.get_logger().info("ROI dinamico su /torso_target_camera (fallback: /torso_target_ee_locked) | gated by /target_lock_valid")
         self.get_logger().info("="*70)
 
     def lock_valid_callback(self, msg: Bool):
         self.target_lock_valid = msg.data
+        if not self.target_lock_valid:
+            self.torso_center_base = None
+            self.torso_center_cam = None
 
     def info_callback(self, msg):
         if self.fx is None:
@@ -113,21 +105,12 @@ class RealSenseSurfaceNode(Node):
                 f"cx={self.ppx:.1f}, cy={self.ppy:.1f}"
             )
 
-    def torso_callback(self, msg: PointStamped):
-        """Centro torso 3D (camera frame) da YOLO"""
-        self.torso_center_cam = np.array([
-            msg.point.x, msg.point.y, msg.point.z
-        ])
-
     def torso_world_callback(self, msg: PoseStamped):
         """Centro torso 3D (base/world frame), es. da /torso_target_ee_locked"""
         self.torso_center_base = np.array([
             msg.pose.position.x, msg.pose.position.y, msg.pose.position.z
         ])
 
-    def visible_callback(self, msg: Bool):
-        """Torso rilevato da YOLO"""
-        self.torso_visible = msg.data
 
     def project_to_image(self, pt_cam):
         """3D camera → pixel (u,v)"""
@@ -192,17 +175,16 @@ class RealSenseSurfaceNode(Node):
         
         if self.require_lock_valid and (not self.target_lock_valid):
             return
-        if self.require_torso_visible and (not self.torso_visible):
+
+        # SOLO LOCKED: usiamo solo il punto in world (/torso_target_ee_locked) e lo trasformiamo in camera
+        if self.torso_center_base is None:
             return
 
-        # We can use either a camera-frame torso point (preferred) OR a base/world-frame one.
-        if self.torso_center_cam is None:
-            if self.torso_center_base is None:
-                return
-            p_cam = self._base_point_to_camera(self.torso_center_base, msg.header.stamp)
-            if p_cam is None:
-                return
-            self.torso_center_cam = p_cam
+        p_cam = self._base_point_to_camera(self.torso_center_base, msg.header.stamp)
+        if p_cam is None:
+            return
+
+        self.torso_center_cam = p_cam
 
         if self.fx is None:
             return
