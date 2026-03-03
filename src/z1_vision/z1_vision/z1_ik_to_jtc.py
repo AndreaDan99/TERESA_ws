@@ -119,16 +119,6 @@ class Z1IKToJTC(Node):
         self.create_subscription(PoseStamped, "/ik_goal_pose", self.cb_goal_pose, 10)
         self.create_subscription(Bool, self.enable_topic, self.cb_enable, 10)
         self.create_subscription(JointState, "/joint_states", self.cb_joint_states, 10)
-    def cb_joint_states(self, msg: JointState):
-        # Keep the IK internal state aligned with what Gazebo/ros2_control is actually executing.
-        name_to_idx = {n: i for i, n in enumerate(msg.name)}
-        try:
-            for k, jn in enumerate(self.joint_names):
-                self.q[k] = float(msg.position[name_to_idx[jn]])
-            self.q_ready = True
-        except Exception:
-            # If names don't match yet, just ignore.
-            return
 
         # Topic command del JointTrajectoryController
         self.pub_cmd = self.create_publisher(
@@ -137,7 +127,7 @@ class Z1IKToJTC(Node):
             10
         )
         self.pub_done = self.create_publisher(Bool, self.done_topic, 10)
-        self.pub_done.publish(Bool(data=False))  # init       
+        self.pub_done.publish(Bool(data=False))  # init
 
         self.pub_current_pose = self.create_publisher(PoseStamped, self.current_pose_topic, 10)
         self.pub_reached = self.create_publisher(Bool, self.reached_topic, 10)
@@ -151,6 +141,16 @@ class Z1IKToJTC(Node):
             f"🦾 Servo IK attivo: rate={self.servo_rate:.1f}Hz, traj_dt={self.traj_dt:.2f}s, joints=joint1..joint6"
         )
 
+    def cb_joint_states(self, msg: JointState):
+        # Keep the IK internal state aligned with what Gazebo/ros2_control is actually executing.
+        name_to_idx = {n: i for i, n in enumerate(msg.name)}
+        try:
+            for k, jn in enumerate(self.joint_names):
+                self.q[k] = float(msg.position[name_to_idx[jn]])
+            self.q_ready = True
+        except Exception:
+            # If names don't match yet, just ignore.
+            return
 
     def cb_goal_pose(self, msg: PoseStamped):
         self.goal_pose = msg
