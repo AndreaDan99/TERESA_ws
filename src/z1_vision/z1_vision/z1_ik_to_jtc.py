@@ -10,7 +10,9 @@ from std_msgs.msg import Bool
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 from rclpy.duration import Duration
-from tf_transformations import quaternion_matrix, quaternion_from_matrix
+from tf_transformations import quaternion_from_matrix
+
+from sensor_msgs.msg import JointState
 
 
 class Z1IKToJTC(Node):
@@ -97,6 +99,9 @@ class Z1IKToJTC(Node):
         self.ee_id = self.model.getFrameId(self.ee_frame)
 
         self.q = pin.neutral(self.model)
+        # ---- Sync internal q from Gazebo joint_states (keeps IK consistent with the real robot state)
+        self.joint_names = ["joint1","joint2","joint3","joint4","joint5","joint6"]
+        self.q_ready = False
 
         self.get_logger().info(
             f"✅ URDF caricato: {urdf_path} | nq={self.model.nq} | ee_frame={self.ee_frame} (id={self.ee_id})"
@@ -113,6 +118,17 @@ class Z1IKToJTC(Node):
         # ---------------- I/O ----------------
         self.create_subscription(PoseStamped, "/ik_goal_pose", self.cb_goal_pose, 10)
         self.create_subscription(Bool, self.enable_topic, self.cb_enable, 10)
+        self.create_subscription(JointState, "/joint_states", self.cb_joint_states, 10)
+    def cb_joint_states(self, msg: JointState):
+        # Keep the IK internal state aligned with what Gazebo/ros2_control is actually executing.
+        name_to_idx = {n: i for i, n in enumerate(msg.name)}
+        try:
+            for k, jn in enumerate(self.joint_names):
+                self.q[k] = float(msg.position[name_to_idx[jn]])
+            self.q_ready = True
+        except Exception:
+            # If names don't match yet, just ignore.
+            return
 
         # Topic command del JointTrajectoryController
         self.pub_cmd = self.create_publisher(
@@ -193,7 +209,10 @@ class Z1IKToJTC(Node):
 
         if self._done_sent:
             return
-        
+
+        if not self.q_ready:
+            self.get_logger().warn("Aspetto /joint_states per inizializzare q", throttle_duration_sec=2.0)
+            return
         # FK current (serve per prendere la rotazione attuale dell'EE)
         pin.forwardKinematics(self.model, self.data, self.q)
         pin.updateFramePlacements(self.model, self.data)
@@ -219,7 +238,7 @@ class Z1IKToJTC(Node):
         pin.updateFramePlacements(self.model, self.data)
         current = self.data.oMf[self.ee_id]
 
-                # Publish current EE pose (world frame)
+        # Publish current EE pose (world frame)
         Tcw = np.eye(4)
         Tcw[:3, :3] = current.rotation
         Tcw[:3, 3] = current.translation
@@ -227,7 +246,7 @@ class Z1IKToJTC(Node):
 
         cur_msg = PoseStamped()
         cur_msg.header.stamp = self.get_clock().now().to_msg()
-        cur_msg.header.frame_id = "world"
+        cur_msg.header.frame_id = "link00"
         cur_msg.pose.position.x = float(current.translation[0])
         cur_msg.pose.position.y = float(current.translation[1])
         cur_msg.pose.position.z = float(current.translation[2])
@@ -265,6 +284,8 @@ class Z1IKToJTC(Node):
         dq = np.clip(dq, -self.max_q_step, self.max_q_step)
         dq = dq * s
         self.q = pin.integrate(self.model, self.q, dq)
+        # Clamp to model joint limits (helps prevent divergence / desync)
+        self.q = np.minimum(np.maximum(self.q, self.model.lowerPositionLimit), self.model.upperPositionLimit)
 
         # Pubblica comando al controller SOLO joint1..joint6
         self.publish_jtc(self.q)
@@ -274,7 +295,7 @@ class Z1IKToJTC(Node):
         msg.joint_names = ["joint1","joint2","joint3","joint4","joint5","joint6"]
 
         pt = JointTrajectoryPoint()
-        pt.positions = q_cmd[:6].tolist()  # ✅ taglio 7° joint
+        pt.positions = q_cmd[:6].tolist() 
         pt.time_from_start = Duration(seconds=self.traj_dt).to_msg()
 
         msg.points = [pt]
