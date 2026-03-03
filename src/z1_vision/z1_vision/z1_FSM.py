@@ -34,10 +34,10 @@ class Z1FSM(Node):
         # ================= PARAMETERS =================
         self.declare_parameter('approach_offset', 0.20)
         self.declare_parameter('pre_contact_normal_offset', -0.205)
-        self.declare_parameter('use_surface_for_approach', False)
+        self.declare_parameter('use_surface_for_approach', True)
 
-        self.declare_parameter('home_position', [0.0755, 0.070, 0.445])
-        self.declare_parameter('home_orientation', [-0.0170, 0.2940, 0.0442, 0.9545])
+        self.declare_parameter('home_position', [0.0411, 0.0103, 0.5133])
+        self.declare_parameter('home_orientation', [0.0, 0.0, 0.0, 1.0])
 
         self.declare_parameter('startup_go_home', True)
         self.declare_parameter('startup_home_delay', 5.0)
@@ -55,6 +55,12 @@ class Z1FSM(Node):
         self.declare_parameter('refresh_replan_dist_thr', 0.15)
 
         self.declare_parameter('enable_goal_republish', False)
+
+        # ================= SERVO IK MODE =================
+        # If True: continuously publish /ik_goal_pose while in APPROACHING_JTC (for IK servo node)
+        self.declare_parameter('use_servo_ik', True)
+        # Rate for publishing /ik_goal_pose during APPROACHING_JTC
+        self.declare_parameter('approach_goal_rate', 10.0)  # Hz
 
         # ================= READ PARAMETERS =================
         self.approach_offset = float(self.get_parameter('approach_offset').value)
@@ -80,6 +86,11 @@ class Z1FSM(Node):
         self.refresh_replan_dist_thr = float(self.get_parameter('refresh_replan_dist_thr').value)
 
         self.enable_goal_republish = bool(self.get_parameter('enable_goal_republish').value)
+
+        self.use_servo_ik = bool(self.get_parameter('use_servo_ik').value)
+        self.approach_goal_rate = float(self.get_parameter('approach_goal_rate').value)
+        if self.approach_goal_rate <= 0.0:
+            self.approach_goal_rate = 10.0
         # ================= SUBSCRIBERS =================
         # Target lockato dal tracker (aggiornato quando “refresh/relock”)
         self.sub_target = self.create_subscription(
@@ -228,6 +239,10 @@ class Z1FSM(Node):
             self.ik_done = False
             self.ik_success = False
 
+        # In servo mode, force immediate publish on entry
+        if new_state == 'APPROACHING_JTC':
+            self._last_goal_pub_time = self.get_clock().now() - rclpy.duration.Duration(seconds=10.0)
+
         if new_state == 'FAULT':
             self._fault_logged = False
 
@@ -264,7 +279,7 @@ class Z1FSM(Node):
         # ================= WAITING =================
         if self.state == 'WAITING':
             # Startup: manda HOME una sola volta dopo un piccolo delay
-            if self.startup_go_home and (not self.startup_home_sent):
+            if (not self.use_servo_ik) and self.startup_go_home and (not self.startup_home_sent):
                 startup_elapsed = (now - self.start_time).nanoseconds / 1e9
                 if startup_elapsed >= self.startup_home_delay:
                     self.startup_home_sent = True
@@ -284,6 +299,16 @@ class Z1FSM(Node):
         elif self.state == 'APPROACHING_JTC':
             # If lock lost -> go waiting
             if not self.target_lock_valid:
+                self.enter_state('WAITING')
+                self.publish_state()
+                return
+
+            # If currently approaching and the target/surface moved enough, replan
+            # (this captures the "refresh/relock" situation)
+            if self._refresh_should_replan():
+                self.get_logger().warn(
+                    f'🔁 Target moved >= {self.refresh_replan_dist_thr:.2f}m during APPROACHING_JTC → WAITING (replan)'
+                )
                 self.enter_state('WAITING')
                 self.publish_state()
                 return
@@ -326,12 +351,29 @@ class Z1FSM(Node):
                 p = pose.pose.position
                 source_pos = np.array([p.x, p.y, p.z], dtype=np.float64)
 
-            # publish goal and go wait
-            self._last_goal_pub_time = now
-            self.publish_ik_goal(pose, source_pos=source_pos)
+            # publish goal
+            if self.use_servo_ik:
+                # Rate-limit publishing during servo mode
+                dt = (now - self._last_goal_pub_time).nanoseconds / 1e9
+                period = 1.0 / float(self.approach_goal_rate)
+                if dt >= period:
+                    self.publish_ik_goal(pose, source_pos=source_pos)
+                # Stay in APPROACHING_JTC (continuous goals for IK servo)
+                return
+            else:
+                # Legacy: single-shot goal then wait for /ik_jtc/done
+                self._last_goal_pub_time = now
+                self.publish_ik_goal(pose, source_pos=source_pos)
+                self.enter_state('WAIT_JTC')
 
         # ================= WAIT_JTC =================
         elif self.state == 'WAIT_JTC':
+            if self.use_servo_ik:
+                # Servo mode does not use /ik_jtc/done; keep approaching with continuous goals
+                self.enter_state('APPROACHING_JTC')
+                self.publish_state()
+                return
+
             # If lock lost -> go waiting
             if not self.target_lock_valid:
                 self.get_logger().warn('🔁 Lock perso durante WAIT_JTC → WAITING')
