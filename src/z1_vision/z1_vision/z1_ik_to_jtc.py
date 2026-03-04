@@ -37,13 +37,12 @@ class Z1IKToJTC(Node):
         self.declare_parameter("ik_done_topic", "/ik_done")
 
         # Trajectory shaping
-        self.declare_parameter("max_joint_vel", 0.4)   # rad/s (limite velocità giunti)
-        self.declare_parameter("traj_min_time", 1.0)   # s
-        self.declare_parameter("traj_max_time", 6.0)   # s
+        self.declare_parameter("max_joint_vel", 0.2)   # rad/s (limite velocità giunti)
+        self.declare_parameter("traj_min_time", 3.0)   # s
+        self.declare_parameter("traj_max_time", 20.0)   # s
 
         self.declare_parameter("ik_alpha", 0.3)
-
-        self.declare_parameter("traj_num_points", 12)   # 8-15 tipico
+        self.declare_parameter("traj_time_scale", 2.0)  # 1.0 = normale, 2.0 = 2x più lento
 
         urdf_path = self.get_parameter("urdf_path").value
         self.base_frame = self.get_parameter("base_frame").value
@@ -62,7 +61,7 @@ class Z1IKToJTC(Node):
         self.traj_max_time = float(self.get_parameter("traj_max_time").value)
         self.ik_alpha = float(self.get_parameter("ik_alpha").value)
 
-        self.traj_num_points = int(self.get_parameter("traj_num_points").value)
+        self.traj_time_scale = float(self.get_parameter("traj_time_scale").value)
 
         # FSM gating + goal latching
         self.ik_enabled = False
@@ -165,37 +164,31 @@ class Z1IKToJTC(Node):
     # ==========================================================
     def send_trajectory(self, q_target) -> bool:
 
+        joint_names = self.model.names[1:]  # skip universe
+
         traj = JointTrajectory()
         traj.joint_names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
 
-        # start/end in joint space (6 DOF)
-        q_start = self.q[:6].copy()
-        q_end = q_target[:6].copy()
+        point = JointTrajectoryPoint()
+        point.positions = q_target[:6].tolist()
 
-        # --- speed control via duration (as before) ---
-        dq = float(np.max(np.abs(q_end - q_start)))
+        # --- speed control via duration ---
+        # dq = massimo spostamento tra i giunti (rad)
+        dq = float(np.max(np.abs(q_target[:6] - self.q[:6])))
+        # evita divisione per zero
         dq = max(dq, 1e-6)
-
         T = dq / max(self.max_joint_vel, 1e-6)
+        # clamp base
         T = float(np.clip(T, self.traj_min_time, self.traj_max_time))
+        # ✅ rallenta globalmente (HRI)
+        T *= max(self.traj_time_scale, 1e-6)
+        # (opzionale) riclamp dopo scaling, se vuoi rispettare ancora min/max
+        T = float(np.clip(T, self.traj_min_time, self.traj_max_time))
+        point.time_from_start = Duration(seconds=T).to_msg()
+        # arrivo morbido (zero vel al termine)
+        point.velocities = [0.0] * 6
 
-        # number of points
-        N = max(2, int(getattr(self, "traj_num_points", 12)))
-
-        # Linear interpolation in joint space
-        for k in range(1, N + 1):
-            s = k / N  # 0 -> 1
-            qk = (1.0 - s) * q_start + s * q_end
-
-            pt = JointTrajectoryPoint()
-            pt.positions = qk.tolist()
-            pt.time_from_start = Duration(seconds=float(s * T)).to_msg()
-
-            # Smooth stop at final point
-            if k == N:
-                pt.velocities = [0.0] * 6
-
-            traj.points.append(pt)
+        traj.points.append(point)
 
         goal_msg = FollowJointTrajectory.Goal()
         goal_msg.trajectory = traj
@@ -204,11 +197,9 @@ class Z1IKToJTC(Node):
             self.get_logger().error("❌ JTC action server non disponibile")
             return False
 
-        self.get_logger().info("🚀 Sending trajectory to JTC (multi-point)")
-        self.get_logger().info(
-            f"🕒 T={T:.2f}s | dq_max={dq:.3f} rad | points={N}"
-        )
+        self.get_logger().info("🚀 Sending trajectory to JTC")
 
+        self.get_logger().info(f"🕒 Trajectory time_from_start = {T:.2f}s | dq_max = {dq:.3f} rad")
         send_goal_future = self.action_client.send_goal_async(goal_msg)
         send_goal_future.add_done_callback(self.goal_response_callback)
         return True
