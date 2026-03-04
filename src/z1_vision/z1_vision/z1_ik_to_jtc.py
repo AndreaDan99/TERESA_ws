@@ -36,6 +36,13 @@ class Z1IKToJTC(Node):
         self.declare_parameter("ik_enable_topic", "/ik_enable")
         self.declare_parameter("ik_done_topic", "/ik_done")
 
+        # Trajectory shaping
+        self.declare_parameter("max_joint_vel", 0.4)   # rad/s (limite velocità giunti)
+        self.declare_parameter("traj_min_time", 1.0)   # s
+        self.declare_parameter("traj_max_time", 6.0)   # s
+
+        self.declare_parameter("ik_alpha", 0.3)
+
 
         urdf_path = self.get_parameter("urdf_path").value
         self.base_frame = self.get_parameter("base_frame").value
@@ -48,6 +55,11 @@ class Z1IKToJTC(Node):
         self.ik_goal_topic = self.get_parameter("ik_goal_topic").value
         self.ik_enable_topic = self.get_parameter("ik_enable_topic").value
         self.ik_done_topic = self.get_parameter("ik_done_topic").value
+
+        self.max_joint_vel = float(self.get_parameter("max_joint_vel").value)
+        self.traj_min_time = float(self.get_parameter("traj_min_time").value)
+        self.traj_max_time = float(self.get_parameter("traj_max_time").value)
+        self.ik_alpha = float(self.get_parameter("ik_alpha").value)
 
         # FSM gating + goal latching
         self.ik_enabled = False
@@ -140,7 +152,7 @@ class Z1IKToJTC(Node):
             JJt = J @ J.T + self.damping * np.eye(6)
             v = J.T @ np.linalg.solve(JJt, err)
 
-            q = pin.integrate(self.model, q, v)
+            q = pin.integrate(self.model, q, self.ik_alpha * v)
 
         self.get_logger().warn("⚠️ IK did NOT converge")
         return None
@@ -157,7 +169,19 @@ class Z1IKToJTC(Node):
 
         point = JointTrajectoryPoint()
         point.positions = q_target[:6].tolist()
-        point.time_from_start = Duration(seconds=3.0).to_msg()
+
+        # --- speed control via duration ---
+        # dq = massimo spostamento tra i giunti (rad)
+        dq = float(np.max(np.abs(q_target[:6] - self.q[:6])))
+        # evita divisione per zero
+        dq = max(dq, 1e-6)
+        # tempo minimo per rispettare max_joint_vel
+        T = dq / max(self.max_joint_vel, 1e-6)
+        # clamp per sicurezza
+        T = float(np.clip(T, self.traj_min_time, self.traj_max_time))
+        point.time_from_start = Duration(seconds=T).to_msg()
+        # arrivo morbido (zero vel al termine)
+        point.velocities = [0.0] * 6
 
         traj.points.append(point)
 
@@ -170,6 +194,7 @@ class Z1IKToJTC(Node):
 
         self.get_logger().info("🚀 Sending trajectory to JTC")
 
+        self.get_logger().info(f"🕒 Trajectory time_from_start = {T:.2f}s | dq_max = {dq:.3f} rad")
         send_goal_future = self.action_client.send_goal_async(goal_msg)
         send_goal_future.add_done_callback(self.goal_response_callback)
         return True
