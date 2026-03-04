@@ -31,6 +31,12 @@ class Z1IKToJTC(Node):
         self.declare_parameter("ik_tol", 1e-4)
         self.declare_parameter("ik_damping", 1e-3)
 
+        # ---------------- FSM INTERFACE PARAMS ----------------
+        self.declare_parameter("ik_goal_topic", "/ik_goal_pose")
+        self.declare_parameter("ik_enable_topic", "/ik_enable")
+        self.declare_parameter("ik_done_topic", "/ik_done")
+
+
         urdf_path = self.get_parameter("urdf_path").value
         self.base_frame = self.get_parameter("base_frame").value
         self.ee_frame = self.get_parameter("ee_frame").value
@@ -38,6 +44,15 @@ class Z1IKToJTC(Node):
         self.max_iter = self.get_parameter("ik_max_iter").value
         self.tol = self.get_parameter("ik_tol").value
         self.damping = self.get_parameter("ik_damping").value
+
+        self.ik_goal_topic = self.get_parameter("ik_goal_topic").value
+        self.ik_enable_topic = self.get_parameter("ik_enable_topic").value
+        self.ik_done_topic = self.get_parameter("ik_done_topic").value
+
+        # FSM gating + goal latching
+        self.ik_enabled = False
+        self.busy = False
+        self.last_goal: PoseStamped | None = None
 
         # ---------------- PINOCCHIO MODEL ----------------
         self.model = pin.buildModelFromUrdf(urdf_path)
@@ -50,12 +65,23 @@ class Z1IKToJTC(Node):
         self.get_logger().info(
             f"✅ URDF caricato: {urdf_path} | nq={self.model.nq} | ee_id={self.ee_id}"
         )
+        self.get_logger().info("🧩 FSM interface:")
+        self.get_logger().info(f"  goal:   {self.ik_goal_topic}")
+        self.get_logger().info(f"  enable: {self.ik_enable_topic}")
+        self.get_logger().info(f"  done:   {self.ik_done_topic}")
 
         # ---------------- SUBSCRIBERS ----------------
         self.sub_goal = self.create_subscription(
             PoseStamped,
-            "/ik_goal_pose",
+            self.ik_goal_topic,
             self.goal_callback,
+            10
+        )
+
+        self.sub_enable = self.create_subscription(
+            Bool,
+            self.ik_enable_topic,
+            self.enable_callback,
             10
         )
 
@@ -66,8 +92,7 @@ class Z1IKToJTC(Node):
             "/joint_trajectory_controller/follow_joint_trajectory"
         )
 
-        self.pub_done = self.create_publisher(Bool, "/ik_jtc/done", 10)
-
+        self.pub_done = self.create_publisher(Bool, self.ik_done_topic, 10)
     # ==========================================================
     # IK SOLVER
     # ==========================================================
@@ -123,7 +148,7 @@ class Z1IKToJTC(Node):
     # ==========================================================
     # SEND TRAJECTORY
     # ==========================================================
-    def send_trajectory(self, q_target):
+    def send_trajectory(self, q_target) -> bool:
 
         joint_names = self.model.names[1:]  # skip universe
 
@@ -141,18 +166,66 @@ class Z1IKToJTC(Node):
 
         if not self.action_client.wait_for_server(timeout_sec=2.0):
             self.get_logger().error("❌ JTC action server non disponibile")
-            return
+            return False
 
         self.get_logger().info("🚀 Sending trajectory to JTC")
 
         send_goal_future = self.action_client.send_goal_async(goal_msg)
         send_goal_future.add_done_callback(self.goal_response_callback)
-
+        return True
     # ==========================================================
+
+    def enable_callback(self, msg: Bool):
+        self.ik_enabled = bool(msg.data)
+
+        if not self.ik_enabled:
+            # disarm: richiedi una nuova posa + nuova enable
+            self.last_goal = None
+            self.busy = False
+            self.get_logger().info("🛑 IK disabled (disarmed)")
+            return
+
+        self.get_logger().info("✅ IK enabled")
+        self._try_start()
+
+    def _try_start(self):
+        # parte solo se: enabled + goal presente + non già in esecuzione
+        if not self.ik_enabled:
+            return
+        if self.busy:
+            return
+        if self.last_goal is None:
+            return
+
+        self.busy = True
+        goal_msg = self.last_goal
+
+        self.get_logger().info("🧠 Starting IK+JTC on latched goal")
+        q_target = self.solve_ik(goal_msg)
+
+        if q_target is None:
+            # FAIL: non pubblichiamo /ik_done (la FSM tornerà waiting per freshness)
+            self.get_logger().error("❌ IK fallita -> disarmo e attendo nuova posa")
+            self.busy = False
+            self.last_goal = None
+            self.ik_enabled = False
+            return
+
+        ok = self.send_trajectory(q_target)
+        if not ok:
+            # FAIL: non pubblichiamo /ik_done
+            self.get_logger().error("❌ Trajectory non inviata -> disarmo e attendo nuova posa")
+            self.busy = False
+            self.last_goal = None
+            self.ik_enabled = False
+
     def goal_response_callback(self, future):
         goal_handle = future.result()
         if not goal_handle.accepted:
-            self.get_logger().error("❌ Goal rejected")
+            self.get_logger().error("❌ Goal rejected -> disarmo e attendo nuova posa")
+            self.busy = False
+            self.last_goal = None
+            self.ik_enabled = False
             return
 
         self.get_logger().info("✅ Goal accepted")
@@ -161,20 +234,21 @@ class Z1IKToJTC(Node):
         result_future.add_done_callback(self.result_callback)
 
     def result_callback(self, future):
-        self.get_logger().info("🏁 Trajectory completed")
+        self.get_logger().info("🏁 Trajectory completed -> publishing /ik_done=True")
         self.pub_done.publish(Bool(data=True))
+
+        # reset interno: attendo nuovo ciclo FSM (nuovo goal + enable)
+        self.busy = False
+        self.last_goal = None
+        self.ik_enabled = False
 
     # ==========================================================
     def goal_callback(self, msg: PoseStamped):
-        self.get_logger().info("📍 Nuovo target ricevuto")
+        self.get_logger().info("📍 Nuovo target ricevuto (latched)")
+        self.last_goal = msg
 
-        q_target = self.solve_ik(msg)
-
-        if q_target is None:
-            self.get_logger().error("❌ IK fallita")
-            return
-
-        self.send_trajectory(q_target)
+        # se già abilitato, prova a partire
+        self._try_start()
 
 
 # ==============================================================
