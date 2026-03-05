@@ -30,7 +30,7 @@ class Z1IKToJTC(Node):
 
         self.declare_parameter("ik_max_iter", 100)
         self.declare_parameter("ik_tol", 1e-4)
-        self.declare_parameter("ik_damping", 1e-3)
+        self.declare_parameter("ik_damping", 5e-3)
 
         # ---------------- FSM INTERFACE PARAMS ----------------
         self.declare_parameter("ik_goal_topic", "/ik_goal_pose")
@@ -38,11 +38,11 @@ class Z1IKToJTC(Node):
         self.declare_parameter("ik_done_topic", "/ik_done")
 
         # Trajectory shaping (pulito)
-        self.declare_parameter("max_joint_vel", 0.25)   # rad/s
+        self.declare_parameter("max_joint_vel", 0.6)   # rad/s
         self.declare_parameter("traj_min_time", 1.0)    # s
         self.declare_parameter("traj_max_time", 10.0)   # s
 
-        self.declare_parameter("ik_alpha", 0.3)
+        self.declare_parameter("ik_alpha", 0.50)
 
         urdf_path = self.get_parameter("urdf_path").value
         self.base_frame = self.get_parameter("base_frame").value
@@ -62,12 +62,16 @@ class Z1IKToJTC(Node):
 
         self.ik_alpha = float(self.get_parameter("ik_alpha").value)
 
-        self.traj_time_scale = float(self.get_parameter("traj_time_scale").value)
 
         # FSM gating + goal latching
         self.ik_enabled = False
         self.busy = False
         self.last_goal: PoseStamped | None = None
+
+        self.declare_parameter("traj_points", 25)  # >=3
+        self.traj_points = int(self.get_parameter("traj_points").value)
+        self.traj_points = max(self.traj_points, 3)
+
 
         # ---------------- PINOCCHIO MODEL ----------------
         self.model = pin.buildModelFromUrdf(urdf_path)
@@ -140,7 +144,8 @@ class Z1IKToJTC(Node):
         target_SE3 = pin.SE3(T[:3, :3], T[:3, 3])
 
         q = self.q.copy()
-
+        if self.have_js and self.q_meas is not None:
+            q[:6] = self.q_meas
         for i in range(self.max_iter):
 
             pin.forwardKinematics(self.model, self.data, q)
@@ -171,39 +176,59 @@ class Z1IKToJTC(Node):
         self.get_logger().warn("⚠️ IK did NOT converge")
         return None
 
+    def _wrap_to_pi(self, a: np.ndarray) -> np.ndarray:
+        return (a + np.pi) % (2.0 * np.pi) - np.pi
+
+    def _make_target_near(self, q_target: np.ndarray, q_ref: np.ndarray) -> np.ndarray:
+        """
+        Sposta q_target di multipli di 2π per minimizzare |q_target - q_ref|.
+        """
+        dq = q_target - q_ref
+        dq = self._wrap_to_pi(dq)
+        return q_ref + dq
     # ==========================================================
     # SEND TRAJECTORY
     # ==========================================================
-    def send_trajectory(self, q_target) -> bool:
-        # start reale dal robot
-        q0 = self.q_meas.copy()  # (6,)
-        q2 = np.array(q_target[:6], dtype=float)
-        q1 = 0.5 * (q0 + q2)
 
-        dq = float(np.max(np.abs(q2 - q0)))
-        dq = max(dq, 1e-6)  # evita 0
+    def send_trajectory(self, q_target) -> bool:
+        q0 = self.q_meas.copy()
+        qf = np.array(q_target[:6], dtype=float)
+
+        qf_old = qf.copy()
+        qf = self._make_target_near(qf, q0)
+
+        dq_before = float(np.max(np.abs(qf_old - q0)))
+        dq_after  = float(np.max(np.abs(qf - q0)))
+        if dq_after < dq_before - 1e-6:
+            self.get_logger().warn(f"🔁 unwrap target: dq {dq_before:.3f} -> {dq_after:.3f} rad")
+            
+        dq = float(np.max(np.abs(qf - q0)))
+        dq = max(dq, 1e-6)
 
         # tempo coerente con max velocità
         T = dq / max(self.max_joint_vel, 1e-6)
         T = float(np.clip(T, self.traj_min_time, self.traj_max_time))
 
+        N = self.traj_points  # es. 11
         traj = JointTrajectory()
         traj.joint_names = self.joint_order
+        traj.points = []
 
-        p0 = JointTrajectoryPoint()
-        p0.positions = q0.tolist()
-        p0.time_from_start = Duration(seconds=0.0).to_msg()
+        # smoothstep: s(t)=3t^2-2t^3 (zero vel a inizio/fine, meno jerk percepito)
+        for k in range(N):
+            t = k / (N - 1)
+            s = 10*t**3 - 15*t**4 + 6*t**5 # partito da s = 3*t**2 - 2*t**3
+            qk = q0 + s * (qf - q0)
 
-        p1 = JointTrajectoryPoint()
-        p1.positions = q1.tolist()
-        p1.time_from_start = Duration(seconds=T * 0.5).to_msg()
+            p = JointTrajectoryPoint()
+            p.positions = qk.tolist()
+            p.time_from_start = Duration(seconds=T * t).to_msg()
 
-        p2 = JointTrajectoryPoint()
-        p2.positions = q2.tolist()
-        p2.time_from_start = Duration(seconds=T).to_msg()
-        p2.velocities = [0.0] * 6  # stop morbido in arrivo
+            # velocità solo sull'ultimo punto per "arrivo morbido"
+            if k == 0 or k == N - 1:
+                p.velocities = [0.0] * 6
 
-        traj.points = [p0, p1, p2]
+            traj.points.append(p)
 
         goal_msg = FollowJointTrajectory.Goal()
         goal_msg.trajectory = traj
@@ -212,7 +237,7 @@ class Z1IKToJTC(Node):
             self.get_logger().error("❌ JTC action server non disponibile")
             return False
 
-        self.get_logger().info(f"🚀 Sending 3-point trajectory | T={T:.2f}s | dq_max={dq:.3f} rad")
+        self.get_logger().info(f"🚀 Sending smooth trajectory | N={N} | T={T:.2f}s | dq_max={dq:.3f} rad")
         send_goal_future = self.action_client.send_goal_async(goal_msg)
         send_goal_future.add_done_callback(self.goal_response_callback)
         return True

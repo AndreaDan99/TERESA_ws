@@ -22,25 +22,10 @@ from ament_index_python.packages import (
     get_package_share_path,
 )
 
-
 def launch_setup(context, *args, **kwargs):
 
+    nodes_to_start = []
 
-    nodes_to_start = list()
-        # ------------------------------------------------------------
-    # 🔴 CLOCK BRIDGE (OBBLIGATORIO SU ROS 2 JAZZY)
-    # ------------------------------------------------------------
-    clock_bridge = Node(
-        package="ros_gz_bridge",
-        executable="parameter_bridge",
-        arguments=[
-            "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock"
-        ],
-        output="screen",
-    )
-
-    nodes_to_start.append(clock_bridge)
-    
     xacro_file = LaunchConfiguration("xacro_file")
     robot_name = LaunchConfiguration("robot_name")
     with_gripper = LaunchConfiguration("with_gripper")
@@ -50,18 +35,30 @@ def launch_setup(context, *args, **kwargs):
     starting_controller = LaunchConfiguration("starting_controller")
     sim_ignition = LaunchConfiguration("sim_ignition")
 
-    use_sim_time = (sim_ignition.perform(context) == "true")
-
     is_simulation = IfCondition(sim_ignition)
     is_real = UnlessCondition(sim_ignition)
 
-    # ------------------------------------------------------------
-    # 🔴 FIX FONDAMENTALE:
-    # forza use_sim_time GLOBALMENTE (vale anche per gz_ros2_control)
-    # ------------------------------------------------------------
-    nodes_to_start.append(SetParameter(name="use_sim_time", value=use_sim_time))
+    use_sim_time = (sim_ignition.perform(context) == "true")
 
     # ------------------------------------------------------------
+    # CLOCK BRIDGE (SOLO SIM)
+    # ------------------------------------------------------------
+    clock_bridge = Node(
+        package="ros_gz_bridge",
+        executable="parameter_bridge",
+        arguments=["/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock"],
+        output="screen",
+        condition=is_simulation,
+    )
+    nodes_to_start.append(clock_bridge)
+
+    # ------------------------------------------------------------
+    # forza use_sim_time SOLO in sim (globale)
+    # ------------------------------------------------------------
+    nodes_to_start.append(
+        SetParameter(name="use_sim_time", value=True, condition=is_simulation)
+    )
+        # ------------------------------------------------------------
     # Robot description
     # ------------------------------------------------------------
     robot_description_content = xacro.process(
@@ -83,6 +80,7 @@ def launch_setup(context, *args, **kwargs):
         parameters=[robot_description, {"use_sim_time": use_sim_time}],
     )
 
+    
     joint_state_broadcaster_spawner = Node(
         package="controller_manager",
         executable="spawner",
@@ -233,7 +231,7 @@ def generate_launch_description():
         DeclareLaunchArgument("with_gripper", default_value="true"),
         DeclareLaunchArgument("starting_controller", default_value="torque_controller"),
         DeclareLaunchArgument("sim_ignition", default_value="true"),
-        DeclareLaunchArgument("rviz", default_value="true"),
+        DeclareLaunchArgument("rviz", default_value="false"),
         DeclareLaunchArgument("rviz_config", default_value=rviz_config_default),
     ]
 
