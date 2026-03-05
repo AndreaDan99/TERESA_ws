@@ -14,6 +14,7 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from rclpy.action import ActionClient
 from rclpy.duration import Duration
 from tf_transformations import quaternion_matrix
+from sensor_msgs.msg import JointState
 
 
 class Z1IKToJTC(Node):
@@ -36,13 +37,12 @@ class Z1IKToJTC(Node):
         self.declare_parameter("ik_enable_topic", "/ik_enable")
         self.declare_parameter("ik_done_topic", "/ik_done")
 
-        # Trajectory shaping
-        self.declare_parameter("max_joint_vel", 0.2)   # rad/s (limite velocità giunti)
-        self.declare_parameter("traj_min_time", 3.0)   # s
-        self.declare_parameter("traj_max_time", 20.0)   # s
+        # Trajectory shaping (pulito)
+        self.declare_parameter("max_joint_vel", 0.25)   # rad/s
+        self.declare_parameter("traj_min_time", 1.0)    # s
+        self.declare_parameter("traj_max_time", 10.0)   # s
 
         self.declare_parameter("ik_alpha", 0.3)
-        self.declare_parameter("traj_time_scale", 2.0)  # 1.0 = normale, 2.0 = 2x più lento
 
         urdf_path = self.get_parameter("urdf_path").value
         self.base_frame = self.get_parameter("base_frame").value
@@ -59,6 +59,7 @@ class Z1IKToJTC(Node):
         self.max_joint_vel = float(self.get_parameter("max_joint_vel").value)
         self.traj_min_time = float(self.get_parameter("traj_min_time").value)
         self.traj_max_time = float(self.get_parameter("traj_max_time").value)
+
         self.ik_alpha = float(self.get_parameter("ik_alpha").value)
 
         self.traj_time_scale = float(self.get_parameter("traj_time_scale").value)
@@ -84,6 +85,11 @@ class Z1IKToJTC(Node):
         self.get_logger().info(f"  enable: {self.ik_enable_topic}")
         self.get_logger().info(f"  done:   {self.ik_done_topic}")
 
+        # Joint state reale (per smoothness)
+        self.q_meas = None  # np.ndarray shape (6,)
+        self.have_js = False
+        self.joint_order = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
+
         # ---------------- SUBSCRIBERS ----------------
         self.sub_goal = self.create_subscription(
             PoseStamped,
@@ -97,6 +103,12 @@ class Z1IKToJTC(Node):
             self.ik_enable_topic,
             self.enable_callback,
             10
+        )
+        self.sub_js = self.create_subscription(
+            JointState,
+            "/joint_states",
+            self.joint_state_callback,
+            50
         )
 
         # ---------------- ACTION CLIENT ----------------
@@ -163,32 +175,35 @@ class Z1IKToJTC(Node):
     # SEND TRAJECTORY
     # ==========================================================
     def send_trajectory(self, q_target) -> bool:
+        # start reale dal robot
+        q0 = self.q_meas.copy()  # (6,)
+        q2 = np.array(q_target[:6], dtype=float)
+        q1 = 0.5 * (q0 + q2)
 
-        joint_names = self.model.names[1:]  # skip universe
+        dq = float(np.max(np.abs(q2 - q0)))
+        dq = max(dq, 1e-6)  # evita 0
+
+        # tempo coerente con max velocità
+        T = dq / max(self.max_joint_vel, 1e-6)
+        T = float(np.clip(T, self.traj_min_time, self.traj_max_time))
 
         traj = JointTrajectory()
-        traj.joint_names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
+        traj.joint_names = self.joint_order
 
-        point = JointTrajectoryPoint()
-        point.positions = q_target[:6].tolist()
+        p0 = JointTrajectoryPoint()
+        p0.positions = q0.tolist()
+        p0.time_from_start = Duration(seconds=0.0).to_msg()
 
-        # --- speed control via duration ---
-        # dq = massimo spostamento tra i giunti (rad)
-        dq = float(np.max(np.abs(q_target[:6] - self.q[:6])))
-        # evita divisione per zero
-        dq = max(dq, 1e-6)
-        T = dq / max(self.max_joint_vel, 1e-6)
-        # clamp base
-        T = float(np.clip(T, self.traj_min_time, self.traj_max_time))
-        # ✅ rallenta globalmente (HRI)
-        T *= max(self.traj_time_scale, 1e-6)
-        # (opzionale) riclamp dopo scaling, se vuoi rispettare ancora min/max
-        T = float(np.clip(T, self.traj_min_time, self.traj_max_time))
-        point.time_from_start = Duration(seconds=T).to_msg()
-        # arrivo morbido (zero vel al termine)
-        point.velocities = [0.0] * 6
+        p1 = JointTrajectoryPoint()
+        p1.positions = q1.tolist()
+        p1.time_from_start = Duration(seconds=T * 0.5).to_msg()
 
-        traj.points.append(point)
+        p2 = JointTrajectoryPoint()
+        p2.positions = q2.tolist()
+        p2.time_from_start = Duration(seconds=T).to_msg()
+        p2.velocities = [0.0] * 6  # stop morbido in arrivo
+
+        traj.points = [p0, p1, p2]
 
         goal_msg = FollowJointTrajectory.Goal()
         goal_msg.trajectory = traj
@@ -197,13 +212,23 @@ class Z1IKToJTC(Node):
             self.get_logger().error("❌ JTC action server non disponibile")
             return False
 
-        self.get_logger().info("🚀 Sending trajectory to JTC")
-
-        self.get_logger().info(f"🕒 Trajectory time_from_start = {T:.2f}s | dq_max = {dq:.3f} rad")
+        self.get_logger().info(f"🚀 Sending 3-point trajectory | T={T:.2f}s | dq_max={dq:.3f} rad")
         send_goal_future = self.action_client.send_goal_async(goal_msg)
         send_goal_future.add_done_callback(self.goal_response_callback)
         return True
     # ==========================================================
+
+    def joint_state_callback(self, msg: JointState):
+        # mappa name->pos
+        name_to_pos = dict(zip(msg.name, msg.position))
+
+        try:
+            q = np.array([name_to_pos[n] for n in self.joint_order], dtype=float)
+        except KeyError:
+            return  # non tutti i joint presenti
+
+        self.q_meas = q
+        self.have_js = True
 
     def enable_callback(self, msg: Bool):
         self.ik_enabled = bool(msg.data)
@@ -220,6 +245,9 @@ class Z1IKToJTC(Node):
 
     def _try_start(self):
         # parte solo se: enabled + goal presente + non già in esecuzione
+        if not self.have_js:
+            self.get_logger().warn("⚠️ Aspetto /joint_states prima di partire (serve per smoothing)")
+            return
         if not self.ik_enabled:
             return
         if self.busy:
