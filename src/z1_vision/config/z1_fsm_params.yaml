@@ -1,28 +1,41 @@
 z1_FSM:
   ros__parameters:
-    # ── High-level approach settings ───────────────────────
-    approach_offset: 0.20        # [m] pre-contatto (20 cm prima del target)
 
-    startup_go_home: true
-    startup_home_delay: 5.0
-    
-    # ── Home pose (EE in world) ────────────────────────────
-    home_position: [0.0411, 0.0103, 0.5133]
-    home_orientation: [0.0, 0.0, 0.0, 1.0]  
+    # ── Topic interface ────────────────────────────────────────────
+    torso_locked_topic:            "/torso_target_ee_locked"
+    ik_enable_topic:               "/ik_enable"
+    ik_goal_topic:                 "/ik_goal_pose"
+    ik_done_topic:                 "/ik_done"
+    state_topic:                   "/z1_fsm/state"
+    impedance_enable_topic:        "/impedance_enable"
+    impedance_done_topic:          "/impedance_done"
+    target_out_of_workspace_topic: "/target_out_of_workspace"
+    keyboard_cmd_topic:            "/z1_keyboard_cmd"
 
-    # ── Impedance contact hold ─────────────────────────────
-    hold_time: 5.0              # [s] tempo in contatto
+    # ── Freshness threshold ────────────────────────────────────────
+    # Massima età accettabile del messaggio su torso_locked_topic
+    # per considerare il target "fresco" in WAITING
+    target_max_age_s: 0.5          # [s]
 
-    # switch_timeout non è più necessario (switch è blocking),
-    # ma lo lasciamo per compatibilità e futura estensione.
-    switch_timeout: 3.0
+    # ── Workspace checker (Pinocchio) ──────────────────────────────
+    urdf_path: '/home/andrea/Ros2_repositories/unitree_z1_ws/install/z1_description/share/z1_description/urdf/z1.urdf'
+    ee_frame:  'link06'
 
-    use_surface_for_approach: true
-    
-    pre_contact_normal_offset: -0.205
+    # Margine di sicurezza dal limite massimo di raggiungibilità:
+    # il robot si ferma a (max_reach - workspace_safety_margin) dalla base
+    workspace_safety_margin: 0.30  # [m]
 
-    # ── Timeouts ───────────────────────────────────────────
-    jtc_timeout: 25.0            # [s] attesa massima per /ik_jtc/done
-    retract_timeout: 25.0
+    # Posizione della base del braccio in world frame.
+    # [0,0,0] se world == base frame (configurazione standard Z1 su TERESA)
+    arm_base_pos: [0.0, 0.0, 0.0]  # [m]
 
-    fault_go_home: true
+    # ── Home position ──────────────────────────────────────────────
+    # Posa cartesiana in cui il braccio va all'avvio (HOMING) e quando
+    # si preme H o ESC sulla tastiera.
+    #
+    # Imposta questi valori in base alla geometria reale del robot.
+    # home_orientation: [qx, qy, qz, qw]  (quaternione, frame world)
+    #
+    # Valori di default — da aggiornare con la posa di sicurezza reale:
+    home_position:    [0.3, 0.0, 0.3]        # [m]  x, y, z in world frame
+    home_orientation: [0.0, 0.0, 0.0, 1.0]  # [qx, qy, qz, qw]

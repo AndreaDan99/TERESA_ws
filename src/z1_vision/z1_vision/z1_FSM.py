@@ -13,25 +13,38 @@ from z1_vision.workspace_checker import WorkspaceChecker
 
 
 class Z1FSM(Node):
-    WAITING             = "WAITING"
-    CHECKING_WORKSPACE  = "CHECKING_WORKSPACE"
-    APPROACHING         = "APPROACHING"
-    WAIT_IK_DONE        = "WAIT_IK_DONE"
-    SWITCHING_TO_TORQUE = "SWITCHING_TO_TORQUE"
-    IMPEDANCE_RUNNING   = "IMPEDANCE_RUNNING"
-    SWITCHING_TO_JTC    = "SWITCHING_TO_JTC"
-    FAULT               = "FAULT"
+    # ── State constants ────────────────────────────────────────────────
+    WAITING              = "WAITING"
+    CHECKING_WORKSPACE   = "CHECKING_WORKSPACE"
+    APPROACHING          = "APPROACHING"
+    WAIT_IK_DONE         = "WAIT_IK_DONE"
+    SWITCHING_TO_TORQUE  = "SWITCHING_TO_TORQUE"
+    IMPEDANCE_RUNNING    = "IMPEDANCE_RUNNING"
+    SWITCHING_TO_JTC     = "SWITCHING_TO_JTC"
+    HOMING               = "HOMING"
+    EMERGENCY_SWITCHING  = "EMERGENCY_SWITCHING"
+    EMERGENCY            = "EMERGENCY"
+    FAULT                = "FAULT"
+
+    # States where the torque_controller may be active.
+    # Any keyboard command arriving in these states must first switch to JTC.
+    _TORQUE_STATES = frozenset([
+        "SWITCHING_TO_TORQUE",
+        "IMPEDANCE_RUNNING",
+        "SWITCHING_TO_JTC",
+    ])
 
     def __init__(self):
         super().__init__("z1_fsm")
 
-        # ---- Topic params ----
-        self.declare_parameter("torso_locked_topic", "/torso_target_ee_locked")
-        self.declare_parameter("ik_enable_topic",    "/ik_enable")
-        self.declare_parameter("ik_goal_topic",      "/ik_goal_pose")
-        self.declare_parameter("ik_done_topic",      "/ik_done")
-        self.declare_parameter("state_topic",        "/z1_fsm/state")
-        self.declare_parameter("target_max_age_s",   0.5)
+        # ── Topic params ────────────────────────────────────────────────
+        self.declare_parameter("torso_locked_topic",  "/torso_target_ee_locked")
+        self.declare_parameter("ik_enable_topic",     "/ik_enable")
+        self.declare_parameter("ik_goal_topic",       "/ik_goal_pose")
+        self.declare_parameter("ik_done_topic",       "/ik_done")
+        self.declare_parameter("state_topic",         "/z1_fsm/state")
+        self.declare_parameter("target_max_age_s",    0.5)
+        self.declare_parameter("keyboard_cmd_topic",  "/z1_keyboard_cmd")
 
         self.torso_locked_topic = self.get_parameter("torso_locked_topic").value
         self.ik_enable_topic    = self.get_parameter("ik_enable_topic").value
@@ -39,35 +52,48 @@ class Z1FSM(Node):
         self.ik_done_topic      = self.get_parameter("ik_done_topic").value
         self.state_topic        = self.get_parameter("state_topic").value
         self.target_max_age_s   = float(self.get_parameter("target_max_age_s").value)
+        self.keyboard_cmd_topic = self.get_parameter("keyboard_cmd_topic").value
 
-        # ---- Impedance interface params ----
+        # ── Impedance interface params ──────────────────────────────────
         self.declare_parameter("impedance_enable_topic", "/impedance_enable")
         self.declare_parameter("impedance_done_topic",   "/impedance_done")
         self.impedance_enable_topic = self.get_parameter("impedance_enable_topic").value
         self.impedance_done_topic   = self.get_parameter("impedance_done_topic").value
 
-        # ---- Workspace out-of-range topic ----
+        # ── Workspace out-of-range topic ────────────────────────────────
         self.declare_parameter("target_out_of_workspace_topic", "/target_out_of_workspace")
         self.target_out_of_workspace_topic = self.get_parameter(
             "target_out_of_workspace_topic"
         ).value
 
-        # ---- Workspace checker params ----
-        self.declare_parameter("urdf_path",
+        # ── Workspace checker params ────────────────────────────────────
+        self.declare_parameter(
+            "urdf_path",
             "/home/andrea/Ros2_repositories/unitree_z1_ws/install/z1_description/"
-            "share/z1_description/urdf/z1.urdf")
-        self.declare_parameter("ee_frame",               "link06")
+            "share/z1_description/urdf/z1.urdf",
+        )
+        self.declare_parameter("ee_frame",                "link06")
         self.declare_parameter("workspace_safety_margin", 0.30)
         self.declare_parameter("arm_base_pos",            [0.0, 0.0, 0.0])
 
-        urdf_path      = self.get_parameter("urdf_path").value
-        ee_frame       = self.get_parameter("ee_frame").value
-        safety_margin  = float(self.get_parameter("workspace_safety_margin").value)
+        urdf_path     = self.get_parameter("urdf_path").value
+        ee_frame      = self.get_parameter("ee_frame").value
+        safety_margin = float(self.get_parameter("workspace_safety_margin").value)
         self._arm_base = np.array(
             self.get_parameter("arm_base_pos").value, dtype=float
         )
 
-        # ---- WorkspaceChecker (Pinocchio, bloccante → thread) ----
+        # ── Home position params ────────────────────────────────────────
+        self.declare_parameter("home_position",    [0.3, 0.0, 0.3])
+        self.declare_parameter("home_orientation", [0.0, 0.0, 0.0, 1.0])
+        self._home_position = np.array(
+            self.get_parameter("home_position").value, dtype=float
+        )
+        self._home_orientation = np.array(
+            self.get_parameter("home_orientation").value, dtype=float
+        )
+
+        # ── WorkspaceChecker (Pinocchio, bloccante → thread) ────────────
         try:
             self._checker = WorkspaceChecker(
                 urdf_path     = urdf_path,
@@ -82,54 +108,69 @@ class Z1FSM(Node):
             self._checker = None
 
         self._ws_executor          = ThreadPoolExecutor(max_workers=1)
-        self._workspace_future     = None        # future del thread corrente
+        self._workspace_future     = None
         self._clipped_target: PoseStamped | None = None
         self._checker_input_pose: PoseStamped | None = None
-        self._target_out_of_ws     = False       # flag: target era fuori workspace
+        self._target_out_of_ws     = False
 
-        # ---- Subscribers ----
+        # ── Subscribers ─────────────────────────────────────────────────
         self.last_torso_pose: PoseStamped | None = None
         self.last_torso_time = None
         self.ik_done         = False
         self.impedance_done  = False
+        self._pending_keyboard_cmd: str | None = None
 
-        self.create_subscription(PoseStamped, self.torso_locked_topic, self.on_torso_locked, 10)
-        self.create_subscription(Bool, self.ik_done_topic,        self.on_ik_done,        10)
-        self.create_subscription(Bool, self.impedance_done_topic, self.on_impedance_done, 10)
+        self.create_subscription(
+            PoseStamped, self.torso_locked_topic, self.on_torso_locked, 10
+        )
+        self.create_subscription(Bool,   self.ik_done_topic,        self.on_ik_done,        10)
+        self.create_subscription(Bool,   self.impedance_done_topic, self.on_impedance_done, 10)
+        self.create_subscription(String, self.keyboard_cmd_topic,   self._on_keyboard_cmd,  10)
 
-        # ---- Publishers ----
-        self.pub_ik_enable          = self.create_publisher(Bool,        self.ik_enable_topic,              10)
-        self.pub_ik_goal            = self.create_publisher(PoseStamped, self.ik_goal_topic,                 10)
-        self.pub_state              = self.create_publisher(String,      self.state_topic,                   10)
-        self.pub_impedance_enable   = self.create_publisher(Bool,        self.impedance_enable_topic,        10)
-        self.pub_out_of_workspace   = self.create_publisher(Bool,        self.target_out_of_workspace_topic, 10)
+        # ── Publishers ──────────────────────────────────────────────────
+        self.pub_ik_enable        = self.create_publisher(Bool,        self.ik_enable_topic,              10)
+        self.pub_ik_goal          = self.create_publisher(PoseStamped, self.ik_goal_topic,                 10)
+        self.pub_state            = self.create_publisher(String,      self.state_topic,                   10)
+        self.pub_impedance_enable = self.create_publisher(Bool,        self.impedance_enable_topic,        10)
+        self.pub_out_of_workspace = self.create_publisher(Bool,        self.target_out_of_workspace_topic, 10)
 
-        # ---- Service clients: switch controller ----
+        # ── Service clients: switch controller ──────────────────────────
         self.switch_to_torque_client = self.create_client(Trigger, '/safe_switch/to_torque')
         self.switch_to_jtc_client    = self.create_client(Trigger, '/safe_switch/to_jtc')
         self._switch_future = None
 
-        # ---- FSM state ----
-        self.state = None
+        # ── FSM state variables ─────────────────────────────────────────
+        self.state                   = None
         self._approach_command_sent  = False
         self._impedance_command_sent = False
+        self._homing_command_sent    = False
+        self._homing_next_state      = self.WAITING   # where to go after HOMING
 
+        # ── Start timer then go immediately to HOMING ───────────────────
         self.timer = self.create_timer(0.05, self.tick)   # 20 Hz
-        self.set_state(self.WAITING)
+        self._homing_next_state = self.WAITING
+        self.set_state(self.HOMING)
         self.pub_ik_enable.publish(Bool(data=False))
 
-        self.get_logger().info("🧠 z1_FSM ready")
+        self.get_logger().info("🧠 z1_FSM ready → avvio in HOMING")
         self.get_logger().info(f"  torso_locked:      {self.torso_locked_topic}")
         self.get_logger().info(f"  ik_goal:           {self.ik_goal_topic}")
         self.get_logger().info(f"  ik_enable:         {self.ik_enable_topic}")
         self.get_logger().info(f"  ik_done:           {self.ik_done_topic}")
-        self.get_logger().info(f"  impedance_enable:      {self.impedance_enable_topic}")
-        self.get_logger().info(f"  impedance_done:        {self.impedance_done_topic}")
-        self.get_logger().info(f"  out_of_workspace:      {self.target_out_of_workspace_topic}")
+        self.get_logger().info(f"  keyboard_cmd:      {self.keyboard_cmd_topic}")
+        self.get_logger().info(f"  impedance_enable:  {self.impedance_enable_topic}")
+        self.get_logger().info(f"  impedance_done:    {self.impedance_done_topic}")
+        self.get_logger().info(f"  out_of_workspace:  {self.target_out_of_workspace_topic}")
+        self.get_logger().info(
+            f"  home_position:     "
+            f"[{self._home_position[0]:.3f}, "
+            f"{self._home_position[1]:.3f}, "
+            f"{self._home_position[2]:.3f}]"
+        )
 
-    # ================================================================== #
-    #  CALLBACKS                                                           #
-    # ================================================================== #
+    # =================================================================== #
+    #  CALLBACKS                                                            #
+    # =================================================================== #
 
     def on_torso_locked(self, msg: PoseStamped):
         self.last_torso_pose = msg
@@ -143,9 +184,15 @@ class Z1FSM(Node):
         if msg.data:
             self.impedance_done = True
 
-    # ================================================================== #
-    #  HELPERS                                                             #
-    # ================================================================== #
+    def _on_keyboard_cmd(self, msg: String):
+        """Riceve comandi da z1_keyboard_safety via /z1_keyboard_cmd."""
+        cmd = msg.data.strip().lower()
+        if cmd in ("home", "emergency", "reset"):
+            self._pending_keyboard_cmd = cmd
+
+    # =================================================================== #
+    #  HELPERS                                                              #
+    # =================================================================== #
 
     def set_state(self, s: str):
         if s == self.state:
@@ -178,6 +225,21 @@ class Z1FSM(Node):
             self.impedance_done          = False
             self._impedance_command_sent = False
 
+        if s == self.HOMING:
+            self.ik_done              = False
+            self._homing_command_sent = False
+
+        if s == self.EMERGENCY_SWITCHING:
+            self._switch_future = None
+            self.get_logger().warn(
+                f"🚨 EMERGENCY_SWITCHING: switch → JTC, poi HOMING → {self._homing_next_state}"
+            )
+
+        if s == self.EMERGENCY:
+            self.get_logger().warn(
+                "🚨 FSM in EMERGENCY — braccio fermo. Premere R per tornare in HOME."
+            )
+
     def torso_target_fresh(self) -> bool:
         if self.last_torso_pose is None or self.last_torso_time is None:
             return False
@@ -188,38 +250,110 @@ class Z1FSM(Node):
         p = pose.pose.position
         return np.array([p.x, p.y, p.z], dtype=float)
 
-    def _make_clipped_pose(self, original: PoseStamped, clipped_pos: np.ndarray) -> PoseStamped:
+    def _make_clipped_pose(
+        self, original: PoseStamped, clipped_pos: np.ndarray
+    ) -> PoseStamped:
         """Costruisce un PoseStamped con posizione clippata ma orientazione invariata."""
         msg = PoseStamped()
-        msg.header              = original.header
-        msg.pose.orientation    = original.pose.orientation
-        msg.pose.position.x     = float(clipped_pos[0])
-        msg.pose.position.y     = float(clipped_pos[1])
-        msg.pose.position.z     = float(clipped_pos[2])
+        msg.header           = original.header
+        msg.pose.orientation = original.pose.orientation
+        msg.pose.position.x  = float(clipped_pos[0])
+        msg.pose.position.y  = float(clipped_pos[1])
+        msg.pose.position.z  = float(clipped_pos[2])
         return msg
 
-    # ================================================================== #
-    #  FSM TICK (20 Hz)                                                    #
-    # ================================================================== #
+    def _make_home_pose(self) -> PoseStamped:
+        """Costruisce un PoseStamped con la posizione home definita dai parametri YAML."""
+        msg = PoseStamped()
+        msg.header.frame_id    = "world"
+        msg.header.stamp       = self.get_clock().now().to_msg()
+        msg.pose.position.x    = float(self._home_position[0])
+        msg.pose.position.y    = float(self._home_position[1])
+        msg.pose.position.z    = float(self._home_position[2])
+        msg.pose.orientation.x = float(self._home_orientation[0])
+        msg.pose.orientation.y = float(self._home_orientation[1])
+        msg.pose.orientation.z = float(self._home_orientation[2])
+        msg.pose.orientation.w = float(self._home_orientation[3])
+        return msg
+
+    def _handle_keyboard_cmd(self, cmd: str):
+        """
+        Processa un comando tastiera.
+
+        Comandi accettati:
+          "emergency"  → ferma tutto, porta in HOMING poi EMERGENCY
+          "home"       → interrompe il task corrente, porta in HOMING poi WAITING
+          "reset"      → da EMERGENCY: torna in HOMING poi WAITING
+        """
+        if cmd == "emergency":
+            self.get_logger().warn(
+                f"🚨 EMERGENCY ricevuto (stato: {self.state})"
+            )
+            self.pub_ik_enable.publish(Bool(data=False))
+            self.pub_impedance_enable.publish(Bool(data=False))
+            self._homing_next_state = self.EMERGENCY
+            if self.state in self._TORQUE_STATES:
+                self.set_state(self.EMERGENCY_SWITCHING)
+            else:
+                self.set_state(self.HOMING)
+
+        elif cmd == "home":
+            if self.state == self.EMERGENCY:
+                self.get_logger().warn(
+                    "⚠️  'home' ignorato in EMERGENCY — usare 'reset'"
+                )
+                return
+            self.get_logger().info(f"🏠 HOME ricevuto (stato: {self.state})")
+            self.pub_ik_enable.publish(Bool(data=False))
+            self.pub_impedance_enable.publish(Bool(data=False))
+            self._homing_next_state = self.WAITING
+            if self.state in self._TORQUE_STATES:
+                self.set_state(self.EMERGENCY_SWITCHING)
+            else:
+                self.set_state(self.HOMING)
+
+        elif cmd == "reset":
+            if self.state != self.EMERGENCY:
+                self.get_logger().warn(
+                    f"⚠️  'reset' ignorato — richiesto solo in EMERGENCY "
+                    f"(stato attuale: {self.state})"
+                )
+                return
+            self.get_logger().info("🔄 RESET → HOMING → WAITING")
+            self._homing_next_state = self.WAITING
+            self.set_state(self.HOMING)
+
+    # =================================================================== #
+    #  FSM TICK  (20 Hz)                                                    #
+    # =================================================================== #
 
     def tick(self):
 
-        # ── WAITING ───────────────────────────────────────────────────
+        # ── Keyboard commands (priorità massima, processati prima del tick) ──
+        if self._pending_keyboard_cmd:
+            cmd = self._pending_keyboard_cmd
+            self._pending_keyboard_cmd = None
+            self._handle_keyboard_cmd(cmd)
+            # Nota: non si fa return — il tick prosegue sul nuovo stato corrente
+
+        # ── WAITING ───────────────────────────────────────────────────────
         if self.state == self.WAITING:
             if self.torso_target_fresh():
                 self.set_state(self.CHECKING_WORKSPACE)
 
-        # ── CHECKING_WORKSPACE ────────────────────────────────────────
+        # ── CHECKING_WORKSPACE ────────────────────────────────────────────
         elif self.state == self.CHECKING_WORKSPACE:
 
             # Avvia il calcolo: serve un target fresco per fare il latch
             if self._workspace_future is None:
                 if not self.torso_target_fresh():
-                    self.get_logger().warn("⚠️  Nessun target fresco per workspace check → WAITING")
+                    self.get_logger().warn(
+                        "⚠️  Nessun target fresco per workspace check → WAITING"
+                    )
                     self.set_state(self.WAITING)
                     return
 
-                # Se il checker non è disponibile, salta il controllo e committa il target
+                # Se il checker non è disponibile, salta il controllo
                 if self._checker is None:
                     self.get_logger().warn(
                         "⚠️  WorkspaceChecker non disponibile → skip check",
@@ -243,7 +377,7 @@ class Z1FSM(Node):
                 )
                 return
 
-            # Aspetta che il thread finisca (target già latchato: non si torna indietro)
+            # Aspetta che il thread finisca
             if not self._workspace_future.done():
                 return
 
@@ -273,7 +407,7 @@ class Z1FSM(Node):
             )
             self.set_state(self.APPROACHING)
 
-        # ── APPROACHING ───────────────────────────────────────────────
+        # ── APPROACHING ───────────────────────────────────────────────────
         elif self.state == self.APPROACHING:
             # Nessun abort per target non fresco: il robot si impegna
             # sul target latchato in CHECKING_WORKSPACE
@@ -281,26 +415,27 @@ class Z1FSM(Node):
             if not self._approach_command_sent:
                 self.ik_done = False
 
-                # Usa il target clippato calcolato in CHECKING_WORKSPACE
-                target = self._clipped_target if self._clipped_target is not None \
-                         else self.last_torso_pose
+                target = (
+                    self._clipped_target
+                    if self._clipped_target is not None
+                    else self.last_torso_pose
+                )
 
                 self.pub_ik_goal.publish(target)
                 self.pub_ik_enable.publish(Bool(data=True))
-
                 self._approach_command_sent = True
                 self.set_state(self.WAIT_IK_DONE)
 
-        # ── WAIT_IK_DONE ──────────────────────────────────────────────
+        # ── WAIT_IK_DONE ──────────────────────────────────────────────────
         elif self.state == self.WAIT_IK_DONE:
             # Nessun abort per target non fresco: il robot completa il movimento
-            # verso il target latchato indipendentemente dalla visibilità della persona
+            # verso il target latchato
 
             if self.ik_done:
                 self.pub_ik_enable.publish(Bool(data=False))
                 self.set_state(self.SWITCHING_TO_TORQUE)
 
-        # ── SWITCHING_TO_TORQUE ───────────────────────────────────────
+        # ── SWITCHING_TO_TORQUE ───────────────────────────────────────────
         elif self.state == self.SWITCHING_TO_TORQUE:
             if self._switch_future is None:
                 if not self.switch_to_torque_client.service_is_ready():
@@ -326,7 +461,7 @@ class Z1FSM(Node):
                 self.get_logger().error(f"❌ Switch fallito: {result.message}")
                 self.set_state(self.FAULT)
 
-        # ── IMPEDANCE_RUNNING ─────────────────────────────────────────
+        # ── IMPEDANCE_RUNNING ─────────────────────────────────────────────
         elif self.state == self.IMPEDANCE_RUNNING:
             if not self._impedance_command_sent:
                 self.pub_impedance_enable.publish(Bool(data=True))
@@ -339,7 +474,7 @@ class Z1FSM(Node):
                 self.get_logger().info("✅ Impedance done → SWITCHING_TO_JTC")
                 self.set_state(self.SWITCHING_TO_JTC)
 
-        # ── SWITCHING_TO_JTC ──────────────────────────────────────────
+        # ── SWITCHING_TO_JTC ──────────────────────────────────────────────
         elif self.state == self.SWITCHING_TO_JTC:
             if self._switch_future is None:
                 if not self.switch_to_jtc_client.service_is_ready():
@@ -365,7 +500,71 @@ class Z1FSM(Node):
                 self.get_logger().error(f"❌ Switch fallito: {result.message}")
                 self.set_state(self.FAULT)
 
-        # ── FAULT ─────────────────────────────────────────────────────
+        # ── HOMING ────────────────────────────────────────────────────────
+        elif self.state == self.HOMING:
+            if not self._homing_command_sent:
+                self.ik_done = False
+                home_pose = self._make_home_pose()
+                self.pub_ik_goal.publish(home_pose)
+                self.pub_ik_enable.publish(Bool(data=True))
+                self._homing_command_sent = True
+                self.get_logger().info(
+                    f"🏠 HOMING: goal inviato → poi {self._homing_next_state} | "
+                    f"pos=[{self._home_position[0]:.3f}, "
+                    f"{self._home_position[1]:.3f}, "
+                    f"{self._home_position[2]:.3f}]"
+                )
+                return
+
+            if self.ik_done:
+                self.pub_ik_enable.publish(Bool(data=False))
+                self.get_logger().info(
+                    f"✅ HOMING completato → {self._homing_next_state}"
+                )
+                self.set_state(self._homing_next_state)
+
+        # ── EMERGENCY_SWITCHING ───────────────────────────────────────────
+        # Usato quando arriva un comando keyboard (emergency o home) mentre
+        # il torque_controller potrebbe essere attivo.
+        # Azione: switch forzato a JTC, poi HOMING con _homing_next_state.
+        elif self.state == self.EMERGENCY_SWITCHING:
+            if self._switch_future is None:
+                if not self.switch_to_jtc_client.service_is_ready():
+                    self.get_logger().warn(
+                        "⏳ /safe_switch/to_jtc non disponibile (EMERGENCY_SWITCHING)...",
+                        throttle_duration_sec=2.0,
+                    )
+                    return
+                self.get_logger().info(
+                    "📞 EMERGENCY_SWITCHING: chiamata /safe_switch/to_jtc"
+                )
+                self._switch_future = self.switch_to_jtc_client.call_async(
+                    Trigger.Request()
+                )
+                return
+
+            if not self._switch_future.done():
+                return
+
+            result = self._switch_future.result()
+            if result.success:
+                self.get_logger().info(
+                    f"✅ Switch to JTC (emergency) → HOMING → {self._homing_next_state}"
+                )
+                self.set_state(self.HOMING)
+            else:
+                self.get_logger().error(
+                    f"❌ Switch fallito (EMERGENCY_SWITCHING): {result.message} → EMERGENCY"
+                )
+                self.set_state(self.EMERGENCY)
+
+        # ── EMERGENCY ─────────────────────────────────────────────────────
+        # Stato bloccante: tutto disabilitato.
+        # Uscita solo via comando "reset" da tastiera.
+        elif self.state == self.EMERGENCY:
+            pass   # attende _on_keyboard_cmd con cmd="reset"
+
+        # ── FAULT ─────────────────────────────────────────────────────────
         elif self.state == self.FAULT:
             self.pub_ik_enable.publish(Bool(data=False))
 
@@ -373,7 +572,7 @@ class Z1FSM(Node):
             self.set_state(self.FAULT)
 
 
-# ====================================================================== #
+# ======================================================================== #
 def main(args=None):
     rclpy.init(args=args)
     node = Z1FSM()

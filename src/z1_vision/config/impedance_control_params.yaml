@@ -1,39 +1,49 @@
 impedance_controller_realsense:
   ros__parameters:
-    urdf_path: '/home/andrea/Ros2_repositories/unitree_z1_ws/install/z1_description/share/z1_description/urdf/z1.urdf'
-    end_effector_frame: 'link06'
-    control_rate: 500.0
-    log_rate: 2.0
 
-    # Controllo posizione (cartesiano)
+    # ── Modello robot ──────────────────────────────────────────────
+    urdf_path:            '/home/andrea/Ros2_repositories/unitree_z1_ws/install/z1_description/share/z1_description/urdf/z1.urdf'
+    end_effector_frame:   'link06'
+
+    # ── Rate ───────────────────────────────────────────────────────
+    control_rate: 500.0         # [Hz]
+    log_rate:     2.0           # [Hz]
+
+    # ── Guadagni cartesiani (traslazione) ── TUNED ─────────────────
     K_p_translation: [200.0, 200.0, 300.0]
-    K_d_translation: [20.0, 20.0, 30.0]
-    K_i_translation: [0.3, 0.3, 0.5]
+    K_d_translation: [20.0,  20.0,  30.0]
+    K_i_translation: [0.3,   0.3,   0.5]
 
-    # Rotazioni cartesiane (non usate, mantenute per compatibilità)
+    # ── Guadagni cartesiani (rotazione) — non usati ────────────────
     K_p_rotation: [10.0, 10.0, 10.0]
-    K_d_rotation: [1.0, 1.0, 1.0]
-    K_i_rotation: [0.0, 0.0, 0.0]
+    K_d_rotation: [1.0,  1.0,  1.0]
+    K_i_rotation: [0.0,  0.0,  0.0]
 
-    # Controllo orientamento (joint-space su polso)
+    # ── Controllo orientamento polso (joint-space J4-J6) ── TUNED ──
     control_wrist_orientation: true
     K_p_wrist_joints: [40.0, 40.0, 40.0]
-    K_d_wrist_joints: [4.0, 4.0, 4.0]
+    K_d_wrist_joints: [4.0,  4.0,  4.0]
 
-    # Parametri generali
+    # ── Parametri generali ── TUNED ────────────────────────────────
     integral_limit: 0.02
-    torque_limit: 70.0
+    torque_limit:   70.0        # [Nm]
+    max_step_distance: 0.40     # [m] limite sicurezza step x_desired
 
-    safe_startup_duration: 3.0
+    # ── Avvio sicuro ───────────────────────────────────────────────
+    safe_startup_duration: 3.0  # [s]
 
-    # Nuovi parametri per approach lungo la normale
-    max_approach_distance: 0.20
-    approach_speed: 0.01
-
-    # Compensazione dinamica
+    # ── Compensazione dinamica ── TUNED ────────────────────────────
     gravity_scale_factor_j2: 1.3
 
-    use_surface_frame: true
+    # ── Approccio lungo la normale superficie ── TUNED ────────────
+    use_surface_frame:      true
+    desired_normal_offset:  -0.205  # [m] offset fisso: 20.5 cm prima della superficie
+    max_approach_distance:   0.20   # [m] avanzamento impedance (20 cm)
+    approach_speed:          0.01   # [m/s]
 
-    # Coerente con FSM (pre_contact_normal_offset=-0.205) + impedenza (0.20m) => finale -0.005
-    desired_normal_offset: -0.205
+    # ── Hold al contatto ───────────────────────────────────────────
+    hold_time: 10.0             # [s] tempo fermo prima del retract
+
+    # ── Topic interface FSM ────────────────────────────────────────
+    impedance_enable_topic: '/impedance_enable'
+    impedance_done_topic:   '/impedance_done'

@@ -1,21 +1,24 @@
 z1_ik_to_jtc:
   ros__parameters:
-    urdf_path: '/home/andrea/Ros2_repositories/unitree_z1_ws/install/z1_description/share/z1_description/urdf/z1.urdf'
-    end_effector_frame: 'link06'
-    base_frame: world
-    ee_frame: link06
 
-    controller_action: /joint_trajectory_controller/follow_joint_trajectory
+    # ── Modello robot ──────────────────────────────────────────────
+    urdf_path:  '/home/andrea/Ros2_repositories/unitree_z1_ws/install/z1_description/share/z1_description/urdf/z1.urdf'
+    base_frame: 'world'
+    ee_frame:   'link06'
 
-    joint_names: [joint1, joint2, joint3, joint4, joint5, joint6]
+    # ── Topic interface FSM ────────────────────────────────────────
+    ik_goal_topic:   '/ik_goal_pose'
+    ik_enable_topic: '/ik_enable'
+    ik_done_topic:   '/ik_done'
 
-    traj_duration: 20
-    traj_points: 60
-
+    # ── IK solver (damped pseudo-inverse Jacobian) ─────────────────
     ik_max_iter: 200
-    ik_tol: 1.0e-4
-    ik_damping: 1.0e-3
-    ik_step: 0.5
-    ik_joint_limit_margin: 1.0e-3
+    ik_tol:      1.0e-4
+    ik_damping:  1.0e-3
+    ik_alpha:    0.5            # step size dell'integrazione
 
-    use_orientation: true
+    # ── Traiettoria JTC (smoothstep quintica) ──────────────────────
+    max_joint_vel: 0.6          # [rad/s] velocità massima joint
+    traj_min_time: 1.0          # [s]    durata minima traiettoria
+    traj_max_time: 10.0         # [s]    durata massima traiettoria
+    traj_points:   25           # numero di waypoint (>= 3)

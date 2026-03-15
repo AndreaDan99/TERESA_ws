@@ -41,6 +41,7 @@ setup(
             'safe_controller_switch = z1_vision.safe_controller_switch:main',
             'z1_ik_to_jtc = z1_vision.z1_ik_to_jtc:main',
             'z1_FSM = z1_vision.z1_FSM:main',
+            'z1_keyboard_safety = z1_vision.z1_keyboard_safety:main',
         ],
     },
 )
