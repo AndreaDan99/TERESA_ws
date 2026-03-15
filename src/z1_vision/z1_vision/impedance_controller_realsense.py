@@ -14,8 +14,8 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import PoseStamped, WrenchStamped
-from std_msgs.msg import Float64MultiArray, Float32, Bool, String
-from tf_transformations import quaternion_matrix  
+from std_msgs.msg import Float64MultiArray, Float32, Bool
+from tf_transformations import quaternion_matrix
 
 import signal
 
@@ -25,7 +25,7 @@ class ImpedanceController(Node):
         super().__init__('impedance_controller_realsense')
 
         signal.signal(signal.SIGINT, self.shutdown_handler)
-        
+
         # Parametri del controller
         self.declare_parameters(
             namespace='',
@@ -34,737 +34,528 @@ class ImpedanceController(Node):
                 ('end_effector_frame', 'link06'),
                 ('control_rate', 500.0),
                 ('log_rate', 2.0),
-                
+
                 # Controllo posizione (cartesiano)
                 ('K_p_translation', [250.0, 250.0, 300.0]),
                 ('K_d_translation', [15.0, 15.0, 15.0]),
                 ('K_i_translation', [0.0, 0.0, 0.0]),
-                
+
                 # Rotazioni cartesiane (non usate, mantenute per compatibilità)
                 ('K_p_rotation', [0.0, 0.0, 0.0]),
                 ('K_d_rotation', [0.0, 0.0, 0.0]),
                 ('K_i_rotation', [0.0, 0.0, 0.0]),
-                
+
                 # Controllo orientamento (joint-space su polso J4-J5-J6)
                 ('control_wrist_orientation', True),
                 ('K_p_wrist_joints', [40.0, 40.0, 40.0]),
                 ('K_d_wrist_joints', [4.0, 4.0, 4.0]),
-                
+
                 # Parametri generali
                 ('integral_limit', 0.05),
                 ('torque_limit', 70.0),
                 ('safe_startup_duration', 3.0),
                 ('max_step_distance', 0.40),
-                
+
                 # Compensazione dinamica
                 ('gravity_scale_factor_j2', 1.3),
+
                 # Integrazione RealSense/superficie
-                ('use_surface_frame', False),
-                ('desired_normal_offset', -0.005),  # [m] offset lungo normale superficie
-                ('max_approach_distance', 0.20),
-                ('approach_speed', 0.01),
+                ('desired_normal_offset', -0.005),   # [m] offset fisso lungo normale
+                ('max_approach_distance', 0.20),      # [m] 20 cm di avanzamento
+                ('approach_speed', 0.01),             # [m/s]
+
+                # Tempo di hold al contatto
+                ('hold_time', 10.0),              # [s]
+
+                # Topic interface FSM
+                ('impedance_enable_topic', '/impedance_enable'),
+                ('impedance_done_topic',   '/impedance_done'),
             ]
         )
-        
+
         # Carica parametri
-        urdf_path = self.get_parameter('urdf_path').value
-        self.ee_frame_name = self.get_parameter('end_effector_frame').value
-        control_rate = self.get_parameter('control_rate').value
-        self.log_rate = self.get_parameter('log_rate').value
-        self.torque_limit = self.get_parameter('torque_limit').value
+        urdf_path             = self.get_parameter('urdf_path').value
+        self.ee_frame_name    = self.get_parameter('end_effector_frame').value
+        control_rate          = self.get_parameter('control_rate').value
+        self.log_rate         = self.get_parameter('log_rate').value
+        self.torque_limit     = self.get_parameter('torque_limit').value
         self.safe_startup_duration = self.get_parameter('safe_startup_duration').value
         self.max_step_distance = self.get_parameter('max_step_distance').value
         self.gravity_scale_j2 = self.get_parameter('gravity_scale_factor_j2').value
-        
+
+        self.desired_normal_offset  = self.get_parameter('desired_normal_offset').value
+        self.max_approach_distance  = self.get_parameter('max_approach_distance').value
+        self.approach_speed         = self.get_parameter('approach_speed').value
+        self.hold_time              = float(self.get_parameter('hold_time').value)
+
+        impedance_enable_topic = self.get_parameter('impedance_enable_topic').value
+        impedance_done_topic   = self.get_parameter('impedance_done_topic').value
+
         # Carica modello Pinocchio
         self.get_logger().info(f'Caricamento URDF da: {urdf_path}')
         self.model = pin.buildModelFromUrdf(urdf_path)
-        self.data = self.model.createData()
-        
-        # Trova frame end-effector
+        self.data  = self.model.createData()
+
         if self.model.existFrame(self.ee_frame_name):
             self.ee_frame_id = self.model.getFrameId(self.ee_frame_name)
             self.get_logger().info(f'Frame EE: {self.ee_frame_name} (id: {self.ee_frame_id})')
         else:
             raise ValueError(f'Frame {self.ee_frame_name} non esiste')
-        
+
         # Matrici PID cartesiane (6x6)
         K_p_trans = np.array(self.get_parameter('K_p_translation').value)
-        K_p_rot = np.array(self.get_parameter('K_p_rotation').value)
-        self.K_p = np.diag(np.concatenate([K_p_trans, K_p_rot]))
-        
+        K_p_rot   = np.array(self.get_parameter('K_p_rotation').value)
+        self.K_p  = np.diag(np.concatenate([K_p_trans, K_p_rot]))
+
         K_d_trans = np.array(self.get_parameter('K_d_translation').value)
-        K_d_rot = np.array(self.get_parameter('K_d_rotation').value)
-        self.K_d = np.diag(np.concatenate([K_d_trans, K_d_rot]))
-        
+        K_d_rot   = np.array(self.get_parameter('K_d_rotation').value)
+        self.K_d  = np.diag(np.concatenate([K_d_trans, K_d_rot]))
+
         K_i_trans = np.array(self.get_parameter('K_i_translation').value)
-        K_i_rot = np.array(self.get_parameter('K_i_rotation').value)
-        self.K_i = np.diag(np.concatenate([K_i_trans, K_i_rot]))
-        
+        K_i_rot   = np.array(self.get_parameter('K_i_rotation').value)
+        self.K_i  = np.diag(np.concatenate([K_i_trans, K_i_rot]))
+
         self.integral_limit = self.get_parameter('integral_limit').value
-        
+
         # Guadagni polso (joint-space)
         self.control_wrist = self.get_parameter('control_wrist_orientation').value
         self.K_p_wrist = np.array(self.get_parameter('K_p_wrist_joints').value)
         self.K_d_wrist = np.array(self.get_parameter('K_d_wrist_joints').value)
-        
-        # Parametri RealSense
-        self.use_surface_frame = self.get_parameter('use_surface_frame').get_parameter_value().bool_value
-        self.desired_normal_offset = self.get_parameter('desired_normal_offset').get_parameter_value().double_value
-
-        self.get_logger().info('='*70)
-        self.get_logger().info(f'🔍 DEBUG PARAMETRI REALSENSE:')
-        self.get_logger().info(f'   use_surface_frame = {self.use_surface_frame}')
-        self.get_logger().info(f'   desired_normal_offset = {self.desired_normal_offset}')
-        self.get_logger().info('='*70)
-
-        self.max_approach_distance = self.get_parameter('max_approach_distance').value
-        self.approach_speed = self.get_parameter('approach_speed').value
-
-        self.approach_distance_accum = 0.0
-        self.contact_detected = False
 
         # Stato robot
-        self.n_joints = 6
-        self.q = np.zeros(self.model.nq)
-        self.dq = np.zeros(self.model.nv)
-        self.state_received = False
-        
+        self.n_joints         = 6
+        self.q                = np.zeros(self.model.nq)
+        self.dq               = np.zeros(self.model.nv)
+        self.state_received   = False
+
         # Posa desiderata (cartesiana)
-        self.x_desired = None
+        self.x_desired             = None
         self.x_desired_initialized = False
-        
+
         # Target orientamento polso (joint-space)
         self.q_desired_wrist = None
-        
-        # Controllo PID
-        self.control_dt = 1.0 / control_rate
-        self.error_integral = np.zeros(6)
-        self.scale_j2_filtered = 1.0  # valore iniziale neutro
 
-        # Safe startup mode
-        self.safe_startup_mode = True
+        # Controllo PID
+        self.control_dt       = 1.0 / control_rate
+        self.error_integral   = np.zeros(6)
+        self.scale_j2_filtered = 1.0
+
+        # Safe startup
+        self.safe_startup_mode    = True
         self.safe_startup_counter = 0
-        
-        # Statistiche
-        self.iteration_count = 0
-        self.error_norm_pos = 0.0
-        self.error_norm_rot = 0.0
-        self.error_norm_wrist = 0.0
-        self.vel_norm = 0.0
-        self.force_norm = 0.0
-        self.max_torque = 0.0
-        self.sum_error_pos = 0.0
-        self.sum_error_rot = 0.0
-        self.max_error_pos = 0.0
-        self.max_error_rot = 0.0
-        
+
+        # ── Interfaccia FSM ────────────────────────────────────────
+        # Fasi interne: IDLE → APPROACH → HOLD → RETRACT → DONE
+        self.impedance_enabled       = False
+        self._phase                  = 'IDLE'   # fase interna
+        self.approach_distance_accum = 0.0
+        self._hold_start_time        = None     # rclpy.Time quando inizia HOLD
+        self._done_published         = False
+        self._wrist_latched          = False
 
         # Stato superficie (RealSense)
         self.surface_frame = None
         self.surface_signed_distance = 0.0
-        self.torso_visible = False  
-        self.target_lock_valid = False
 
-        self.sm_state = "WAITING"
-        self.prev_sm_state = self.sm_state
+        # Statistiche
+        self.iteration_count  = 0
+        self.error_norm_pos   = 0.0
+        self.error_norm_wrist = 0.0
+        self.vel_norm         = 0.0
+        self.force_norm       = 0.0
+        self.max_torque       = 0.0
+        self.sum_error_pos    = 0.0
+        self.max_error_pos    = 0.0
 
-        # Subscribers
+        # ── Subscribers ───────────────────────────────────────────
         self.joint_state_sub = self.create_subscription(
             JointState, '/joint_states', self.joint_state_callback, 10
         )
-        self.desired_pose_sub = self.create_subscription(
-            PoseStamped, '/torso_command_ee', self.desired_pose_callback, 10
+        self.sub_enable = self.create_subscription(
+            Bool, impedance_enable_topic, self.enable_callback, 10
         )
         self.impedance_params_sub = self.create_subscription(
             Float64MultiArray, '/set_impedance', self.impedance_callback, 10
         )
-
-        # Surface estimation from RealSense
         self.surface_sub = self.create_subscription(
-            PoseStamped,
-            '/torso_surface_frame',
-            self.surface_callback,
-            10
+            PoseStamped, '/torso_surface_frame', self.surface_callback, 10
         )
-
         self.surface_dist_sub = self.create_subscription(
-            Float32,
-            '/surface_signed_distance',
-            self.surface_dist_callback,
-            10
-        )
-        self.torso_visible_sub = self.create_subscription(
-            Bool, '/torso_visible', self.torso_visible_callback, 10
-        )
-        
-        self.sm_state_sub = self.create_subscription(
-            String, '/torso_sm_state', self.sm_state_callback, 10
-        )
-        self.sub_lock_valid = self.create_subscription(
-            Bool, '/target_lock_valid', self.cb_lock_valid, 10
+            Float32, '/surface_signed_distance', self.surface_dist_callback, 10
         )
 
-        # Publishers
-        self.torque_pub = self.create_publisher(Float64MultiArray, '/torque_controller/commands', 10)
-        self.current_pose_pub = self.create_publisher(PoseStamped, '/current_ee_pose', 10)
-        self.wrench_pub = self.create_publisher(WrenchStamped, '/cartesian_wrench', 10)
-        self.pub_unreachable = self.create_publisher(Bool, '/target_unreachable', 10)
-        self.pub_contact = self.create_publisher(Bool, '/impedance_contact_detected', 10)
-        self.pub_retract_done = self.create_publisher(Bool, '/impedance_retract_done', 10)
-        
-        # Timers
-        self.timer = self.create_timer(self.control_dt, self.control_loop)
-        self.log_timer = self.create_timer(1.0 / self.log_rate, self.print_status)
-        
-        # Log inizializzazione
+        # ── Publishers ────────────────────────────────────────────
+        self.torque_pub       = self.create_publisher(Float64MultiArray, '/torque_controller/commands', 10)
+        self.current_pose_pub = self.create_publisher(PoseStamped,       '/current_ee_pose',            10)
+        self.wrench_pub       = self.create_publisher(WrenchStamped,     '/cartesian_wrench',           10)
+        self.pub_done         = self.create_publisher(Bool,              impedance_done_topic,          10)
+
+        # ── Timers ────────────────────────────────────────────────
+        self.timer     = self.create_timer(self.control_dt,          self.control_loop)
+        self.log_timer = self.create_timer(1.0 / self.log_rate,      self.print_status)
+
         self.get_logger().info('='*70)
-        self.get_logger().info('IMPEDANCE CONTROLLER V3 INIZIALIZZATO')
-        self.get_logger().info('Controllo Ibrido: Posizione Cartesiana + Orientamento Joint-Space')
+        self.get_logger().info('IMPEDANCE CONTROLLER INIZIALIZZATO')
         self.get_logger().info(f'Control: {control_rate} Hz | Log: {self.log_rate} Hz')
         self.get_logger().info(f'K_p_translation: {K_p_trans}')
         self.get_logger().info(f'K_d_translation: {K_d_trans}')
-        self.get_logger().info(f'K_i_translation: {K_i_trans}')
         self.get_logger().info(f'Controllo polso: {self.control_wrist}')
-        if self.control_wrist:
-            self.get_logger().info(f'K_p_wrist: {self.K_p_wrist}')
-            self.get_logger().info(f'K_d_wrist: {self.K_d_wrist}')
         self.get_logger().info(f'Gravity scale J2: {self.gravity_scale_j2}')
         self.get_logger().info(f'Torque limit: {self.torque_limit} Nm')
         self.get_logger().info(f'Safe startup: {self.safe_startup_duration}s')
-        self.get_logger().info(f'Max step distance: {self.max_step_distance*1000:.0f}mm')
+        self.get_logger().info(f'Max approach: {self.max_approach_distance*100:.0f} cm')
+        self.get_logger().info(f'Enable topic: {impedance_enable_topic}')
+        self.get_logger().info(f'Done topic:   {impedance_done_topic}')
         self.get_logger().info('='*70)
 
+    # ──────────────────────────────────────────────────────────────
     def shutdown_handler(self, signum, frame):
         self.get_logger().info('🛑 Shutdown richiesto...')
-        
-        # Invia coppia zero
         zero_torque = Float64MultiArray()
         zero_torque.data = [0.0] * 6
-        
-        for _ in range(20):  # 0.1s @ 200Hz
+        for _ in range(20):
             self.torque_pub.publish(zero_torque)
             time.sleep(0.005)
-        
         self.get_logger().info('✅ Coppia azzerata!')
         sys.exit(0)
 
+    # ──────────────────────────────────────────────────────────────
+    # Callbacks
+    # ──────────────────────────────────────────────────────────────
     def joint_state_callback(self, msg):
-        """Callback per aggiornare lo stato dei giunti"""
         if len(msg.position) < self.n_joints:
             return
-        
-        self.q[:self.n_joints] = np.array(msg.position[:self.n_joints])
+        self.q[:self.n_joints]  = np.array(msg.position[:self.n_joints])
         self.dq[:self.n_joints] = (
-            np.array(msg.velocity[:self.n_joints]) 
-            if len(msg.velocity) >= self.n_joints 
+            np.array(msg.velocity[:self.n_joints])
+            if len(msg.velocity) >= self.n_joints
             else np.zeros(self.n_joints)
         )
         self.state_received = True
-    
-    def desired_pose_callback(self, msg):
-        """Callback per aggiornare la posa desiderata con validazione"""
-        # Impedance controller does not use torso_command_ee anymore
-        # Movement is driven only by surface normal during IMPEDANCE state
-        return
-    
+
+    def enable_callback(self, msg: Bool):
+        prev = self.impedance_enabled
+        self.impedance_enabled = bool(msg.data)
+
+        if not self.impedance_enabled and prev:
+            # Disabilitato: reset completo
+            self._phase                  = 'IDLE'
+            self.approach_distance_accum = 0.0
+            self._hold_start_time        = None
+            self._done_published         = False
+            self._wrist_latched          = False
+            self.x_desired_initialized   = False
+            self.get_logger().info('🛑 Impedance disabled — reset')
+
+        if self.impedance_enabled and not prev:
+            self._phase                  = 'APPROACH'
+            self.approach_distance_accum = 0.0
+            self._hold_start_time        = None
+            self._done_published         = False
+            self._wrist_latched          = False
+            self.get_logger().info('✅ Impedance enabled — fase APPROACH')
+
     def impedance_callback(self, msg):
-        """Callback per modificare parametri di impedenza online"""
         if len(msg.data) == 12:
             self.K_p = np.diag(msg.data[:6])
             self.K_d = np.diag(msg.data[6:])
-            self.get_logger().info(f'Impedenza aggiornata: K_p={msg.data[:3]}, K_d={msg.data[6:9]}')
-        else:
-            self.get_logger().warn(f'Formato impedance non valido: attesi 12 valori, ricevuti {len(msg.data)}')
-
-    def torso_visible_callback(self, msg: Bool):
-        """✅ Flag torso rilevato da YOLO"""
-        prev = self.torso_visible
-        self.torso_visible = msg.data
-        if prev != self.torso_visible:
-            if self.torso_visible:
-                self.get_logger().info('👤 Torso RILEVATO - surface attiva')
-            else:
-                self.get_logger().info('👻 Torso PERSO - surface disattivata')
 
     def surface_callback(self, msg: PoseStamped):
-        """Callback per superficie stimata da RealSense"""
         self.surface_frame = msg
 
-    def cb_lock_valid(self, msg: Bool):
-        self.target_lock_valid = bool(msg.data)
-        
     def surface_dist_callback(self, msg: Float32):
-        """Callback per distanza firmata TCP-superficie"""
         self.surface_signed_distance = msg.data
 
-    def sm_state_callback(self, msg: String):
-        self.sm_state = msg.data
-
-
-    def _is_impedance_active(self, state: str) -> bool:
-        return state in ("IMPEDANCE_CONTACT", "HOLD_CONTACT", "IMPEDANCE_RETRACT")
-
-    def publish_contact(self, detected: bool):
-        msg = Bool()
-        msg.data = bool(detected)
-        self.pub_contact.publish(msg)
-
-    def publish_retract_done(self, done: bool):
-        msg = Bool()
-        msg.data = bool(done)
-        self.pub_retract_done.publish(msg)
-
+    # ──────────────────────────────────────────────────────────────
+    # Control loop
+    # ──────────────────────────────────────────────────────────────
     def control_loop(self):
-        """Loop principale di controllo"""
         if not self.state_received:
             return
-        
-        # Aggiorna cinematica e dinamica
+
         pin.forwardKinematics(self.model, self.data, self.q, self.dq)
         pin.updateFramePlacements(self.model, self.data)
-        
+
         # ========== SAFE STARTUP MODE ==========
         if self.safe_startup_mode:
             self.safe_startup_counter += 1
             elapsed = self.safe_startup_counter * self.control_dt
-            
+
             if elapsed < self.safe_startup_duration:
                 if self.safe_startup_counter == 1:
-                    x_current = self.data.oMf[self.ee_frame_id]
-                    self.x_startup = x_current.copy()
+                    x_current       = self.data.oMf[self.ee_frame_id]
+                    self.x_startup  = x_current.copy()
                     pos = self.x_startup.translation
                     self.get_logger().info('📍 SAFE STARTUP: Posizione bloccata a:')
                     self.get_logger().info(f'   [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]')
-                
+
                 x_current = self.data.oMf[self.ee_frame_id]
-                x_error = np.zeros(6)
+                x_error   = np.zeros(6)
                 x_error[:3] = self.x_startup.translation - x_current.translation
-                J = pin.computeFrameJacobian(
+
+                J  = pin.computeFrameJacobian(
                     self.model, self.data, self.q, self.ee_frame_id,
                     pin.ReferenceFrame.LOCAL_WORLD_ALIGNED
                 )
                 dx = J @ self.dq
-                # ✅ AGGIUNGI QUESTO (solo 1 volta all'avvio):
-                if self.iteration_count == 500:  # Dopo 1 secondo
-                    self.get_logger().info('='*70)
-                    self.get_logger().info('🔍 VERIFICA FRAME JACOBIANO:')
-                    self.get_logger().info(f'Frame reference usato: LOCAL_WORLD_ALIGNED (BASE FRAME)')
-                    self.get_logger().info(f'End-effector frame: {self.ee_frame_name}')
-                    self.get_logger().info('')
-                    self.get_logger().info('Jacobiano (prima riga = movimento X):')
-                    self.get_logger().info(f'  J[X,:] = {J[0,:3]}')
-                    self.get_logger().info('Jacobiano (terza riga = movimento Z):')
-                    self.get_logger().info(f'  J[Z,:] = {J[2,:3]}')
-                    self.get_logger().info('')
-                    self.get_logger().info('Se J[Z,1] (colonna J2) è il valore più grande in J[Z,:],')
-                    self.get_logger().info('allora il frame è CORRETTO (base frame).')
-                    self.get_logger().info('='*70)
-                K_p_startup = np.diag([200.0, 200.0, 200.0, 20.0, 20.0, 20.0])
-                K_d_startup = np.diag([20.0, 20.0, 20.0, 2.0, 2.0, 2.0])
-                
-                F_cartesian = K_p_startup @ x_error - K_d_startup @ dx
-                tau_impedance = (J.T @ F_cartesian)[:self.n_joints]
-                
-                tau_compensation = self.compute_compensation()
-                
-                tau_total = tau_impedance + tau_compensation
-                #tau_total = tau_impedance
-                tau_total = np.clip(tau_total, -self.torque_limit, self.torque_limit)
-                
+
+                K_p_s = np.diag([200.0, 200.0, 200.0, 20.0, 20.0, 20.0])
+                K_d_s = np.diag([20.0,  20.0,  20.0,  2.0,  2.0,  2.0])
+
+                F_cartesian  = K_p_s @ x_error - K_d_s @ dx
+                tau_total    = (J.T @ F_cartesian)[:self.n_joints] + self.compute_compensation()
+                tau_total    = np.clip(tau_total, -self.torque_limit, self.torque_limit)
+
                 self.publish_torque(tau_total)
-                
-                if self.iteration_count % 250 == 0:
-                    pos = x_current.translation
-                    drift_mm = np.linalg.norm(x_error[:3]) * 1000
-                    self.get_logger().info(
-                        f'🔶 SAFE STARTUP: {elapsed:.1f}s/{self.safe_startup_duration:.1f}s | '
-                        f'Pos: [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}] | '
-                        f'Drift: {drift_mm:.1f}mm | τ_max: {np.max(np.abs(tau_total)):.2f}Nm'
-                    )
-                
                 self.iteration_count += 1
                 return
             else:
-                self.x_desired = self.x_startup.copy()
+                self.x_desired             = self.data.oMf[self.ee_frame_id].copy()
                 self.x_desired_initialized = True
-                
-                # Inizializza target polso
                 if self.control_wrist:
                     self.q_desired_wrist = self.q[3:6].copy()
-                
                 self.safe_startup_mode = False
-                
                 pos = self.x_desired.translation
                 self.get_logger().info('='*70)
                 self.get_logger().info('✅ SAFE STARTUP COMPLETATO')
-                self.get_logger().info(
-                    f'   Target posizione: [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]'
-                )
-                if self.control_wrist:
-                    self.get_logger().info(
-                        f'   Target polso: [{np.rad2deg(self.q_desired_wrist[0]):.1f}°, '
-                        f'{np.rad2deg(self.q_desired_wrist[1]):.1f}°, {np.rad2deg(self.q_desired_wrist[2]):.1f}°]'
-                    )
-                self.get_logger().info('   Impedance control ATTIVO - Pronto per comandi!')
+                self.get_logger().info(f'   Target: [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]')
                 self.get_logger().info('='*70)
 
         # ========== CONTROLLO NORMALE ==========
-
         x_current = self.data.oMf[self.ee_frame_id]
         self.publish_current_pose(x_current)
 
-        # =====================================================
-        # LATCH WRIST ORIENTATION ON ENTRY TO IMPEDANCE MODE
-        # =====================================================
-        if self.control_wrist and (not self._is_impedance_active(self.prev_sm_state)) and self._is_impedance_active(self.sm_state):
-            # Blocca l'orientamento del polso (J4-J5-J6) esattamente nella configurazione corrente.
-            # Questo garantisce orientazione costante durante gli ultimi 20 cm in impedenza.
-            self.q_desired_wrist = self.q[3:6].copy()
-            self.get_logger().info('🔒 Wrist orientation latched (J4-J6) at impedance entry')
-
-        # Aggiorna prev state
-        self.prev_sm_state = self.sm_state
-
-        if not self.x_desired_initialized:
-            self.x_desired = x_current.copy()
-            self.x_desired_initialized = True
-            if self.control_wrist:
-                self.q_desired_wrist = self.q[3:6].copy()
-            pos = self.x_desired.translation
-            self.get_logger().info(f'Target iniziale: [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]')
-
-
-        # =====================================================
-        # IMPEDANCE MODE ACTIVE ONLY IN SPECIFIC FSM STATES
-        # =====================================================
-        if self.sm_state not in ("IMPEDANCE_CONTACT", "HOLD_CONTACT", "IMPEDANCE_RETRACT"):
-            # Stay passive: hold current position and reset approach/contact
-            self.x_desired = x_current.copy()
+        # ── Se non abilitato: tieni posizione corrente, azzera stato ──
+        if not self.impedance_enabled:
+            self.x_desired             = x_current.copy()
             self.approach_distance_accum = 0.0
-            self.contact_detected = False
-            self.publish_contact(False)
-            self.publish_retract_done(False)
-
-            # Rilascia latch polso quando esci dall'impedenza
+            self._done_published         = False
             if self.control_wrist:
                 self.q_desired_wrist = None
-
+            # Mantieni ancora la coppia per non cadere
+            self._run_impedance(x_current)
             return
 
-        # =====================================================
-        # APPROACH ALONG SURFACE NORMAL (MAX 20 cm)
-        # =====================================================
-        if self.surface_frame is None or not self.target_lock_valid:
+        # ── Latch orientamento polso al primo tick abilitato ──────────
+        if not self._wrist_latched and self.control_wrist:
+            self.q_desired_wrist = self.q[3:6].copy()
+            self._wrist_latched  = True
+            self.get_logger().info('🔒 Wrist orientation latched (J4-J6)')
+
+        # ── Inizializza x_desired se necessario ───────────────────────
+        if not self.x_desired_initialized:
+            self.x_desired             = x_current.copy()
+            self.x_desired_initialized = True
+
+        # ── Safety: serve la superficie ───────────────────────────────
+        if self.surface_frame is None:
+            self.get_logger().warn(
+                '⚠️ /torso_surface_frame non ancora disponibile',
+                throttle_duration_sec=2.0
+            )
+            self._run_impedance(x_current)
             return
 
+        # ── Calcola normale superficie (comune a tutte le fasi) ───────
         surf_pose = self.surface_frame.pose
-        q_surf = [
-            surf_pose.orientation.x,
-            surf_pose.orientation.y,
-            surf_pose.orientation.z,
-            surf_pose.orientation.w,
-        ]
-        T_surf = quaternion_matrix(q_surf)
-        R_surf = T_surf[:3, :3]
-        p_surf = np.array([
-            surf_pose.position.x,
-            surf_pose.position.y,
-            surf_pose.position.z
+        T_surf    = quaternion_matrix([
+            surf_pose.orientation.x, surf_pose.orientation.y,
+            surf_pose.orientation.z, surf_pose.orientation.w,
         ])
-
-        normal = R_surf[:, 2]
+        R_surf = T_surf[:3, :3]
+        p_surf = np.array([surf_pose.position.x, surf_pose.position.y, surf_pose.position.z])
+        normal = R_surf[:, 2]  # asse Z del frame superficie = normale
 
         step = self.approach_speed * self.control_dt
 
-        if self.sm_state == "IMPEDANCE_CONTACT":
-            # Avanza lungo la normale fino a max_approach_distance
-            if not self.contact_detected:
-                self.approach_distance_accum = min(
-                    self.approach_distance_accum + step,
-                    self.max_approach_distance
+        # ── Fase APPROACH: avanza fino a max_approach_distance ────────
+        if self._phase == 'APPROACH':
+            self.approach_distance_accum = min(
+                self.approach_distance_accum + step,
+                self.max_approach_distance
+            )
+            if self.approach_distance_accum >= self.max_approach_distance:
+                self._phase           = 'HOLD'
+                self._hold_start_time = self.get_clock().now()
+                self.get_logger().info(
+                    f'📍 APPROACH completato ({self.max_approach_distance*100:.0f} cm) → HOLD {self.hold_time:.0f}s'
                 )
-            self.publish_retract_done(False)
 
-        elif self.sm_state == "IMPEDANCE_RETRACT":
-            # Ritrai lungo la normale tornando indietro fino a 0
+        # ── Fase HOLD: rimani fermo per hold_time secondi ─────────────
+        elif self._phase == 'HOLD':
+            elapsed = (self.get_clock().now() - self._hold_start_time).nanoseconds * 1e-9
+            if elapsed >= self.hold_time:
+                self._phase = 'RETRACT'
+                self.get_logger().info(
+                    f'↩️  HOLD completato ({elapsed:.1f}s) → RETRACT'
+                )
+
+        # ── Fase RETRACT: torna indietro lungo la stessa normale ──────
+        elif self._phase == 'RETRACT':
             self.approach_distance_accum = max(
                 self.approach_distance_accum - step,
                 0.0
             )
-            done = (self.approach_distance_accum <= 1e-6)
-            self.publish_retract_done(done)
+            if self.approach_distance_accum <= 0.0:
+                self._phase = 'DONE'
+                self.get_logger().info('✅ RETRACT completato → DONE')
 
-        else:
-            # HOLD_CONTACT: non modificare la distanza accumulata
-            self.publish_retract_done(False)
+        # ── Fase DONE: pubblica done (una volta) e attendi disable ────
+        elif self._phase == 'DONE':
+            if not self._done_published:
+                self.pub_done.publish(Bool(data=True))
+                self._done_published = True
+                self.get_logger().info('🏁 /impedance_done pubblicato')
 
-        target_pos = p_surf + (self.desired_normal_offset + 
-                               self.approach_distance_accum) * normal
-
+        # ── Aggiorna target in base alla distanza accumulata ──────────
+        target_pos     = p_surf + (self.desired_normal_offset + self.approach_distance_accum) * normal
         self.x_desired = pin.SE3(R_surf, target_pos)
 
+        self._run_impedance(x_current)
 
-        # ========================================
-        # CALCOLO ERRORE 
-        # ========================================
-        x_error = np.zeros(6)  # ✅ INIZIALIZZA PRIMA!
-        x_error[:3] = self.x_desired.translation - x_current.translation  # [X, Y, Z]
-        # x_error[3:6] rimane a zero (nessun controllo rotazionale cartesiano)
+    # ──────────────────────────────────────────────────────────────
+    def _run_impedance(self, x_current):
+        """Calcola e pubblica la coppia impedenza con compensazione dinamica."""
+        if not self.x_desired_initialized or self.x_desired is None:
+            return
 
-        # Calcola Jacobiano e velocità cartesiana
-        J = pin.computeFrameJacobian(
+        x_error = np.zeros(6)
+        x_error[:3] = self.x_desired.translation - x_current.translation
+
+        J  = pin.computeFrameJacobian(
             self.model, self.data, self.q, self.ee_frame_id,
             pin.ReferenceFrame.LOCAL_WORLD_ALIGNED
         )
-        dx = J @ self.dq  
+        dx = J @ self.dq
 
-        # Anti-windup intelligente
-        error_norm_total = np.linalg.norm(x_error[:3])  # ✅ Usa solo errore posizione
-        if error_norm_total > 0.020:  # ✅ Abbassato da 0.15m (150mm) a 25mm
+        # Anti-windup
+        error_norm = np.linalg.norm(x_error[:3])
+        if error_norm > 0.020:
             self.error_integral *= 0.90
         else:
             self.error_integral += x_error * self.control_dt
-            self.error_integral = np.clip(self.error_integral, -self.integral_limit, self.integral_limit)
+            self.error_integral  = np.clip(self.error_integral, -self.integral_limit, self.integral_limit)
 
-        # ── Scaling adattivo Kp/Kd in funzione dell'estensione ──────────
-        reach_xy = np.linalg.norm(x_current.translation[:2])
+        # Scaling adattivo Kp/Kd in funzione dell'estensione
+        reach_xy   = np.linalg.norm(x_current.translation[:2])
         reach_norm = np.clip(reach_xy / 0.6, 0.0, 1.0)
-
-        scale_kp = 1.0 - 0.65 * reach_norm   # 1.0 (rannicchiato) → 0.35 (disteso)
-        scale_kd = 1.0 + 1.00 * reach_norm   # 1.0 (rannicchiato) → 2.0  (disteso)
+        scale_kp   = 1.0 - 0.65 * reach_norm
+        scale_kd   = 1.0 + 1.00 * reach_norm
 
         K_p_eff = self.K_p * scale_kp
         K_d_eff = self.K_d * scale_kd
-        F_max = 80.0  # Newton, limite di sicurezza
+        F_max   = 80.0
 
-        F_cartesian = K_p_eff @ x_error - K_d_eff @ dx + self.K_i @ self.error_integral
-        F_cartesian = np.clip(F_cartesian, -F_max, F_max)
+        F_cartesian    = K_p_eff @ x_error - K_d_eff @ dx + self.K_i @ self.error_integral
+        F_cartesian    = np.clip(F_cartesian, -F_max, F_max)
+        F_cartesian[3:6] = 0.0  # nessun controllo rotazionale cartesiano
 
-        # Disabilita controllo rotazionale cartesiano (già zero, ma per sicurezza)
-        F_cartesian[3:6] = 0.0
-
-        # ===== DEBUG: LOG DETTAGLIATO =====
-        if self.iteration_count % 500 == 0:
-            x_curr = x_current.translation
-            x_targ = self.x_desired.translation
-            
-            kp_x = self.K_p[0, 0]
-            kp_y = self.K_p[1, 1]
-            kp_z = self.K_p[2, 2]
-            
-            self.get_logger().info(
-                f'\n{"="*70}\n'
-                f'DEBUG IMPEDANCE - Iter {self.iteration_count}\n'
-                f'{"="*70}\n'
-                f'POSIZIONI:\n'
-                f'  Corrente: [{x_curr[0]:.4f}, {x_curr[1]:.4f}, {x_curr[2]:.4f}]\n'
-                f'  Target:   [{x_targ[0]:.4f}, {x_targ[1]:.4f}, {x_targ[2]:.4f}]\n'
-                f'\n'
-                f'ERRORE (target - corrente):\n'
-                f'  X: {x_error[0]*1000:+7.2f} mm\n'
-                f'  Y: {x_error[1]*1000:+7.2f} mm\n'
-                f'  Z: {x_error[2]*1000:+7.2f} mm\n'
-                f'\n'
-                f'FORZA CARTESIANA:\n'
-                f'  F_x: {F_cartesian[0]:+7.2f} N\n'
-                f'  F_y: {F_cartesian[1]:+7.2f} N\n'
-                f'  F_z: {F_cartesian[2]:+7.2f} N\n'
-                f'\n'
-                f'FORZA ATTESA (K_p * errore):\n'
-                f'  F_x: {kp_x*x_error[0]:+7.2f} N\n'
-                f'  F_y: {kp_y*x_error[1]:+7.2f} N\n'
-                f'  F_z: {kp_z*x_error[2]:+7.2f} N\n'
-                f'{"="*70}'
-            )
-
-        # =====================================================
-        # SIMPLE CONTACT DETECTION
-        # =====================================================
-        if self.sm_state in ("IMPEDANCE_CONTACT", "HOLD_CONTACT"):
-            if abs(self.surface_signed_distance) < 0.002:  # 2 mm threshold
-                self.contact_detected = True
-            self.publish_contact(self.contact_detected)
-        else:
-            # In retrazione non vogliamo tenere la FSM bloccata su "contact"
-            self.contact_detected = False
-            self.publish_contact(False)
-
-        # Proietta forza cartesiana in coppie giunti
         tau_impedance = (J.T @ F_cartesian)[:self.n_joints]
 
-        # ========== CONTROLLO ORIENTAMENTO (Joint-Space) ==========
+        # Controllo orientamento polso (joint-space)
         if self.control_wrist and self.q_desired_wrist is not None:
-            q_error_wrist = self.q_desired_wrist - self.q[3:6]
-            dq_wrist = self.dq[3:6]
-            tau_wrist = self.K_p_wrist * q_error_wrist - self.K_d_wrist * dq_wrist
+            q_error_wrist      = self.q_desired_wrist - self.q[3:6]
+            tau_wrist          = self.K_p_wrist * q_error_wrist - self.K_d_wrist * self.dq[3:6]
             tau_impedance[3:6] += tau_wrist
-            self.error_norm_wrist = np.linalg.norm(q_error_wrist)
+            self.error_norm_wrist = float(np.linalg.norm(q_error_wrist))
 
-        # Compensazione dinamica
-        tau_compensation = self.compute_compensation()
-
-        # ===== DEBUG LOG SEGNI =====
-        if self.iteration_count % 500 == 0:
-            self.get_logger().info(
-                f'🔍 DEBUG SEGNI:\n'
-                f'  x_error[2]: {x_error[2]*1000:+.2f} mm\n'
-                f'  F_z: {F_cartesian[2]:+.2f} N\n'
-                f'  tau_imp[J2]: {tau_impedance[1]:+.2f} Nm\n'
-                f'  tau_comp[J2]: {tau_compensation[1]:+.2f} Nm\n'
-                f'  tau_total[J2]: {(tau_impedance[1] + tau_compensation[1]):+.2f} Nm'
-            )
-
-        # Coppia totale
-        tau_total = tau_impedance + tau_compensation
+        tau_total = tau_impedance + self.compute_compensation()
         tau_total = np.clip(tau_total, -self.torque_limit, self.torque_limit)
 
-        # Pubblica comandi
         self.publish_torque(tau_total)
         self.publish_wrench(F_cartesian)
 
-        # Aggiorna statistiche
+        # Statistiche
         self.iteration_count += 1
-        self.error_norm_pos = np.linalg.norm(x_error[:3])
-        self.error_norm_rot = 0.0  # ✅ Sempre zero (nessun controllo rot cartesiano)
-        self.vel_norm = np.linalg.norm(dx)
-        self.force_norm = np.linalg.norm(F_cartesian)
-        self.max_torque = np.max(np.abs(tau_total))
+        self.error_norm_pos = float(np.linalg.norm(x_error[:3]))
+        self.vel_norm       = float(np.linalg.norm(dx))
+        self.force_norm     = float(np.linalg.norm(F_cartesian))
+        self.max_torque     = float(np.max(np.abs(tau_total)))
         self.sum_error_pos += self.error_norm_pos
-        self.sum_error_rot += self.error_norm_rot
-        self.max_error_pos = max(self.max_error_pos, self.error_norm_pos)
-        self.max_error_rot = max(self.max_error_rot, self.error_norm_rot)
+        self.max_error_pos  = max(self.max_error_pos, self.error_norm_pos)
 
+    # ──────────────────────────────────────────────────────────────
     def compute_compensation(self):
-        tau_gravity = pin.computeGeneralizedGravity(self.model, self.data, self.q)
-        
-        aq_zero = np.zeros(self.model.nv)
-        tau_rnea = pin.rnea(self.model, self.data, self.q, self.dq, aq_zero)
+        tau_gravity  = pin.computeGeneralizedGravity(self.model, self.data, self.q)
+        aq_zero      = np.zeros(self.model.nv)
+        tau_rnea     = pin.rnea(self.model, self.data, self.q, self.dq, aq_zero)
         tau_coriolis = tau_rnea - tau_gravity
-        
-        tau_comp = tau_gravity + tau_coriolis
+        tau_comp     = tau_gravity + tau_coriolis
 
-        # ── Scale adattivo J2 in funzione dell'estensione XY ──────────
-        ee_pos = self.data.oMf[self.ee_frame_id].translation
-        reach_xy = np.linalg.norm(ee_pos[:2])
-        reach_xy_norm = np.clip(reach_xy / 0.3, 0.0, 1.0)  # satura a 0.3m
-        scale_j2_raw = self.gravity_scale_j2 - (self.gravity_scale_j2 - 1.0) * reach_xy_norm
+        # Scale adattivo J2 in funzione dell'estensione XY
+        ee_pos       = self.data.oMf[self.ee_frame_id].translation
+        reach_xy     = np.linalg.norm(ee_pos[:2])
+        reach_norm   = np.clip(reach_xy / 0.3, 0.0, 1.0)
+        scale_j2_raw = self.gravity_scale_j2 - (self.gravity_scale_j2 - 1.0) * reach_norm
 
-        # Filtro passa-basso: alpha piccolo = variazione lenta
-        alpha = 0.02  # era 0.005
-
+        alpha                  = 0.02
         self.scale_j2_filtered = alpha * scale_j2_raw + (1.0 - alpha) * self.scale_j2_filtered
-        tau_comp[1] = tau_gravity[1] * self.scale_j2_filtered + tau_coriolis[1]
-
-        # # ── Scale adattivo J4-J5 in funzione dell'estensione ──────────
-        # scale_j4 = 1.0 + 0.2 * reach_xy_norm   # più leggero, polso pesa meno
-        # scale_j5 = 1.0 + 0.2 * reach_xy_norm
-
-        # tau_comp[3] = tau_gravity[3] * scale_j4 + tau_coriolis[3]
-        # tau_comp[4] = tau_gravity[4] * scale_j5 + tau_coriolis[4]
-
-        if self.iteration_count % 500 == 0:
-            self.get_logger().info(
-                f'GRAVITY J2: {tau_gravity[1]:.2f} Nm | '
-                f'reach_xy: {reach_xy:.3f}m | '
-                f'scale_j2: {self.scale_j2_filtered:.3f} | '
-                f'SCALED: {tau_gravity[1] * self.scale_j2_filtered:.2f} Nm | '
-                f'TOTAL COMP: {tau_comp[1]:.2f} Nm'
-                f'GRAVITY J4: {tau_gravity[3]:.2f} Nm | '
-                #f'SCALED: {tau_gravity[3]*scale_j4:.2f} Nm | '
-                f'GRAVITY J5: {tau_gravity[4]:.2f} Nm | '
-                #f'SCALED: {tau_gravity[4]*scale_j5:.2f} Nm'
-                f'scale_j2_raw: {scale_j2_raw:.3f} | '
-                f'scale_j2_filt: {self.scale_j2_filtered:.3f} | '
-
-                
-            )
-            if self.iteration_count % 500 == 0:
-                self.get_logger().info(
-                    f'POLSO tau_total: '
-                    f'J4={tau_comp[3]:+.3f}Nm  '
-                    f'J5={tau_comp[4]:+.3f}Nm  '
-                    f'J6={tau_comp[5]:+.3f}Nm | '
-                    f'q: [{np.rad2deg(self.q[3]):.1f}°, '
-                    f'{np.rad2deg(self.q[4]):.1f}°, '
-                    f'{np.rad2deg(self.q[5]):.1f}°]'
-                )
+        tau_comp[1]            = tau_gravity[1] * self.scale_j2_filtered + tau_coriolis[1]
 
         return tau_comp[:self.n_joints]
 
-
+    # ──────────────────────────────────────────────────────────────
     def publish_torque(self, tau):
-        """Pubblica comandi di coppia"""
-        msg = Float64MultiArray()
+        msg      = Float64MultiArray()
         msg.data = tau.tolist()
         self.torque_pub.publish(msg)
-    
+
     def publish_current_pose(self, x_current):
-        """Pubblica posa corrente end-effector"""
-        msg = PoseStamped()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = 'world'
-        msg.pose.position.x = x_current.translation[0]
-        msg.pose.position.y = x_current.translation[1]
-        msg.pose.position.z = x_current.translation[2]
-        quat = pin.Quaternion(x_current.rotation)
+        msg                  = PoseStamped()
+        msg.header.stamp     = self.get_clock().now().to_msg()
+        msg.header.frame_id  = 'world'
+        msg.pose.position.x  = x_current.translation[0]
+        msg.pose.position.y  = x_current.translation[1]
+        msg.pose.position.z  = x_current.translation[2]
+        quat                 = pin.Quaternion(x_current.rotation)
         msg.pose.orientation.w = quat.w
         msg.pose.orientation.x = quat.x
         msg.pose.orientation.y = quat.y
         msg.pose.orientation.z = quat.z
         self.current_pose_pub.publish(msg)
-    
+
     def publish_wrench(self, F_cartesian):
-        """Pubblica wrench cartesiano"""
-        msg = WrenchStamped()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = self.ee_frame_name
-        msg.wrench.force.x = F_cartesian[0]
-        msg.wrench.force.y = F_cartesian[1]
-        msg.wrench.force.z = F_cartesian[2]
-        msg.wrench.torque.x = F_cartesian[3]
-        msg.wrench.torque.y = F_cartesian[4]
-        msg.wrench.torque.z = F_cartesian[5]
+        msg                  = WrenchStamped()
+        msg.header.stamp     = self.get_clock().now().to_msg()
+        msg.header.frame_id  = self.ee_frame_name
+        msg.wrench.force.x   = F_cartesian[0]
+        msg.wrench.force.y   = F_cartesian[1]
+        msg.wrench.force.z   = F_cartesian[2]
+        msg.wrench.torque.x  = F_cartesian[3]
+        msg.wrench.torque.y  = F_cartesian[4]
+        msg.wrench.torque.z  = F_cartesian[5]
         self.wrench_pub.publish(msg)
-    
+
     def print_status(self):
-        """Stampa status periodico"""
         if self.iteration_count == 0:
             return
-        
         avg_pos = self.sum_error_pos / self.iteration_count
-        avg_rot = self.sum_error_rot / self.iteration_count
-        
+        phase_str = self._phase if self.impedance_enabled else 'off'
         log_msg = (
+            f'[{phase_str:8s}] '
             f'Iter: {self.iteration_count:6d} | '
             f'Err_pos: {self.error_norm_pos*1000:6.2f}mm (avg: {avg_pos*1000:6.2f}mm) | '
+            f'dist: {self.approach_distance_accum*100:5.1f}/{self.max_approach_distance*100:.0f}cm | '
             f'Vel: {self.vel_norm:5.3f} | F: {self.force_norm:6.1f}N | τ: {self.max_torque:5.2f}Nm'
         )
-        
-        if self.control_wrist and hasattr(self, 'error_norm_wrist'):
-            log_msg += f' | Err_wrist: {np.rad2deg(self.error_norm_wrist):5.2f}°'
-        
+        if self.control_wrist:
+            log_msg += f' | Wrist: {np.rad2deg(self.error_norm_wrist):5.2f}°'
         self.get_logger().info(log_msg)
 
 
 def main(args=None):
     rclpy.init(args=args)
     controller = ImpedanceController()
-    
     try:
         rclpy.spin(controller)
     except KeyboardInterrupt:
         if controller.iteration_count > 0:
             avg_pos = controller.sum_error_pos / controller.iteration_count
-            avg_rot = controller.sum_error_rot / controller.iteration_count
             controller.get_logger().info('='*70)
             controller.get_logger().info('STATISTICHE FINALI')
             controller.get_logger().info(f'Iterazioni: {controller.iteration_count}')
             controller.get_logger().info(
                 f'Errore pos: {avg_pos*1000:.2f}mm (max: {controller.max_error_pos*1000:.2f}mm)'
-            )
-            controller.get_logger().info(
-                f'Errore rot: {np.rad2deg(avg_rot):.2f}° (max: {np.rad2deg(controller.max_error_rot):.2f}°)'
             )
             controller.get_logger().info('='*70)
     finally:

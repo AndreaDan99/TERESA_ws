@@ -11,13 +11,20 @@ Procedure:
 2. Send hold command to the controller that must remain active
 3. Wait stabilization
 4. Perform controller switch
+
+Espone i servizi:
+- /safe_switch/to_torque  (std_srvs/Trigger)
+- /safe_switch/to_jtc     (std_srvs/Trigger)
 """
 
 import rclpy
 from rclpy.node import Node
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup
 import time
 import numpy as np
 
+from std_srvs.srv import Trigger
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
@@ -37,12 +44,11 @@ class SafeControllerSwitch(Node):
 
         self.current_q = None
 
-        # Switch direction parameter
-        self.declare_parameter('switch_direction', 'to_torque')
-        self.switch_direction = self.get_parameter('switch_direction').value
+        # Callback group reentrant: i service handler possono bloccare senza
+        # impedire al nodo di ricevere altri topic (es. joint_states)
+        self.cb_group = ReentrantCallbackGroup()
 
-
-        # Subscriber joint states
+        # Subscriber joint states (sempre aggiornato)
         self.js_sub = self.create_subscription(
             JointState,
             '/joint_states',
@@ -56,82 +62,106 @@ class SafeControllerSwitch(Node):
             10
         )
 
-        # Publisher trajectory controller
         self.traj_pub = self.create_publisher(
             JointTrajectory,
             '/joint_trajectory_controller/joint_trajectory',
             10
         )
 
-        # Client switch controller
+        # Client switch / list controller
         self.switch_client = self.create_client(
             SwitchController,
             '/controller_manager/switch_controller'
         )
-
-        # Client list controllers (per verifica stato)
         self.list_client = self.create_client(
             ListControllers,
             '/controller_manager/list_controllers'
         )
 
-        self.get_logger().info('⏳ Safe Switch: attendo joint_states...')
+        # Servizi esposti verso la FSM
+        self.srv_to_torque = self.create_service(
+            Trigger,
+            '/safe_switch/to_torque',
+            self.handle_to_torque,
+            callback_group=self.cb_group
+        )
+        self.srv_to_jtc = self.create_service(
+            Trigger,
+            '/safe_switch/to_jtc',
+            self.handle_to_jtc,
+            callback_group=self.cb_group
+        )
 
+        self.get_logger().info('✅ SafeControllerSwitch pronto.')
+        self.get_logger().info('   /safe_switch/to_torque')
+        self.get_logger().info('   /safe_switch/to_jtc')
+
+    # ──────────────────────────────────────────────────────────────
     def joint_state_callback(self, msg: JointState):
-        if self.current_q is None:
-            if len(msg.position) >= 6:
-                self.current_q = list(msg.position[:6])
-                self.get_logger().info(
-                    f'✅ Posizione letta: {[f"{np.rad2deg(q):.1f}°" for q in self.current_q]}'
-                )
+        if len(msg.position) >= 6:
+            self.current_q = list(msg.position[:6])
 
-    def run(self):
-        """Sequenza principale - chiamata dopo init"""
+    # ──────────────────────────────────────────────────────────────
+    # Service handlers
+    # ──────────────────────────────────────────────────────────────
+    def handle_to_torque(self, request, response):
+        self.get_logger().info('🔄 Richiesta switch JTC → torque_controller')
+        success = self._execute_switch('to_torque')
+        response.success = success
+        response.message = 'OK' if success else 'FAILED'
+        return response
 
-        # 1. Aspetta di ricevere joint_states (max 5 secondi)
-        timeout = 5.0
+    def handle_to_jtc(self, request, response):
+        self.get_logger().info('🔄 Richiesta switch torque_controller → JTC')
+        success = self._execute_switch('to_jtc')
+        response.success = success
+        response.message = 'OK' if success else 'FAILED'
+        return response
+
+    # ──────────────────────────────────────────────────────────────
+    # Sequenza di switch
+    # ──────────────────────────────────────────────────────────────
+    def _execute_switch(self, direction: str) -> bool:
+        # 1. Aspetta joint_states (max 5s)
         start = time.time()
         while self.current_q is None:
-            rclpy.spin_once(self, timeout_sec=0.1)
-            if time.time() - start > timeout:
+            time.sleep(0.1)
+            if time.time() - start > 5.0:
                 self.get_logger().error('❌ Timeout: nessun joint_state ricevuto!')
                 return False
 
-        # 2. Congela il robot sulla posizione attuale
+        # 2. Congela robot sulla posizione attuale
         self.get_logger().info('🔒 Congelo robot sulla posizione attuale...')
         self._hold_current_position()
-
-        # 3. Aspetta 500ms che il trajectory controller sia stabile
         time.sleep(0.5)
 
-        # 4. Switch controller
-        self.get_logger().info(f'🔄 Eseguo switch: {self.switch_direction}')
-        success = self._do_switch()
-
-        # Se sto tornando a JTC, azzera torque per un breve tempo prima dello switch (riduce scatti)
-        if self.switch_direction == 'to_jtc':
-            start = time.time()
-            while time.time() - start < 0.2:
+        # 3. Se torno a JTC, azzera il torque prima dello switch
+        if direction == 'to_jtc':
+            deadline = time.time() + 0.2
+            while time.time() < deadline:
                 msg = Float64MultiArray()
                 msg.data = [0.0] * 6
                 self.torque_pub.publish(msg)
-                rclpy.spin_once(self, timeout_sec=0.01)
                 time.sleep(0.01)
 
-        if success and self.switch_direction == 'to_torque':
-            self.get_logger().info('⏳ Hold durante avvio impedance...')
-            start = time.time()
-            while time.time() - start < 1.0:   # 1 secondo di hold
+        # 4. Switch
+        self.get_logger().info(f'🔄 Eseguo switch: {direction}')
+        success = self._do_switch(direction)
+
+        # 5. Dopo switch a torque: pubblica zero per 1s (impedance safe startup)
+        if success and direction == 'to_torque':
+            self.get_logger().info('⏳ Hold zero-torque durante avvio impedance (1s)...')
+            deadline = time.time() + 1.0
+            while time.time() < deadline:
                 msg = Float64MultiArray()
                 msg.data = [0.0] * 6
                 self.torque_pub.publish(msg)
-                rclpy.spin_once(self, timeout_sec=0.01)
                 time.sleep(0.01)
 
         return success
 
+    # ──────────────────────────────────────────────────────────────
     def _hold_current_position(self):
-        """Manda la posizione attuale come goal statico al trajectory controller"""
         traj = JointTrajectory()
         traj.header.stamp = self.get_clock().now().to_msg()
         traj.joint_names = self.JOINT_NAMES
@@ -140,25 +170,21 @@ class SafeControllerSwitch(Node):
         pt.positions = self.current_q
         pt.velocities = [0.0] * 6
         pt.accelerations = [0.0] * 6
-        # Raggiungi questa posizione in 200ms (è già lì, quindi è un hold)
         pt.time_from_start = Duration(sec=0, nanosec=200_000_000)
 
         traj.points = [pt]
         self.traj_pub.publish(traj)
         self.get_logger().info('📌 Goal "hold" pubblicato sul trajectory controller')
 
-    def _get_controllers_state(self):
-        """Ritorna dict {name: state} per i controller noti."""
+    def _get_controllers_state(self, timeout=2.0):
         if not self.list_client.wait_for_service(timeout_sec=2.0):
             self.get_logger().error('❌ Servizio list_controllers non disponibile!')
             return None
 
-        req = ListControllers.Request()
-        future = self.list_client.call_async(req)
+        future = self.list_client.call_async(ListControllers.Request())
         start = time.time()
-        timeout = 2.0
         while not future.done():
-            rclpy.spin_once(self, timeout_sec=0.1)
+            time.sleep(0.05)
             if time.time() - start > timeout:
                 self.get_logger().error('❌ Timeout list_controllers!')
                 return None
@@ -167,13 +193,9 @@ class SafeControllerSwitch(Node):
         if res is None:
             return None
 
-        out = {}
-        for c in res.controller:
-            out[c.name] = c.state
-        return out
+        return {c.name: c.state for c in res.controller}
 
-    def _wait_expected_states(self, expected: dict, timeout: float = 3.0):
-        """Attende che i controller raggiungano gli stati attesi (es: {'torque_controller':'active'})."""
+    def _wait_expected_states(self, expected: dict, timeout=3.0) -> bool:
         start = time.time()
         while time.time() - start < timeout:
             states = self._get_controllers_state()
@@ -181,96 +203,75 @@ class SafeControllerSwitch(Node):
                 time.sleep(0.1)
                 continue
 
-            ok = True
-            for name, st in expected.items():
-                if states.get(name) != st:
-                    ok = False
-                    break
-
-            if ok:
+            if all(states.get(name) == st for name, st in expected.items()):
                 return True
 
-            rclpy.spin_once(self, timeout_sec=0.05)
             time.sleep(0.05)
 
-        self.get_logger().error(f"❌ Stati controller non raggiunti entro {timeout:.1f}s: atteso={expected}")
-        self.get_logger().error(f"   stati attuali={states}")
+        self.get_logger().error(
+            f'❌ Stati controller non raggiunti entro {timeout:.1f}s: atteso={expected}'
+        )
         return False
 
-    def _do_switch(self):
+    def _do_switch(self, direction: str) -> bool:
         if not self.switch_client.wait_for_service(timeout_sec=3.0):
             self.get_logger().error('❌ Servizio switch_controller non disponibile!')
             return False
 
         req = SwitchController.Request()
 
-        if self.switch_direction == 'to_torque':
+        if direction == 'to_torque':
             req.activate_controllers   = ['torque_controller']
             req.deactivate_controllers = ['joint_trajectory_controller']
-
-        elif self.switch_direction == 'to_jtc':
-            req.activate_controllers   = ['joint_trajectory_controller']
-            req.deactivate_controllers = ['torque_controller']
-
-        else:
-            self.get_logger().error(f'❌ switch_direction non valido: {self.switch_direction}')
-            return False
-
-        req.strictness = 1   # BEST_EFFORT
-        req.activate_asap = True
-
-        future = self.switch_client.call_async(req)
-
-        timeout = 3.0
-        start = time.time()
-        while not future.done():
-            rclpy.spin_once(self, timeout_sec=0.1)
-            if time.time() - start > timeout:
-                self.get_logger().error('❌ Timeout switch controller!')
-                return False
-
-        result = future.result()
-        if result.ok:
-            self.get_logger().info('✅ Switch riuscito!')
-        else:
-            self.get_logger().error('❌ Switch fallito (result.ok = false)')
-            return False
-
-        # Verifica stato attivo/disattivo
-        if self.switch_direction == 'to_torque':
             expected = {
                 'torque_controller': 'active',
                 'joint_trajectory_controller': 'inactive'
             }
-        else:
+        elif direction == 'to_jtc':
+            req.activate_controllers   = ['joint_trajectory_controller']
+            req.deactivate_controllers = ['torque_controller']
             expected = {
                 'joint_trajectory_controller': 'active',
                 'torque_controller': 'inactive'
             }
-
-        if not self._wait_expected_states(expected, timeout=3.0):
+        else:
+            self.get_logger().error(f'❌ direction non valida: {direction}')
             return False
 
-        return True
+        req.strictness = 1
+        req.activate_asap = True
+
+        future = self.switch_client.call_async(req)
+        start = time.time()
+        while not future.done():
+            time.sleep(0.05)
+            if time.time() - start > 3.0:
+                self.get_logger().error('❌ Timeout switch controller!')
+                return False
+
+        if not future.result().ok:
+            self.get_logger().error('❌ Switch fallito (result.ok = false)')
+            return False
+
+        self.get_logger().info('✅ Switch riuscito! Verifico stati...')
+        return self._wait_expected_states(expected, timeout=3.0)
 
 
-def main():
-    rclpy.init()
+# ==============================================================
+def main(args=None):
+    rclpy.init(args=args)
     node = SafeControllerSwitch()
 
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
+
     try:
-        success = node.run()
-    except Exception as e:
-        node.get_logger().error(f'❌ Errore: {e}')
-        success = False
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
     finally:
         node.destroy_node()
         rclpy.shutdown()
-
-    # Exit code: 0 = successo (il launch avvierà l'impedance controller)
-    # Exit code: 1 = fallito
-    import sys
-    sys.exit(0 if success else 1)
 
 
 if __name__ == '__main__':
