@@ -7,6 +7,7 @@ Stati interni: IDLE → ESTIMATING → LOCKED
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from message_filters import Subscriber, ApproximateTimeSynchronizer
 
 from sensor_msgs.msg import Image, CameraInfo
@@ -123,8 +124,14 @@ class Z1YoloTorsoTracker(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # ── Subscribers (NUOVA FSM) ────────────────────────────────
-        self.sub_rgb   = Subscriber(self, Image, '/camera/camera/color/image_raw')
-        self.sub_depth = Subscriber(self, Image, '/camera/camera/depth/image_rect_raw')
+        # RealSense pubblica con BEST_EFFORT — il subscriber deve matchare
+        sensor_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+        self.sub_rgb   = Subscriber(self, Image, '/camera/camera/color/image_raw',   qos_profile=sensor_qos)
+        self.sub_depth = Subscriber(self, Image, '/camera/camera/depth/image_rect_raw', qos_profile=sensor_qos)
         self.sync = ApproximateTimeSynchronizer(
             [self.sub_rgb, self.sub_depth], queue_size=sync_queue_size, slop=sync_slop)
         self.sync.registerCallback(self.cb_synchronized)
