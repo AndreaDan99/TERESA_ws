@@ -380,14 +380,27 @@ class ImpedanceController(Node):
 
         # ── Latch superficie al primo tick di APPROACH ────────────────
         # Congela p_surf e normal per tutta la sequenza approach/hold/retract
-        # evitando salti del target se la persona si sposta durante l'avanzamento
+        # evitando salti del target se la persona si sposta durante l'avanzamento.
+        # In più: calcola approach_distance_accum iniziale proiettando l'EE corrente
+        # sulla retta di approccio — il target parte esattamente da dove il robot è,
+        # eliminando lo scatto brusco al momento dell'enable.
         if self._phase == 'APPROACH' and not self._surface_latched:
             self._p_surf_latched  = p_surf.copy()
             self._normal_latched  = normal.copy()
             self._surface_latched = True
+
+            # Proiezione EE sulla normale: accum = dot(ee - p_surf, n) - offset
+            ee_pos = x_current.translation
+            proj   = float(np.dot(ee_pos - p_surf, normal))
+            self.approach_distance_accum = float(np.clip(
+                proj - self.desired_normal_offset,
+                0.0,
+                self.max_approach_distance
+            ))
             self.get_logger().info(
                 f'🔒 Superficie latched: p=[{p_surf[0]:.3f},{p_surf[1]:.3f},{p_surf[2]:.3f}] '
-                f'n=[{normal[0]:.2f},{normal[1]:.2f},{normal[2]:.2f}]'
+                f'n=[{normal[0]:.2f},{normal[1]:.2f},{normal[2]:.2f}] | '
+                f'accum_init={self.approach_distance_accum*100:.1f}cm'
             )
 
         # Usa valori latched se disponibili, altrimenti quelli correnti

@@ -29,6 +29,12 @@ z1_FSM:
     # [0,0,0] se world == base frame (configurazione standard Z1 su TERESA)
     arm_base_pos: [0.0, 0.0, 0.0]  # [m]
 
+    # ── Debug ──────────────────────────────────────────────────────
+    # Se true: dopo WAIT_IK_DONE torna in WAITING senza avviare impedance.
+    # Usare per verificare che il JTC allinei correttamente l'EE alla normale
+    # prima di abilitare il torque controller.
+    skip_impedance: true   # ← mettere false per il ciclo completo
+
     # ── Home position ──────────────────────────────────────────────
     # Posa cartesiana in cui il braccio va all'avvio (HOMING) e quando
     # si preme H o ESC sulla tastiera.

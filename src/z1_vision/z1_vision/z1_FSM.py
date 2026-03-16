@@ -60,6 +60,13 @@ class Z1FSM(Node):
         self.impedance_enable_topic = self.get_parameter("impedance_enable_topic").value
         self.impedance_done_topic   = self.get_parameter("impedance_done_topic").value
 
+        # ── Debug: skip impedance per verificare solo allineamento JTC ──
+        # Se True: dopo WAIT_IK_DONE torna in WAITING senza avviare impedance.
+        # Utile per verificare visivamente se il JTC allinea l'EE alla normale
+        # prima di abilitare il torque controller.
+        self.declare_parameter("skip_impedance", False)
+        self._skip_impedance = bool(self.get_parameter("skip_impedance").value)
+
         # ── Workspace out-of-range topic ────────────────────────────────
         self.declare_parameter("target_out_of_workspace_topic", "/target_out_of_workspace")
         self.target_out_of_workspace_topic = self.get_parameter(
@@ -435,7 +442,16 @@ class Z1FSM(Node):
 
             if self.ik_done:
                 self.pub_ik_enable.publish(Bool(data=False))
-                self.set_state(self.SWITCHING_TO_TORQUE)
+                if self._skip_impedance:
+                    # Modalità debug: salta impedance, torna in attesa
+                    # → permette di verificare visivamente l'allineamento JTC
+                    self.get_logger().warn(
+                        "⚠️  skip_impedance=True → IK completato, "
+                        "impedance SALTATA → WAITING"
+                    )
+                    self.set_state(self.WAITING)
+                else:
+                    self.set_state(self.SWITCHING_TO_TORQUE)
 
         # ── SWITCHING_TO_TORQUE ───────────────────────────────────────────
         elif self.state == self.SWITCHING_TO_TORQUE:
