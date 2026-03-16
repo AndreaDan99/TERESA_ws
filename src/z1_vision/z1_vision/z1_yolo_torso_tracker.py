@@ -72,6 +72,10 @@ class Z1YoloTorsoTracker(Node):
         # ── Parametri velocità ─────────────────────────────────────
         self.declare_parameter('tracking_speed',     0.05)   # invariato (interpolazione verso target)
 
+        # ── Parametri sync RGB+Depth ───────────────────────────────
+        self.declare_parameter('sync_slop',          0.10)   # secondi tolleranza sync timestamp
+        self.declare_parameter('sync_queue_size',    10)
+
         # ── Leggi parametri ────────────────────────────────────────
         self.conf_thr           = float(self.get_parameter('conf_thr').value)
         self.max_depth          = float(self.get_parameter('max_depth').value)
@@ -89,6 +93,8 @@ class Z1YoloTorsoTracker(Node):
 
         self.recovery_frames    = int(self.get_parameter('recovery_frames').value)
         self.tracking_speed     = float(self.get_parameter('tracking_speed').value)
+        sync_slop               = float(self.get_parameter('sync_slop').value)
+        sync_queue_size         = int(self.get_parameter('sync_queue_size').value)
 
         device = self.get_parameter('device').value
 
@@ -120,7 +126,7 @@ class Z1YoloTorsoTracker(Node):
         self.sub_rgb   = Subscriber(self, Image, '/camera/camera/color/image_raw')
         self.sub_depth = Subscriber(self, Image, '/camera/camera/depth/image_rect_raw')
         self.sync = ApproximateTimeSynchronizer(
-            [self.sub_rgb, self.sub_depth], queue_size=5, slop=0.05)
+            [self.sub_rgb, self.sub_depth], queue_size=sync_queue_size, slop=sync_slop)
         self.sync.registerCallback(self.cb_synchronized)
 
         self.sub_info = self.create_subscription(
