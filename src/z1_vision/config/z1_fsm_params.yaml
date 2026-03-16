@@ -37,5 +37,5 @@ z1_FSM:
     # home_orientation: [qx, qy, qz, qw]  (quaternione, frame world)
     #
     # Valori di default — da aggiornare con la posa di sicurezza reale:
-    home_position:    [0.3, 0.0, 0.3]        # [m]  x, y, z in world frame
-    home_orientation: [0.0, 0.0, 0.0, 1.0]  # [qx, qy, qz, qw]
+    home_position:    [0.1714, 0.0146, 0.5449]        # [m]  x, y, z in world frame
+    home_orientation: [-0.0155, 0.2918, 0.0748, 0.9543]  # [qx, qy, qz, qw]
