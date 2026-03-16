@@ -9,6 +9,8 @@ from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 from geometry_msgs.msg import PoseStamped
 
+from tf_transformations import quaternion_matrix, quaternion_from_matrix
+
 from z1_vision.workspace_checker import WorkspaceChecker
 
 
@@ -59,6 +61,16 @@ class Z1FSM(Node):
         self.declare_parameter("impedance_done_topic",   "/impedance_done")
         self.impedance_enable_topic = self.get_parameter("impedance_enable_topic").value
         self.impedance_done_topic   = self.get_parameter("impedance_done_topic").value
+
+        # ── Approccio perpendicolare alla superficie (surface frame) ───
+        # Il JTC goal viene calcolato come:
+        #   p_goal = p_surf + ik_approach_standoff * normal
+        # dove normal punta dalla superficie verso il robot (source: surface node).
+        # L'orientamento impone l'asse X dell'EE perpendicolare alla superficie (verso il torso).
+        self.declare_parameter("surface_frame_topic",  "/torso_surface_frame")
+        self.declare_parameter("ik_approach_standoff", 0.200)   # [m] distanza standoff dal torso
+        self._surface_frame_topic  = self.get_parameter("surface_frame_topic").value
+        self._ik_approach_standoff = float(self.get_parameter("ik_approach_standoff").value)
 
         # ── Debug: skip impedance per verificare solo allineamento JTC ──
         # Se True: dopo WAIT_IK_DONE torna in WAITING senza avviare impedance.
@@ -121,14 +133,18 @@ class Z1FSM(Node):
         self._target_out_of_ws     = False
 
         # ── Subscribers ─────────────────────────────────────────────────
-        self.last_torso_pose: PoseStamped | None = None
-        self.last_torso_time = None
-        self.ik_done         = False
-        self.impedance_done  = False
-        self._pending_keyboard_cmd: str | None = None
+        self.last_torso_pose: PoseStamped | None           = None
+        self.last_torso_time                               = None
+        self.ik_done                                       = False
+        self.impedance_done                                = False
+        self._pending_keyboard_cmd: str | None             = None
+        self._latest_surface_frame: PoseStamped | None     = None
 
         self.create_subscription(
             PoseStamped, self.torso_locked_topic, self.on_torso_locked, 10
+        )
+        self.create_subscription(
+            PoseStamped, self._surface_frame_topic, self._on_surface_frame, 10
         )
         self.create_subscription(Bool,   self.ik_done_topic,        self.on_ik_done,        10)
         self.create_subscription(Bool,   self.impedance_done_topic, self.on_impedance_done, 10)
@@ -184,6 +200,9 @@ class Z1FSM(Node):
     def on_torso_locked(self, msg: PoseStamped):
         self.last_torso_pose = msg
         self.last_torso_time = self.get_clock().now()
+
+    def _on_surface_frame(self, msg: PoseStamped):
+        self._latest_surface_frame = msg
 
     def on_ik_done(self, msg: Bool):
         if msg.data:
@@ -270,6 +289,68 @@ class Z1FSM(Node):
         msg.pose.position.y  = float(clipped_pos[1])
         msg.pose.position.z  = float(clipped_pos[2])
         return msg
+
+    def _make_approach_pose(self) -> PoseStamped | None:
+        """
+        Posa di approccio perpendicolare alla superficie del torso (stile ecografo):
+        - Posizione:    p_surf + standoff * normal   (standoff m davanti al torso)
+        - Orientamento: asse X dell'EE = -normal     (perpendicolare alla superficie, verso il torso)
+
+        Fallback al target torso grezzo se il surface frame non è disponibile.
+        """
+        if self._latest_surface_frame is None:
+            self.get_logger().warn(
+                '⚠️  surface_frame non disponibile → uso target grezzo (no orientamento)',
+                throttle_duration_sec=2.0,
+            )
+            return self._clipped_target if self._clipped_target is not None else self.last_torso_pose
+
+        sf     = self._latest_surface_frame
+        q_surf = [sf.pose.orientation.x, sf.pose.orientation.y,
+                  sf.pose.orientation.z, sf.pose.orientation.w]
+        R      = quaternion_matrix(q_surf)[:3, :3]
+        normal = R[:, 2]   # asse Z del surface frame = normale, punta dal torso verso il robot
+
+        p_surf = np.array([sf.pose.position.x, sf.pose.position.y, sf.pose.position.z])
+
+        # Assicura che la normale punti DAL torso VERSO il robot (arm_base).
+        # Il surface node a volte la flippa male quando il braccio è in home.
+        if np.dot(normal, self._arm_base - p_surf) < 0.0:
+            normal = -normal
+
+        p_approach = p_surf + self._ik_approach_standoff * normal   # standoff davanti al torso
+
+        # Orientamento: EE X = -normal (perpendicolare alla superficie, verso il torso)
+        x_ee = -normal
+        aux  = np.array([0.0, 0.0, 1.0])   # asse ausiliario = Z world (su)
+        if abs(np.dot(aux, x_ee)) > 0.9:   # se x_ee è quasi verticale usa Y
+            aux = np.array([0.0, 1.0, 0.0])
+        z_ee = np.cross(x_ee, aux);  z_ee /= np.linalg.norm(z_ee)
+        y_ee = np.cross(z_ee, x_ee); y_ee /= np.linalg.norm(y_ee)
+
+        T = np.eye(4)
+        T[:3, 0] = x_ee
+        T[:3, 1] = y_ee
+        T[:3, 2] = z_ee
+        q_approach = quaternion_from_matrix(T)
+
+        goal = PoseStamped()
+        goal.header.frame_id    = 'world'
+        goal.header.stamp       = self.get_clock().now().to_msg()
+        goal.pose.position.x    = float(p_approach[0])
+        goal.pose.position.y    = float(p_approach[1])
+        goal.pose.position.z    = float(p_approach[2])
+        goal.pose.orientation.x = float(q_approach[0])
+        goal.pose.orientation.y = float(q_approach[1])
+        goal.pose.orientation.z = float(q_approach[2])
+        goal.pose.orientation.w = float(q_approach[3])
+
+        self.get_logger().info(
+            f'🎯 IK goal: pos=[{p_approach[0]:.3f},{p_approach[1]:.3f},{p_approach[2]:.3f}] '
+            f'n=[{normal[0]:.2f},{normal[1]:.2f},{normal[2]:.2f}] '
+            f'standoff={self._ik_approach_standoff:.3f}m'
+        )
+        return goal
 
     def _make_home_pose(self) -> PoseStamped:
         """Costruisce un PoseStamped con la posizione home definita dai parametri YAML."""
@@ -424,11 +505,9 @@ class Z1FSM(Node):
             if not self._approach_command_sent:
                 self.ik_done = False
 
-                target = (
-                    self._clipped_target
-                    if self._clipped_target is not None
-                    else self.last_torso_pose
-                )
+                target = self._make_approach_pose()
+                if target is None:
+                    return
 
                 self.pub_ik_goal.publish(target)
                 self.pub_ik_enable.publish(Bool(data=True))

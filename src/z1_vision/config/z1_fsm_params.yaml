@@ -29,6 +29,12 @@ z1_FSM:
     # [0,0,0] se world == base frame (configurazione standard Z1 su TERESA)
     arm_base_pos: [0.0, 0.0, 0.0]  # [m]
 
+    # ── Approccio perpendicolare (surface frame) ───────────────────
+    # Il JTC porta l'EE a standoff metri davanti al torso, perpendicolare
+    # alla superficie (come un'ecografia). L'orientamento impone X = -normal.
+    surface_frame_topic:  "/torso_surface_frame"
+    ik_approach_standoff: 0.200   # [m] distanza di standoff dalla superficie
+
     # ── Debug ──────────────────────────────────────────────────────
     # Se true: dopo WAIT_IK_DONE torna in WAITING senza avviare impedance.
     # Usare per verificare che il JTC allinei correttamente l'EE alla normale

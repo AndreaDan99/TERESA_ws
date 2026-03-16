@@ -43,6 +43,7 @@ class Z1IKToJTC(Node):
         self.declare_parameter("traj_max_time", 10.0)   # s
 
         self.declare_parameter("ik_alpha", 0.50)
+        self.declare_parameter("ik_rot_weight", 0.5)  # peso errore angolare (0=solo pos, 1=uguale a pos)
 
         urdf_path = self.get_parameter("urdf_path").value
         self.base_frame = self.get_parameter("base_frame").value
@@ -60,8 +61,8 @@ class Z1IKToJTC(Node):
         self.traj_min_time = float(self.get_parameter("traj_min_time").value)
         self.traj_max_time = float(self.get_parameter("traj_max_time").value)
 
-        self.ik_alpha = float(self.get_parameter("ik_alpha").value)
-
+        self.ik_alpha      = float(self.get_parameter("ik_alpha").value)
+        self.ik_rot_weight = float(self.get_parameter("ik_rot_weight").value)
 
         # FSM gating + goal latching
         self.ik_enabled = False
@@ -154,6 +155,7 @@ class Z1IKToJTC(Node):
             current = self.data.oMf[self.ee_id]
 
             err = pin.log(current.inverse() * target_SE3).vector
+            err[:3] *= self.ik_rot_weight   # scala errore orientamento (primi 3 = ang, ultimi 3 = lin)
 
             if np.linalg.norm(err) < self.tol:
                 self.get_logger().info(f"🎯 IK converged in {i} iter")

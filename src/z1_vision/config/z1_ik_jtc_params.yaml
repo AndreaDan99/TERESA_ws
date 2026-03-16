@@ -12,10 +12,11 @@ z1_ik_to_jtc:
     ik_done_topic:   '/ik_done'
 
     # ── IK solver (damped pseudo-inverse Jacobian) ─────────────────
-    ik_max_iter: 200
-    ik_tol:      1.0e-4
-    ik_damping:  1.0e-3
-    ik_alpha:    0.5            # step size dell'integrazione
+    ik_max_iter:    200
+    ik_tol:         1.0e-4
+    ik_damping:     1.0e-3
+    ik_alpha:       0.5         # step size dell'integrazione
+    ik_rot_weight:  0.5         # peso errore angolare (0=solo posizione, 1=uguale alla posizione)
 
     # ── Traiettoria JTC (smoothstep quintica) ──────────────────────
     max_joint_vel: 0.6          # [rad/s] velocità massima joint
