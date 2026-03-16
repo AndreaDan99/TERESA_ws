@@ -20,7 +20,7 @@ impedance_controller_realsense:
     K_i_rotation: [0.0,  0.0,  0.0]
 
     # ── Controllo orientamento polso (joint-space J4-J6) ── TUNED ──
-    control_wrist_orientation: true
+    control_wrist_orientation: false   # disabilitato: JTC ha già orientato il polso
     K_p_wrist_joints: [40.0, 40.0, 40.0]
     K_d_wrist_joints: [4.0,  4.0,  4.0]
 

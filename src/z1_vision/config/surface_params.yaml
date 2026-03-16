@@ -8,3 +8,9 @@ realsense_surface_node:
     max_depth: 2.0
 
     desired_normal_offset: -0.005
+
+    # Gating: usa solo torso_target_ee_locked, non richiedere /target_lock_valid separato
+    require_lock_valid: false
+
+    # Debug markers su RViz (normale + punto superficie)
+    publish_debug_markers: true
