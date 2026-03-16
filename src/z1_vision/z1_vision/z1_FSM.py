@@ -150,7 +150,9 @@ class Z1FSM(Node):
         self.timer = self.create_timer(0.05, self.tick)   # 20 Hz
         self._homing_next_state = self.WAITING
         self.set_state(self.HOMING)
-        self.pub_ik_enable.publish(Bool(data=False))
+        # NOTA: NON pubblicare ik_enable=False qui — il nodo IK parte già disabilitato
+        # e pubblicare False in __init__ può arrivare DOPO ik_enable=True del primo tick
+        # causando un race condition che impedisce l'homing.
 
         self.get_logger().info("🧠 z1_FSM ready → avvio in HOMING")
         self.get_logger().info(f"  torso_locked:      {self.torso_locked_topic}")
