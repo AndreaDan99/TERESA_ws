@@ -270,9 +270,8 @@ class RealSenseSurfaceNode(Node):
             tf_base_ee.transform.translation.z,
         ])
 
-        # Orient normal to point FROM the TCP TOWARD the surface (approach direction)
-        # The impedance controller adds +normal to advance toward the body
-        if np.dot(n_base, (tcp_base - p0_base)) > 0.0:
+        # Orient normal to point from the surface toward the TCP (stable sign convention)
+        if np.dot(n_base, (tcp_base - p0_base)) < 0.0:
             n_base = -n_base
 
         d = float(np.dot(tcp_base - p0_base, n_base))
