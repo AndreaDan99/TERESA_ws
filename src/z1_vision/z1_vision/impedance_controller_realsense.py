@@ -153,6 +153,12 @@ class ImpedanceController(Node):
         self._done_published         = False
         self._wrist_latched          = False
 
+        # Latch superficie: congelata al primo tick di APPROACH
+        # evita salti del target quando la persona si muove durante l'avanzamento
+        self._surface_latched  = False
+        self._p_surf_latched   = None   # np.array [3]
+        self._normal_latched   = None   # np.array [3]
+
         # Stato superficie (RealSense)
         self.surface_frame = None
         self.surface_signed_distance = 0.0
@@ -244,6 +250,9 @@ class ImpedanceController(Node):
             self._hold_start_time        = None
             self._done_published         = False
             self._wrist_latched          = False
+            self._surface_latched        = False
+            self._p_surf_latched         = None
+            self._normal_latched         = None
             self.x_desired_initialized   = False
             self.get_logger().info('🛑 Impedance disabled — reset')
 
@@ -253,6 +262,9 @@ class ImpedanceController(Node):
             self._hold_start_time        = None
             self._done_published         = False
             self._wrist_latched          = False
+            self._surface_latched        = False   # verrà latched al primo tick valido
+            self._p_surf_latched         = None
+            self._normal_latched         = None
             self.get_logger().info('✅ Impedance enabled — fase APPROACH')
 
     def impedance_callback(self, msg):
@@ -365,6 +377,23 @@ class ImpedanceController(Node):
         R_surf = T_surf[:3, :3]
         p_surf = np.array([surf_pose.position.x, surf_pose.position.y, surf_pose.position.z])
         normal = R_surf[:, 2]  # asse Z del frame superficie = normale
+
+        # ── Latch superficie al primo tick di APPROACH ────────────────
+        # Congela p_surf e normal per tutta la sequenza approach/hold/retract
+        # evitando salti del target se la persona si sposta durante l'avanzamento
+        if self._phase == 'APPROACH' and not self._surface_latched:
+            self._p_surf_latched  = p_surf.copy()
+            self._normal_latched  = normal.copy()
+            self._surface_latched = True
+            self.get_logger().info(
+                f'🔒 Superficie latched: p=[{p_surf[0]:.3f},{p_surf[1]:.3f},{p_surf[2]:.3f}] '
+                f'n=[{normal[0]:.2f},{normal[1]:.2f},{normal[2]:.2f}]'
+            )
+
+        # Usa valori latched se disponibili, altrimenti quelli correnti
+        if self._surface_latched:
+            p_surf = self._p_surf_latched
+            normal = self._normal_latched
 
         step = self.approach_speed * self.control_dt
 

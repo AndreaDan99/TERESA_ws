@@ -39,7 +39,7 @@ impedance_controller_realsense:
     use_surface_frame:      true
     desired_normal_offset:  -0.205  # [m] offset fisso: 20.5 cm prima della superficie
     max_approach_distance:   0.20   # [m] avanzamento impedance (20 cm)
-    approach_speed:          0.01   # [m/s]
+    approach_speed:          0.05   # [m/s] → 4s per 20cm (era 0.01 → 20s, troppo lento)
 
     # ── Hold al contatto ───────────────────────────────────────────
     hold_time: 10.0             # [s] tempo fermo prima del retract
