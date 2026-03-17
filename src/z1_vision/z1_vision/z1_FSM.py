@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 from geometry_msgs.msg import PoseStamped
+from visualization_msgs.msg import Marker
 
 from tf_transformations import quaternion_matrix, quaternion_from_matrix
 
@@ -78,6 +79,11 @@ class Z1FSM(Node):
         # prima di abilitare il torque controller.
         self.declare_parameter("skip_impedance", False)
         self._skip_impedance = bool(self.get_parameter("skip_impedance").value)
+
+        # ── Timeout WAIT_IK_DONE ────────────────────────────────────────
+        self.declare_parameter("wait_ik_timeout_s", 15.0)
+        self._wait_ik_timeout = float(self.get_parameter("wait_ik_timeout_s").value)
+        self._wait_ik_start: float | None = None
 
         # ── Workspace out-of-range topic ────────────────────────────────
         self.declare_parameter("target_out_of_workspace_topic", "/target_out_of_workspace")
@@ -156,6 +162,7 @@ class Z1FSM(Node):
         self.pub_state            = self.create_publisher(String,      self.state_topic,                   10)
         self.pub_impedance_enable = self.create_publisher(Bool,        self.impedance_enable_topic,        10)
         self.pub_out_of_workspace = self.create_publisher(Bool,        self.target_out_of_workspace_topic, 10)
+        self.pub_ik_goal_marker   = self.create_publisher(Marker,      '/ik_goal_marker',                  10)
 
         # ── Service clients: switch controller ──────────────────────────
         self.switch_to_torque_client = self.create_client(Trigger, '/safe_switch/to_torque')
@@ -253,6 +260,9 @@ class Z1FSM(Node):
             self.impedance_done          = False
             self._impedance_command_sent = False
 
+        if s == self.WAIT_IK_DONE:
+            self._wait_ik_start = self.get_clock().now().nanoseconds * 1e-9
+
         if s == self.HOMING:
             self.ik_done              = False
             self._homing_command_sent = False
@@ -347,6 +357,20 @@ class Z1FSM(Node):
             f'n=[{normal[0]:.2f},{normal[1]:.2f},{normal[2]:.2f}] '
             f'standoff={self._ik_approach_standoff:.3f}m'
         )
+
+        # Marker blu in RViz per visualizzare la posizione goal IK
+        m = Marker()
+        m.header.frame_id = 'world'
+        m.header.stamp    = self.get_clock().now().to_msg()
+        m.ns     = 'ik_goal'
+        m.id     = 0
+        m.type   = Marker.SPHERE
+        m.action = Marker.ADD
+        m.pose   = goal.pose
+        m.scale.x = m.scale.y = m.scale.z = 0.08
+        m.color.r = 0.0; m.color.g = 0.4; m.color.b = 1.0; m.color.a = 0.9
+        self.pub_ik_goal_marker.publish(m)
+
         return goal
 
     def _make_home_pose(self) -> PoseStamped:
@@ -513,8 +537,16 @@ class Z1FSM(Node):
 
         # ── WAIT_IK_DONE ──────────────────────────────────────────────────
         elif self.state == self.WAIT_IK_DONE:
-            # Nessun abort per target non fresco: il robot completa il movimento
-            # verso il target latchato
+            # Timeout: se l'IK non converge entro N secondi torna in WAITING
+            if self._wait_ik_start is not None:
+                elapsed = self.get_clock().now().nanoseconds * 1e-9 - self._wait_ik_start
+                if elapsed > self._wait_ik_timeout:
+                    self.get_logger().warn(
+                        f'⏱️  WAIT_IK_DONE timeout ({elapsed:.1f}s) → WAITING'
+                    )
+                    self.pub_ik_enable.publish(Bool(data=False))
+                    self.set_state(self.WAITING)
+                    return
 
             if self.ik_done:
                 self.pub_ik_enable.publish(Bool(data=False))
