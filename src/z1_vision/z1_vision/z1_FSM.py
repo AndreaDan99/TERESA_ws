@@ -145,6 +145,7 @@ class Z1FSM(Node):
         self.impedance_done                                = False
         self._pending_keyboard_cmd: str | None             = None
         self._latest_surface_frame: PoseStamped | None     = None
+        self._skip_impedance_hold: bool                    = False  # blocca retry in skip_impedance mode
 
         self.create_subscription(
             PoseStamped, self.torso_locked_topic, self.on_torso_locked, 10
@@ -358,19 +359,6 @@ class Z1FSM(Node):
             f'standoff={self._ik_approach_standoff:.3f}m'
         )
 
-        # Marker blu in RViz per visualizzare la posizione goal IK
-        m = Marker()
-        m.header.frame_id = 'world'
-        m.header.stamp    = self.get_clock().now().to_msg()
-        m.ns     = 'ik_goal'
-        m.id     = 0
-        m.type   = Marker.SPHERE
-        m.action = Marker.ADD
-        m.pose   = goal.pose
-        m.scale.x = m.scale.y = m.scale.z = 0.08
-        m.color.r = 0.0; m.color.g = 0.4; m.color.b = 1.0; m.color.a = 0.9
-        self.pub_ik_goal_marker.publish(m)
-
         return goal
 
     def _make_home_pose(self) -> PoseStamped:
@@ -449,6 +437,12 @@ class Z1FSM(Node):
 
         # ── WAITING ───────────────────────────────────────────────────────
         if self.state == self.WAITING:
+            # In skip_impedance mode: non riprovare finché il lock non si perde
+            if self._skip_impedance_hold:
+                if not self.torso_target_fresh():
+                    self._skip_impedance_hold = False
+                    self.get_logger().info("🔓 Lock perso → skip_impedance hold rilasciato")
+                return
             if self.torso_target_fresh():
                 self.set_state(self.CHECKING_WORKSPACE)
 
@@ -533,6 +527,20 @@ class Z1FSM(Node):
                 self.pub_ik_goal.publish(target)
                 self.pub_ik_enable.publish(Bool(data=True))
                 self._approach_command_sent = True
+
+                # Marker blu una-tantum al momento dell'invio del goal
+                from builtin_interfaces.msg import Duration as BuiltinDuration
+                m = Marker()
+                m.header.frame_id = 'world'
+                m.header.stamp    = self.get_clock().now().to_msg()
+                m.ns = 'ik_goal'; m.id = 0
+                m.type = Marker.SPHERE; m.action = Marker.ADD
+                m.pose = target.pose
+                m.scale.x = m.scale.y = m.scale.z = 0.08
+                m.color.r = 0.0; m.color.g = 0.4; m.color.b = 1.0; m.color.a = 0.9
+                m.lifetime = BuiltinDuration(sec=30, nanosec=0)
+                self.pub_ik_goal_marker.publish(m)
+
                 self.set_state(self.WAIT_IK_DONE)
 
         # ── WAIT_IK_DONE ──────────────────────────────────────────────────
@@ -552,11 +560,12 @@ class Z1FSM(Node):
                 self.pub_ik_enable.publish(Bool(data=False))
                 if self._skip_impedance:
                     # Modalità debug: salta impedance, torna in attesa
-                    # → permette di verificare visivamente l'allineamento JTC
+                    # → non riprovare finché il lock non si perde (evita loop)
                     self.get_logger().warn(
                         "⚠️  skip_impedance=True → IK completato, "
-                        "impedance SALTATA → WAITING"
+                        "impedance SALTATA → WAITING (hold fino a nuovo lock)"
                     )
+                    self._skip_impedance_hold = True
                     self.set_state(self.WAITING)
                 else:
                     self.set_state(self.SWITCHING_TO_TORQUE)
