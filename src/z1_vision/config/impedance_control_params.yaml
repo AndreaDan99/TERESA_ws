@@ -9,14 +9,19 @@ impedance_controller_realsense:
     control_rate: 500.0         # [Hz]
     log_rate:     2.0           # [Hz]
 
-    # ── Guadagni cartesiani (traslazione) ── TUNED ─────────────────
-    K_p_translation: [200.0, 200.0, 300.0]
-    K_d_translation: [20.0,  20.0,  30.0]
-    K_i_translation: [0.3,   0.3,   0.5]
+    # ── Guadagni cartesiani (traslazione) ─────────────────────────
+    # K_d_critico = 2 * sqrt(K_p * m_eff), con m_eff ≈ 4 kg per Z1
+    # K_p=150 → K_d_crit≈49 | K_p=200 → K_d_crit≈57 | K_p=300 → K_d_crit≈69
+    # FASE 1 (senza filtro dq): K_p moderato per forza sufficiente,
+    #   K_d basso (15-25) per non amplificare rumore a 500Hz, K_i=0
+    # FASE 2 (con filtro passa-basso su dq): K_p=200/300, K_d=30/50
+    K_p_translation: [150.0, 150.0, 200.0]
+    K_d_translation: [15.0,  15.0,  25.0]
+    K_i_translation: [0.0,   0.0,   0.0]
 
     # ── Guadagni cartesiani (rotazione) — non usati ────────────────
     K_p_rotation: [10.0, 10.0, 10.0]
-    K_d_rotation: [1.0,  1.0,  1.0]
+    K_d_rotation: [3.0,  3.0,  3.0]
     K_i_rotation: [0.0,  0.0,  0.0]
 
     # ── Controllo orientamento polso (joint-space J4-J6) ── TUNED ──
@@ -43,6 +48,14 @@ impedance_controller_realsense:
 
     # ── Hold al contatto ───────────────────────────────────────────
     hold_time: 10.0             # [s] tempo fermo prima del retract
+
+    # ── Robustezza: singolarità e limiti articolari ─────────────────
+    # manip = sqrt(det(J_pos·J_pos^T)) → 0 vicino a singolarità
+    # Se manip < manip_threshold: F *= (manip/threshold)^2 (rolloff quadratico)
+    manip_threshold:         0.05   # tipico Z1 in workspace: 0.1-0.5
+    # Repulsione soft: attiva quando giunto entra nel margine (% del range)
+    joint_limit_margin_frac: 0.10   # 10% del range articolare
+    joint_limit_k:           20.0   # rigidezza repulsione [Nm/rad]
 
     # ── Topic interface FSM ────────────────────────────────────────
     impedance_enable_topic: '/impedance_enable'

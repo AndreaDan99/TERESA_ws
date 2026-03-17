@@ -146,6 +146,7 @@ class Z1FSM(Node):
         self._pending_keyboard_cmd: str | None             = None
         self._latest_surface_frame: PoseStamped | None     = None
         self._skip_impedance_hold: bool                    = False  # blocca retry in skip_impedance mode
+        self._post_impedance_hold: bool                    = False  # blocca retry dopo ciclo impedance completo
 
         self.create_subscription(
             PoseStamped, self.torso_locked_topic, self.on_torso_locked, 10
@@ -443,6 +444,13 @@ class Z1FSM(Node):
                     self._skip_impedance_hold = False
                     self.get_logger().info("🔓 Lock perso → skip_impedance hold rilasciato")
                 return
+            # Dopo ciclo impedance completo: non riprovare finché il lock non si perde
+            if self._post_impedance_hold:
+                if not self.torso_target_fresh():
+                    self._post_impedance_hold = False
+                    self.get_logger().info("🔓 Lock perso → post_impedance hold rilasciato")
+                else:
+                    return
             if self.torso_target_fresh():
                 self.set_state(self.CHECKING_WORKSPACE)
 
@@ -629,8 +637,12 @@ class Z1FSM(Node):
 
             result = self._switch_future.result()
             if result.success:
-                self.get_logger().info("✅ Switch torque_controller → JTC riuscito → WAITING")
-                self.set_state(self.WAITING)
+                self.get_logger().info(
+                    "✅ Switch torque_controller → JTC riuscito → HOMING (poi WAITING)"
+                )
+                self._post_impedance_hold = True   # non ripartire subito al prossimo lock
+                self._homing_next_state   = self.WAITING
+                self.set_state(self.HOMING)
             else:
                 self.get_logger().error(f"❌ Switch fallito: {result.message}")
                 self.set_state(self.FAULT)

@@ -70,6 +70,11 @@ class ImpedanceController(Node):
                 # Topic interface FSM
                 ('impedance_enable_topic', '/impedance_enable'),
                 ('impedance_done_topic',   '/impedance_done'),
+
+                # Robustezza: singolarità e limiti articolari
+                ('manip_threshold',         0.05),   # sotto: scala F → 0 (rolloff quadratico)
+                ('joint_limit_margin_frac', 0.10),   # margine dai limiti (10% del range)
+                ('joint_limit_k',          20.0),    # rigidezza repulsione limiti [Nm/rad]
             ]
         )
 
@@ -87,6 +92,10 @@ class ImpedanceController(Node):
         self.max_approach_distance  = self.get_parameter('max_approach_distance').value
         self.approach_speed         = self.get_parameter('approach_speed').value
         self.hold_time              = float(self.get_parameter('hold_time').value)
+
+        self.manip_threshold = float(self.get_parameter('manip_threshold').value)
+        self.jl_margin_frac  = float(self.get_parameter('joint_limit_margin_frac').value)
+        self.jl_k            = float(self.get_parameter('joint_limit_k').value)
 
         impedance_enable_topic = self.get_parameter('impedance_enable_topic').value
         impedance_done_topic   = self.get_parameter('impedance_done_topic').value
@@ -172,6 +181,7 @@ class ImpedanceController(Node):
         self.max_torque       = 0.0
         self.sum_error_pos    = 0.0
         self.max_error_pos    = 0.0
+        self.manipulability   = 0.0
 
         # ── Subscribers ───────────────────────────────────────────
         self.joint_state_sub = self.create_subscription(
@@ -489,10 +499,48 @@ class ImpedanceController(Node):
         F_max   = 80.0
 
         F_cartesian    = K_p_eff @ x_error - K_d_eff @ dx + self.K_i @ self.error_integral
+
+        # ── 1. Monitor manipolabilità + damping vicino a singolarità ──────
+        # w = sqrt(det(J_pos · J_pos^T)): → 0 vicino a singolarità
+        J_pos = J[:3, :]
+        manip = float(np.sqrt(max(0.0, np.linalg.det(J_pos @ J_pos.T))))
+        self.manipulability = manip
+        if manip < self.manip_threshold:
+            # Rolloff quadratico: forza → 0 man mano che ci si avvicina alla singolarità
+            manip_scale = (manip / self.manip_threshold) ** 2
+            F_cartesian[:3] *= manip_scale
+            if manip < self.manip_threshold * 0.5:
+                self.get_logger().warn(
+                    f'⚠️  Singolarità vicina! manip={manip:.4f} '
+                    f'(soglia={self.manip_threshold:.3f}) → F scalata a {manip_scale*100:.0f}%',
+                    throttle_duration_sec=1.0,
+                )
+
         F_cartesian    = np.clip(F_cartesian, -F_max, F_max)
         F_cartesian[3:6] = 0.0  # nessun controllo rotazionale cartesiano
 
         tau_impedance = (J.T @ F_cartesian)[:self.n_joints]
+
+        # ── 2. Repulsione soft dai limiti articolari ───────────────────────
+        # Aggiunge coppia che respinge il giunto dal limite quando entra
+        # nel margine (jl_margin_frac * range). Proporzionale alla penetrazione.
+        q_lo   = self.model.lowerPositionLimit[:self.n_joints]
+        q_hi   = self.model.upperPositionLimit[:self.n_joints]
+        margin = self.jl_margin_frac * (q_hi - q_lo)
+        q_cur  = self.q[:self.n_joints]
+        tau_jl = np.zeros(self.n_joints)
+        mask_hi = q_cur > (q_hi - margin)
+        mask_lo = q_cur < (q_lo + margin)
+        tau_jl[mask_hi] = -self.jl_k * (q_cur[mask_hi] - (q_hi - margin)[mask_hi])
+        tau_jl[mask_lo] =  self.jl_k * ((q_lo + margin)[mask_lo] - q_cur[mask_lo])
+        if np.any(mask_hi | mask_lo):
+            active = np.where(mask_hi | mask_lo)[0]
+            self.get_logger().warn(
+                f'⚠️  Limite giunto attivo: J{active + 1} | '
+                f'τ_jl={np.round(tau_jl[active], 2)}',
+                throttle_duration_sec=1.0,
+            )
+        tau_impedance += tau_jl
 
         # Controllo orientamento polso (joint-space)
         if self.control_wrist and self.q_desired_wrist is not None:
@@ -578,7 +626,8 @@ class ImpedanceController(Node):
             f'Iter: {self.iteration_count:6d} | '
             f'Err_pos: {self.error_norm_pos*1000:6.2f}mm (avg: {avg_pos*1000:6.2f}mm) | '
             f'dist: {self.approach_distance_accum*100:5.1f}/{self.max_approach_distance*100:.0f}cm | '
-            f'Vel: {self.vel_norm:5.3f} | F: {self.force_norm:6.1f}N | τ: {self.max_torque:5.2f}Nm'
+            f'Vel: {self.vel_norm:5.3f} | F: {self.force_norm:6.1f}N | τ: {self.max_torque:5.2f}Nm | '
+            f'manip: {self.manipulability:.4f}'
         )
         if self.control_wrist:
             log_msg += f' | Wrist: {np.rad2deg(self.error_norm_wrist):5.2f}°'
