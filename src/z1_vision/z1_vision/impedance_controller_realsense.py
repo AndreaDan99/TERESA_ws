@@ -391,26 +391,32 @@ class ImpedanceController(Node):
         # ── Latch superficie al primo tick di APPROACH ────────────────
         # Congela p_surf e normal per tutta la sequenza approach/hold/retract
         # evitando salti del target se la persona si sposta durante l'avanzamento.
-        # In più: calcola approach_distance_accum iniziale proiettando l'EE corrente
-        # sulla retta di approccio — il target parte esattamente da dove il robot è,
-        # eliminando lo scatto brusco al momento dell'enable.
+        #
+        # FORMULA target: p_surf + (desired_normal_offset − accum) * normal
+        #   desired_normal_offset = standoff JTC (es. 0.200 m)
+        #   accum = 0       → target = standoff (= EE al momento del latch, zero errore)
+        #   accum = max     → target = standoff − max (es. 5 mm dentro la superficie)
+        #
+        # accum_init = clip(desired_normal_offset − proj, 0, max)
+        #   se EE è esattamente al standoff: accum_init = 0 → zero errore iniziale ✓
+        #   se EE è più vicino (imprecisione JTC): accum_init > 0 ma comunque senza jerk
         if self._phase == 'APPROACH' and not self._surface_latched:
             self._p_surf_latched  = p_surf.copy()
             self._normal_latched  = normal.copy()
             self._surface_latched = True
 
-            # Proiezione EE sulla normale: accum = dot(ee - p_surf, n) - offset
+            # Proiezione EE sulla normale rispetto alla superficie
             ee_pos = x_current.translation
             proj   = float(np.dot(ee_pos - p_surf, normal))
             self.approach_distance_accum = float(np.clip(
-                proj - self.desired_normal_offset,
+                self.desired_normal_offset - proj,   # ← FIX: era proj - offset (segno invertito)
                 0.0,
                 self.max_approach_distance
             ))
             self.get_logger().info(
                 f'🔒 Superficie latched: p=[{p_surf[0]:.3f},{p_surf[1]:.3f},{p_surf[2]:.3f}] '
                 f'n=[{normal[0]:.2f},{normal[1]:.2f},{normal[2]:.2f}] | '
-                f'accum_init={self.approach_distance_accum*100:.1f}cm'
+                f'proj={proj*100:.1f}cm accum_init={self.approach_distance_accum*100:.1f}cm'
             )
 
         # Usa valori latched se disponibili, altrimenti quelli correnti
@@ -460,7 +466,10 @@ class ImpedanceController(Node):
                 self.get_logger().info('🏁 /impedance_done pubblicato')
 
         # ── Aggiorna target in base alla distanza accumulata ──────────
-        target_pos     = p_surf + (self.desired_normal_offset + self.approach_distance_accum) * normal
+        # target = p_surf + (offset − accum) * normal
+        #   accum=0   → target al standoff (lontano dal torso)
+        #   accum=max → target al standoff−max (lieve contatto nella superficie)
+        target_pos     = p_surf + (self.desired_normal_offset - self.approach_distance_accum) * normal
         self.x_desired = pin.SE3(R_surf, target_pos)
 
         self._run_impedance(x_current)
