@@ -313,11 +313,8 @@ class Z1FSM(Node):
 
         p_surf = np.array([sf.pose.position.x, sf.pose.position.y, sf.pose.position.z])
 
-        # Assicura che la normale punti DAL torso VERSO il robot (arm_base).
-        # Il surface node a volte la flippa male quando il braccio è in home.
-        if np.dot(normal, self._arm_base - p_surf) < 0.0:
-            normal = -normal
-
+        # La normale del surface node punta DAL torso VERSO il robot (TCP).
+        # Usiamo direttamente quella direzione per il standoff.
         p_approach = p_surf + self._ik_approach_standoff * normal   # standoff davanti al torso
 
         # Orientamento: EE X = -normal (perpendicolare alla superficie, verso il torso)
