@@ -306,7 +306,10 @@ class Z1FSM(Node):
         """
         Posa di approccio perpendicolare alla superficie del torso (stile ecografo):
         - Posizione:    p_surf + standoff * normal   (standoff m davanti al torso)
-        - Orientamento: asse X dell'EE = -normal     (perpendicolare alla superficie, verso il torso)
+        - Orientamento: asse Z dell'EE = -normal     (asse tool di link06 punta verso il torso)
+
+        NOTA: per Unitree Z1, link06 ha Z come asse tool (direzione gripper).
+        Assegnare l'asse di approccio a X causava una rotazione di 90° del polso.
 
         Fallback al target torso grezzo se il surface frame non è disponibile.
         """
@@ -329,12 +332,13 @@ class Z1FSM(Node):
         # Usiamo direttamente quella direzione per il standoff.
         p_approach = p_surf + self._ik_approach_standoff * normal   # standoff davanti al torso
 
-        # Orientamento: EE X = -normal (perpendicolare alla superficie, verso il torso)
-        x_ee = -normal
+        # Orientamento: asse Z di link06 = -normal (asse tool punta verso il torso)
+        # X_ee = orizzontale (world_up × Z_ee), Y_ee = su nel piano EE
+        z_ee = -normal
         aux  = np.array([0.0, 0.0, 1.0])   # asse ausiliario = Z world (su)
-        if abs(np.dot(aux, x_ee)) > 0.9:   # se x_ee è quasi verticale usa Y
+        if abs(np.dot(aux, z_ee)) > 0.9:   # se z_ee è quasi verticale usa Y
             aux = np.array([0.0, 1.0, 0.0])
-        z_ee = np.cross(x_ee, aux);  z_ee /= np.linalg.norm(z_ee)
+        x_ee = np.cross(aux, z_ee);  x_ee /= np.linalg.norm(x_ee)
         y_ee = np.cross(z_ee, x_ee); y_ee /= np.linalg.norm(y_ee)
 
         T = np.eye(4)
