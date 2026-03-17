@@ -165,6 +165,7 @@ class Z1FSM(Node):
         self.pub_impedance_enable = self.create_publisher(Bool,        self.impedance_enable_topic,        10)
         self.pub_out_of_workspace = self.create_publisher(Bool,        self.target_out_of_workspace_topic, 10)
         self.pub_ik_goal_marker   = self.create_publisher(Marker,      '/ik_goal_marker',                  10)
+        self.pub_tracker_reset    = self.create_publisher(Bool,        '/tracker_reset',                   10)
 
         # ── Service clients: switch controller ──────────────────────────
         self.switch_to_torque_client = self.create_client(Trigger, '/safe_switch/to_torque')
@@ -652,6 +653,9 @@ class Z1FSM(Node):
                 )
                 self._post_impedance_hold = True   # non ripartire subito al prossimo lock
                 self._homing_next_state   = self.WAITING
+                # Reset del tracker: forza IDLE così può ri-acquisire il torso al ciclo successivo
+                self.pub_tracker_reset.publish(Bool(data=True))
+                self.get_logger().info("🔄 Tracker reset inviato → torso tracker → IDLE")
                 self.set_state(self.HOMING)
             else:
                 self.get_logger().error(f"❌ Switch fallito: {result.message}")

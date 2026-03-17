@@ -136,6 +136,10 @@ class Z1YoloTorsoTracker(Node):
         self.sub_fsm_state = self.create_subscription(
             String, '/torso_sm_state', self.cb_fsm_state, 10)
 
+        # Reset tracker: riceve True dalla FSM quando torna in HOME → forza IDLE
+        self.sub_tracker_reset = self.create_subscription(
+            Bool, '/tracker_reset', self.cb_tracker_reset, 10)
+
         # ── Publishers (NUOVA FSM) ─────────────────────────────────
         self.pub_torso_ee          = self.create_publisher(PoseStamped,  '/torso_target_ee',     10)
         self.pub_torso_ee_locked   = self.create_publisher(PoseStamped,  '/torso_target_ee_locked', 10)
@@ -170,6 +174,20 @@ class Z1YoloTorsoTracker(Node):
 
     def cb_fsm_state(self, msg: String):
         self.fsm_state_external = msg.data
+
+    def cb_tracker_reset(self, msg: Bool):
+        if not msg.data:
+            return
+        prev = self.state
+        self.state            = 'IDLE'
+        self.locked_target    = None
+        self.tracking_current_pos = None
+        self.position_history = []
+        self.stable_counter   = 0
+        self.drift_counter    = 0
+        self.recovery_counter = 0
+        self.kf.reset()
+        self.get_logger().info(f'🔄 Tracker reset: {prev} → IDLE (richiesto da FSM)')
 
     # ──────────────────────────────────────────────────────────────
     def _camera_to_world(self, point_camera):
