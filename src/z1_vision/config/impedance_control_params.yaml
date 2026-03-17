@@ -49,7 +49,8 @@ impedance_controller_realsense:
     use_surface_frame:      true
     desired_normal_offset:  0.200   # [m] = standoff JTC → zero errore al latch
     max_approach_distance:  0.205   # [m] standoff + 5mm contatto
-    approach_speed:         0.05    # [m/s] → ~4s per 20cm
+    approach_speed:         0.05    # [m/s] → ~4s per 20cm avvicinamento
+    retract_speed:          0.10    # [m/s] → ~2s per 20cm ritorno (più veloce per forza maggiore)
 
     # ── Hold al contatto ───────────────────────────────────────────
     hold_time: 10.0             # [s] tempo fermo prima del retract

@@ -63,6 +63,7 @@ class ImpedanceController(Node):
                 ('desired_normal_offset', -0.005),   # [m] offset fisso lungo normale
                 ('max_approach_distance', 0.20),      # [m] 20 cm di avanzamento
                 ('approach_speed', 0.01),             # [m/s]
+                ('retract_speed',  0.05),             # [m/s] velocità ritorno (default più veloce)
 
                 # Tempo di hold al contatto
                 ('hold_time', 10.0),              # [s]
@@ -91,6 +92,7 @@ class ImpedanceController(Node):
         self.desired_normal_offset  = self.get_parameter('desired_normal_offset').value
         self.max_approach_distance  = self.get_parameter('max_approach_distance').value
         self.approach_speed         = self.get_parameter('approach_speed').value
+        self.retract_speed          = self.get_parameter('retract_speed').value
         self.hold_time              = float(self.get_parameter('hold_time').value)
 
         self.manip_threshold = float(self.get_parameter('manip_threshold').value)
@@ -443,15 +445,21 @@ class ImpedanceController(Node):
         elif self._phase == 'HOLD':
             elapsed = (self.get_clock().now() - self._hold_start_time).nanoseconds * 1e-9
             if elapsed >= self.hold_time:
+                # Snap accum a desired_normal_offset: target parte esattamente
+                # dalla superficie (non da dentro), così il primo tick di RETRACT
+                # ha forza = 0 e cresce immediatamente nella direzione di uscita.
+                self.approach_distance_accum = self.desired_normal_offset
                 self._phase = 'RETRACT'
                 self.get_logger().info(
-                    f'↩️  HOLD completato ({elapsed:.1f}s) → RETRACT'
+                    f'↩️  HOLD completato ({elapsed:.1f}s) → RETRACT '
+                    f'(accum snap → {self.desired_normal_offset*100:.1f}cm)'
                 )
 
-        # ── Fase RETRACT: torna indietro lungo la stessa normale ──────
+        # ── Fase RETRACT: torna al standoff lungo la stessa normale ───
         elif self._phase == 'RETRACT':
+            retract_step = self.retract_speed * self.control_dt
             self.approach_distance_accum = max(
-                self.approach_distance_accum - step,
+                self.approach_distance_accum - retract_step,
                 0.0
             )
             if self.approach_distance_accum <= 0.0:
