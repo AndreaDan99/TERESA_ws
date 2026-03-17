@@ -306,10 +306,10 @@ class Z1FSM(Node):
         """
         Posa di approccio perpendicolare alla superficie del torso (stile ecografo):
         - Posizione:    p_surf + standoff * normal   (standoff m davanti al torso)
-        - Orientamento: asse Z dell'EE = -normal     (asse tool di link06 punta verso il torso)
+        - Orientamento: X_ee = -normal (gripper verso torso), Z_ee ≈ world_up (dritto)
 
-        NOTA: per Unitree Z1, link06 ha Z come asse tool (direzione gripper).
-        Assegnare l'asse di approccio a X causava una rotazione di 90° del polso.
+        Frame EE: X = approccio (verso torso), Z = su (world_up ortogonalizzato),
+        Y = Z × X (completa terna destra, punta di lato).
 
         Fallback al target torso grezzo se il surface frame non è disponibile.
         """
@@ -332,14 +332,20 @@ class Z1FSM(Node):
         # Usiamo direttamente quella direzione per il standoff.
         p_approach = p_surf + self._ik_approach_standoff * normal   # standoff davanti al torso
 
-        # Orientamento: asse Z di link06 = -normal (asse tool punta verso il torso)
-        # X_ee = orizzontale (world_up × Z_ee), Y_ee = su nel piano EE
-        z_ee = -normal
-        aux  = np.array([0.0, 0.0, 1.0])   # asse ausiliario = Z world (su)
-        if abs(np.dot(aux, z_ee)) > 0.9:   # se z_ee è quasi verticale usa Y
-            aux = np.array([0.0, 1.0, 0.0])
-        x_ee = np.cross(aux, z_ee);  x_ee /= np.linalg.norm(x_ee)
-        y_ee = np.cross(z_ee, x_ee); y_ee /= np.linalg.norm(y_ee)
+        # Orientamento EE desiderato:
+        #   X_ee = -normal  (asse approccio: gripper punta verso il torso)
+        #   Z_ee ≈ world_up (gripper "dritto", Z verso l'alto)
+        #   Y_ee = Z_ee × X_ee  (completa terna destra, punta di lato)
+        x_ee    = -normal                          # asse approccio (verso torso)
+        world_up = np.array([0.0, 0.0, 1.0])
+        if abs(np.dot(world_up, x_ee)) > 0.9:     # x_ee quasi verticale → usa world_Y
+            world_up = np.array([0.0, 1.0, 0.0])
+        # Ortogonalizza world_up rispetto a x_ee → Z_ee punta "su" il più possibile
+        z_ee = world_up - np.dot(world_up, x_ee) * x_ee
+        z_ee /= np.linalg.norm(z_ee)
+        # Y_ee = Z_ee × X_ee per garantire terna destra (X × Y = Z)
+        y_ee = np.cross(z_ee, x_ee)
+        y_ee /= np.linalg.norm(y_ee)
 
         T = np.eye(4)
         T[:3, 0] = x_ee
