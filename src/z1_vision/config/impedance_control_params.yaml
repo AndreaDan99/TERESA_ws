@@ -19,15 +19,15 @@ impedance_controller_realsense:
     K_d_translation: [15.0,  15.0,  25.0]
     K_i_translation: [0.0,   0.0,   0.0]
 
-    # ── Guadagni cartesiani (rotazione) — non usati ────────────────
-    K_p_rotation: [10.0, 10.0, 10.0]
-    K_d_rotation: [3.0,  3.0,  3.0]
+    # ── Guadagni cartesiani (rotazione) ───────────────────────────
+    # Controllo orientamento EE in spazio Cartesiano via Jacobian transpose.
+    # Orientamento latched al primo tick APPROACH (dal JTC) — mantiene EE
+    # perpendicolare al torso anche quando spalla/gomito si muovono.
+    # Se l'EE ruota troppo durante approccio → aumenta K_p_rotation.
+    # Se oscilla → aumenta K_d_rotation.
+    K_p_rotation: [10.0, 10.0, 10.0]   # [Nm/rad] — conservativo per inizio test
+    K_d_rotation: [1.0,  1.0,  1.0]    # [Nm·s/rad]
     K_i_rotation: [0.0,  0.0,  0.0]
-
-    # ── Controllo orientamento polso (joint-space J4-J6) ── TUNED ──
-    control_wrist_orientation: false   # disabilitato: JTC ha già orientato il polso
-    K_p_wrist_joints: [40.0, 40.0, 40.0]
-    K_d_wrist_joints: [4.0,  4.0,  4.0]
 
     # ── Parametri generali ── TUNED ────────────────────────────────
     integral_limit: 0.02

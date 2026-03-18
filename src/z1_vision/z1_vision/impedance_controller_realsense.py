@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
 Impedance Controller for Unitree Z1 using Pinocchio
-Hybrid Control: Cartesian Position + Joint-Space Orientation
-With Safe Startup Mode and Enhanced Error Handling
+Full Cartesian Control: Position + Orientation (Cartesian space via Jacobian transpose)
+- Orientamento latched al primo tick APPROACH: mantiene EE perpendicolare alla superficie
+  anche quando spalla/gomito si muovono (controllo joint-space non garantisce R_ee fisso)
+- Safe startup 3s: blocca posizione E orientamento via log3(R_err)
 """
 
 import sys
@@ -40,15 +42,12 @@ class ImpedanceController(Node):
                 ('K_d_translation', [15.0, 15.0, 15.0]),
                 ('K_i_translation', [0.0, 0.0, 0.0]),
 
-                # Rotazioni cartesiane (non usate, mantenute per compatibilità)
-                ('K_p_rotation', [0.0, 0.0, 0.0]),
-                ('K_d_rotation', [0.0, 0.0, 0.0]),
-                ('K_i_rotation', [0.0, 0.0, 0.0]),
-
-                # Controllo orientamento (joint-space su polso J4-J5-J6)
-                ('control_wrist_orientation', True),
-                ('K_p_wrist_joints', [40.0, 40.0, 40.0]),
-                ('K_d_wrist_joints', [4.0, 4.0, 4.0]),
+                # Rotazioni cartesiane — controllo orientamento EE via Jacobian transpose
+                # K_p_rotation: rigidezza [Nm/rad], K_d_rotation: smorzamento [Nm·s/rad]
+                # Latched al primo tick APPROACH: mantiene EE perpendicolare alla superficie
+                ('K_p_rotation', [10.0, 10.0, 10.0]),
+                ('K_d_rotation', [1.0,  1.0,  1.0]),
+                ('K_i_rotation', [0.0,  0.0,  0.0]),
 
                 # Parametri generali
                 ('integral_limit', 0.05),
@@ -129,9 +128,6 @@ class ImpedanceController(Node):
         self.integral_limit = self.get_parameter('integral_limit').value
 
         # Guadagni polso (joint-space)
-        self.control_wrist = self.get_parameter('control_wrist_orientation').value
-        self.K_p_wrist = np.array(self.get_parameter('K_p_wrist_joints').value)
-        self.K_d_wrist = np.array(self.get_parameter('K_d_wrist_joints').value)
 
         # Stato robot
         self.n_joints         = 6
@@ -143,8 +139,9 @@ class ImpedanceController(Node):
         self.x_desired             = None
         self.x_desired_initialized = False
 
-        # Target orientamento polso (joint-space)
-        self.q_desired_wrist = None
+        # Rotazione EE desiderata — latched al primo tick di APPROACH
+        # Usata per controllo orientamento Cartesiano (non joint-space)
+        self._R_latched: np.ndarray | None = None
 
         # Controllo PID
         self.control_dt       = 1.0 / control_rate
@@ -162,7 +159,7 @@ class ImpedanceController(Node):
         self.approach_distance_accum = 0.0
         self._hold_start_time        = None     # rclpy.Time quando inizia HOLD
         self._done_published         = False
-        self._wrist_latched          = False
+        self._R_latched              = None   # rotazione EE latched all'avvio APPROACH
 
         # Latch superficie: congelata al primo tick di APPROACH
         # evita salti del target quando la persona si muove durante l'avanzamento
@@ -217,7 +214,8 @@ class ImpedanceController(Node):
         self.get_logger().info(f'Control: {control_rate} Hz | Log: {self.log_rate} Hz')
         self.get_logger().info(f'K_p_translation: {K_p_trans}')
         self.get_logger().info(f'K_d_translation: {K_d_trans}')
-        self.get_logger().info(f'Controllo polso: {self.control_wrist}')
+        K_p_rot = np.array(self.get_parameter('K_p_rotation').value)
+        self.get_logger().info(f'K_p_rotation (Cartesian): {K_p_rot}')
         self.get_logger().info(f'Gravity scale J2: {self.gravity_scale_j2}')
         self.get_logger().info(f'Torque limit: {self.torque_limit} Nm')
         self.get_logger().info(f'Safe startup: {self.safe_startup_duration}s')
@@ -261,7 +259,7 @@ class ImpedanceController(Node):
             self.approach_distance_accum = 0.0
             self._hold_start_time        = None
             self._done_published         = False
-            self._wrist_latched          = False
+            self._R_latched              = None
             self._surface_latched        = False
             self._p_surf_latched         = None
             self._normal_latched         = None
@@ -273,7 +271,7 @@ class ImpedanceController(Node):
             self.approach_distance_accum = 0.0
             self._hold_start_time        = None
             self._done_published         = False
-            self._wrist_latched          = False
+            self._R_latched              = None   # verrà latched al primo tick APPROACH
             self._surface_latched        = False   # verrà latched al primo tick valido
             self._p_surf_latched         = None
             self._normal_latched         = None
@@ -307,15 +305,20 @@ class ImpedanceController(Node):
 
             if elapsed < self.safe_startup_duration:
                 if self.safe_startup_counter == 1:
-                    x_current       = self.data.oMf[self.ee_frame_id]
-                    self.x_startup  = x_current.copy()
+                    x_current           = self.data.oMf[self.ee_frame_id]
+                    self.x_startup      = x_current.copy()
+                    self._R_startup     = x_current.rotation.copy()   # latch orientamento
                     pos = self.x_startup.translation
-                    self.get_logger().info('📍 SAFE STARTUP: Posizione bloccata a:')
+                    self.get_logger().info('📍 SAFE STARTUP: Posizione + orientamento bloccati a:')
                     self.get_logger().info(f'   [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]')
 
                 x_current = self.data.oMf[self.ee_frame_id]
                 x_error   = np.zeros(6)
                 x_error[:3] = self.x_startup.translation - x_current.translation
+                # Errore rotazionale: vettore asse-angolo dalla rotazione corrente
+                # alla rotazione desiderata (frame mondo → LOCAL_WORLD_ALIGNED)
+                R_err = self._R_startup @ x_current.rotation.T
+                x_error[3:6] = pin.log3(R_err)
 
                 J  = pin.computeFrameJacobian(
                     self.model, self.data, self.q, self.ee_frame_id,
@@ -336,9 +339,7 @@ class ImpedanceController(Node):
             else:
                 self.x_desired             = self.data.oMf[self.ee_frame_id].copy()
                 self.x_desired_initialized = True
-                if self.control_wrist:
-                    self.q_desired_wrist = self.q[3:6].copy()
-                self.safe_startup_mode = False
+                self.safe_startup_mode     = False
                 pos = self.x_desired.translation
                 self.get_logger().info('='*70)
                 self.get_logger().info('✅ SAFE STARTUP COMPLETATO')
@@ -354,17 +355,9 @@ class ImpedanceController(Node):
             self.x_desired             = x_current.copy()
             self.approach_distance_accum = 0.0
             self._done_published         = False
-            if self.control_wrist:
-                self.q_desired_wrist = None
             # Mantieni ancora la coppia per non cadere
             self._run_impedance(x_current)
             return
-
-        # ── Latch orientamento polso al primo tick abilitato ──────────
-        if not self._wrist_latched and self.control_wrist:
-            self.q_desired_wrist = self.q[3:6].copy()
-            self._wrist_latched  = True
-            self.get_logger().info('🔒 Wrist orientation latched (J4-J6)')
 
         # ── Inizializza x_desired se necessario ───────────────────────
         if not self.x_desired_initialized:
@@ -407,11 +400,15 @@ class ImpedanceController(Node):
             self._normal_latched  = normal.copy()
             self._surface_latched = True
 
+            # Latch orientamento EE Cartesiano — mantenuto per tutta la sequenza
+            self._R_latched = x_current.rotation.copy()
+            self.get_logger().info('🔒 Orientamento EE latched per controllo Cartesiano')
+
             # Proiezione EE sulla normale rispetto alla superficie
             ee_pos = x_current.translation
             proj   = float(np.dot(ee_pos - p_surf, normal))
             self.approach_distance_accum = float(np.clip(
-                self.desired_normal_offset - proj,   # ← FIX: era proj - offset (segno invertito)
+                self.desired_normal_offset - proj,
                 0.0,
                 self.max_approach_distance
             ))
@@ -533,8 +530,22 @@ class ImpedanceController(Node):
                     throttle_duration_sec=1.0,
                 )
 
-        F_cartesian    = np.clip(F_cartesian, -F_max, F_max)
-        F_cartesian[3:6] = 0.0  # nessun controllo rotazionale cartesiano
+        F_cartesian[:3] = np.clip(F_cartesian[:3], -F_max, F_max)
+
+        # ── Controllo orientamento Cartesiano ───────────────────────────
+        # Usa la rotazione EE latched al primo tick di APPROACH come riferimento.
+        # Mantiene l'orientamento anche quando spalla/gomito si muovono
+        # (il controllo joint-space non funziona perché q_wrist fisso ≠ R_ee fisso).
+        if self._R_latched is not None:
+            R_err   = self._R_latched @ x_current.rotation.T   # frame mondo
+            e_omega = pin.log3(R_err)                           # asse-angolo 3D
+            K_p_rot = np.diag(self.K_p)[3:6]
+            K_d_rot = np.diag(self.K_d)[3:6]
+            F_rot   = K_p_rot * e_omega - K_d_rot * dx[3:6]
+            F_max_rot = 15.0                                     # [Nm] limite sicurezza
+            F_cartesian[3:6] = np.clip(F_rot, -F_max_rot, F_max_rot)
+        else:
+            F_cartesian[3:6] = 0.0
 
         tau_impedance = (J.T @ F_cartesian)[:self.n_joints]
 
@@ -559,13 +570,6 @@ class ImpedanceController(Node):
             )
         tau_impedance += tau_jl
 
-        # Controllo orientamento polso (joint-space)
-        if self.control_wrist and self.q_desired_wrist is not None:
-            q_error_wrist      = self.q_desired_wrist - self.q[3:6]
-            tau_wrist          = self.K_p_wrist * q_error_wrist - self.K_d_wrist * self.dq[3:6]
-            tau_impedance[3:6] += tau_wrist
-            self.error_norm_wrist = float(np.linalg.norm(q_error_wrist))
-
         tau_total = tau_impedance + self.compute_compensation()
         tau_total = np.clip(tau_total, -self.torque_limit, self.torque_limit)
 
@@ -574,12 +578,13 @@ class ImpedanceController(Node):
 
         # Statistiche
         self.iteration_count += 1
-        self.error_norm_pos = float(np.linalg.norm(x_error[:3]))
-        self.vel_norm       = float(np.linalg.norm(dx))
-        self.force_norm     = float(np.linalg.norm(F_cartesian))
-        self.max_torque     = float(np.max(np.abs(tau_total)))
-        self.sum_error_pos += self.error_norm_pos
-        self.max_error_pos  = max(self.max_error_pos, self.error_norm_pos)
+        self.error_norm_pos   = float(np.linalg.norm(x_error[:3]))
+        self.error_norm_wrist = float(np.rad2deg(np.linalg.norm(x_error[3:6])))   # [deg]
+        self.vel_norm         = float(np.linalg.norm(dx))
+        self.force_norm       = float(np.linalg.norm(F_cartesian))
+        self.max_torque       = float(np.max(np.abs(tau_total)))
+        self.sum_error_pos   += self.error_norm_pos
+        self.max_error_pos    = max(self.max_error_pos, self.error_norm_pos)
 
     # ──────────────────────────────────────────────────────────────
     def compute_compensation(self):
@@ -646,8 +651,8 @@ class ImpedanceController(Node):
             f'Vel: {self.vel_norm:5.3f} | F: {self.force_norm:6.1f}N | τ: {self.max_torque:5.2f}Nm | '
             f'manip: {self.manipulability:.4f}'
         )
-        if self.control_wrist:
-            log_msg += f' | Wrist: {np.rad2deg(self.error_norm_wrist):5.2f}°'
+        if self._R_latched is not None:
+            log_msg += f' | Rot_err: {self.error_norm_wrist:5.2f}°'
         self.get_logger().info(log_msg)
 
 
