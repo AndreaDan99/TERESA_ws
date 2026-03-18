@@ -41,11 +41,16 @@ impedance_controller_realsense:
     gravity_scale_factor_j2: 1.3
 
     # ── Approccio lungo la normale superficie ─────────────────────
-    # Formula target: p_surf + (desired_normal_offset − accum) * normal
+    # Formula target: p_surf + (desired_normal_offset − accum) * normal_eff
     #   accum=0   → EE al standoff (coincide con dove JTC ha lasciato il braccio)
     #   accum=max → EE a (standoff − max) = lieve contatto nella superficie
+    #
+    # approach_mode: "normal"   → normal_eff = normale superficiale reale (da surface_frame)
+    #                "vertical" → normal_eff = [0,0,1] (world Z up), scende dritto in -Z
+    #                             (deve corrispondere ad approach_mode in z1_fsm_params.yaml)
     # Regola: desired_normal_offset = ik_approach_standoff (in z1_fsm_params.yaml)
     #         max_approach_distance  = standoff + contact_depth (es. 0.200 + 0.005)
+    approach_mode:          "normal"   # "normal" | "vertical"
     use_surface_frame:      true
     desired_normal_offset:  0.200   # [m] = standoff JTC → zero errore al latch
     max_approach_distance:  0.205   # [m] standoff + 5mm contatto

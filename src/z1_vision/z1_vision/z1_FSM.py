@@ -70,8 +70,10 @@ class Z1FSM(Node):
         # L'orientamento impone l'asse X dell'EE perpendicolare alla superficie (verso il torso).
         self.declare_parameter("surface_frame_topic",  "/torso_surface_frame")
         self.declare_parameter("ik_approach_standoff", 0.200)   # [m] distanza standoff dal torso
+        self.declare_parameter("approach_mode",        "normal") # "normal" | "vertical"
         self._surface_frame_topic  = self.get_parameter("surface_frame_topic").value
         self._ik_approach_standoff = float(self.get_parameter("ik_approach_standoff").value)
+        self._approach_mode        = self.get_parameter("approach_mode").value
 
         # ── Debug: skip impedance per verificare solo allineamento JTC ──
         # Se True: dopo WAIT_IK_DONE torna in WAITING senza avviare impedance.
@@ -305,16 +307,18 @@ class Z1FSM(Node):
 
     def _make_approach_pose(self) -> PoseStamped | None:
         """
-        Posa di approccio perpendicolare alla superficie del torso:
-        - Posizione:    p_surf + standoff * normal   (standoff m davanti al torso)
-        - Orientamento: X_ee = -normal (asse approccio lungo la normale),
-                        Y e Z: NESSUN vincolo — si ottengono con la rotazione
-                        MINIMA dall'orientamento home che porta X su -normal.
-                        Questo evita qualsiasi rotazione "inutile" del polso.
+        Calcola la posa di approccio in base a self._approach_mode:
 
-        Algoritmo "minimal rotation" (formula di Rodrigues):
-          Ruota R_home del minimo angolo necessario per portare X_home → -normal.
-          Y e Z ruotano solidali con X, senza roll aggiuntivo attorno a X.
+        "normal"   — standoff lungo la normale superficiale (approccio frontale):
+                      pos  = p_surf + standoff * normal
+                      X_ee = -normal  (punta verso il torso)
+
+        "vertical" — standoff direttamente sopra al torso, discesa in -Z world:
+                      pos  = [p_surf.x, p_surf.y, p_surf.z + standoff]
+                      X_ee = [0, 0, -1]  (punta verso il basso = verso il torso)
+
+        In entrambi i casi l'orientamento è la ROTAZIONE MINIMA di R_home
+        che porta X_home → x_ee (formula di Rodrigues), senza vincoli su Y/Z.
 
         Fallback al target torso grezzo se il surface frame non è disponibile.
         """
@@ -329,44 +333,53 @@ class Z1FSM(Node):
         q_surf = [sf.pose.orientation.x, sf.pose.orientation.y,
                   sf.pose.orientation.z, sf.pose.orientation.w]
         R      = quaternion_matrix(q_surf)[:3, :3]
-        normal = R[:, 2]   # asse Z del surface frame = normale, punta dal torso verso il robot
-
+        normal = R[:, 2]   # asse Z surface frame = normale, dal torso verso il robot
         p_surf = np.array([sf.pose.position.x, sf.pose.position.y, sf.pose.position.z])
 
-        # La normale punta DAL torso VERSO il robot → standoff davanti al torso
-        p_approach = p_surf + self._ik_approach_standoff * normal
+        if self._approach_mode == 'vertical':
+            # ── Modalità verticale: sopra al torso, discesa in -Z ─────────
+            # Standoff: stesso XY del torso, Z + offset sopra
+            p_approach = np.array([p_surf[0],
+                                   p_surf[1],
+                                   p_surf[2] + self._ik_approach_standoff])
+            # X_ee punta verso il basso = verso il torso (che è sotto il braccio)
+            x_ee = np.array([0.0, 0.0, -1.0])
+            mode_log = f'vertical ↓ (sopra torso +{self._ik_approach_standoff:.2f}m)'
+        else:
+            # ── Modalità normale: standoff lungo la normale superficiale ──
+            # La normale punta DAL torso VERSO il robot → standoff davanti al torso
+            p_approach = p_surf + self._ik_approach_standoff * normal
+            # X_ee punta verso il torso (= -normal)
+            x_ee = -normal
+            mode_log = (f'normal n=[{normal[0]:.2f},{normal[1]:.2f},{normal[2]:.2f}]'
+                        f' standoff={self._ik_approach_standoff:.3f}m')
 
-        # ── Orientamento: rotazione minima da home per allineare X → -normal ──
-        # R_home = orientamento di home (nessun vincolo su Y e Z)
+        # ── Orientamento: rotazione minima da home per allineare X_home → x_ee ──
+        # Algoritmo di Rodrigues: ruota R_home del minimo angolo necessario.
+        # Y e Z ruotano solidali con X — nessun roll aggiuntivo attorno all'asse X.
         R_home = quaternion_matrix(self._home_orientation)[:3, :3]
-        x_home = R_home[:, 0]          # asse X in home
-        x_ee   = -normal               # asse X desiderato (verso il torso)
+        x_home = R_home[:, 0]   # asse X dell'orientamento home
 
         cos_a = float(np.clip(np.dot(x_home, x_ee), -1.0, 1.0))
         axis  = np.cross(x_home, x_ee)
         sin_a = np.linalg.norm(axis)
 
         if sin_a < 1e-6:
-            # x_home già allineato (o antiparallelo) a x_ee
             if cos_a > 0:
                 R_approach = R_home                    # già allineato
             else:
-                # 180°: ruota attorno a Z world (o Y se necessario)
+                # 180°: sceglie l'asse di rotazione perpendicolare a x_home
                 perp = np.array([0.0, 0.0, 1.0])
                 if abs(np.dot(perp, x_home)) > 0.9:
                     perp = np.array([0.0, 1.0, 0.0])
                 perp -= np.dot(perp, x_home) * x_home
                 perp /= np.linalg.norm(perp)
-                K = np.array([[     0, -perp[2],  perp[1]],
-                              [ perp[2],      0, -perp[0]],
-                              [-perp[1],  perp[0],      0]])
                 R_approach = (2.0 * np.outer(perp, perp) - np.eye(3)) @ R_home
         else:
-            axis  /= sin_a
-            K      = np.array([[    0, -axis[2],  axis[1]],
-                               [ axis[2],     0, -axis[0]],
-                               [-axis[1],  axis[0],     0]])
-            # Rodrigues: R_align = I + sin(θ)K + (1-cos(θ))K²
+            axis   /= sin_a
+            K       = np.array([[    0, -axis[2],  axis[1]],
+                                [ axis[2],     0, -axis[0]],
+                                [-axis[1],  axis[0],     0]])
             R_align    = np.eye(3) + sin_a * K + (1.0 - cos_a) * (K @ K)
             R_approach = R_align @ R_home
 
@@ -386,9 +399,8 @@ class Z1FSM(Node):
         goal.pose.orientation.w = float(q_approach[3])
 
         self.get_logger().info(
-            f'🎯 IK goal: pos=[{p_approach[0]:.3f},{p_approach[1]:.3f},{p_approach[2]:.3f}] '
-            f'n=[{normal[0]:.2f},{normal[1]:.2f},{normal[2]:.2f}] '
-            f'standoff={self._ik_approach_standoff:.3f}m'
+            f'🎯 IK goal [{mode_log}]: '
+            f'pos=[{p_approach[0]:.3f},{p_approach[1]:.3f},{p_approach[2]:.3f}]'
         )
 
         return goal

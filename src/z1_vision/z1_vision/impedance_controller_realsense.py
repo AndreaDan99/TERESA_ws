@@ -59,6 +59,7 @@ class ImpedanceController(Node):
                 ('gravity_scale_factor_j2', 1.3),
 
                 # Integrazione RealSense/superficie
+                ('approach_mode',          'normal'), # "normal" | "vertical"
                 ('desired_normal_offset', -0.005),   # [m] offset fisso lungo normale
                 ('max_approach_distance', 0.20),      # [m] 20 cm di avanzamento
                 ('approach_speed', 0.01),             # [m/s]
@@ -88,6 +89,7 @@ class ImpedanceController(Node):
         self.max_step_distance = self.get_parameter('max_step_distance').value
         self.gravity_scale_j2 = self.get_parameter('gravity_scale_factor_j2').value
 
+        self.approach_mode          = self.get_parameter('approach_mode').value
         self.desired_normal_offset  = self.get_parameter('desired_normal_offset').value
         self.max_approach_distance  = self.get_parameter('max_approach_distance').value
         self.approach_speed         = self.get_parameter('approach_speed').value
@@ -222,6 +224,7 @@ class ImpedanceController(Node):
         self.get_logger().info(f'Gravity scale J2: {self.gravity_scale_j2}')
         self.get_logger().info(f'Torque limit: {self.torque_limit} Nm')
         self.get_logger().info(f'Safe startup: {self.safe_startup_duration}s')
+        self.get_logger().info(f'Approach mode: {self.approach_mode}')
         self.get_logger().info(f'Max approach: {self.max_approach_distance*100:.0f} cm')
         self.get_logger().info(f'Enable topic: {impedance_enable_topic}')
         self.get_logger().info(f'Done topic:   {impedance_done_topic}')
@@ -402,28 +405,40 @@ class ImpedanceController(Node):
         #   se EE è più vicino (imprecisione JTC): accum_init > 0 ma comunque senza jerk
         if self._phase == 'APPROACH' and not self._surface_latched:
             self._p_surf_latched  = p_surf.copy()
-            self._normal_latched  = normal.copy()
             self._surface_latched = True
-            # Direzione di approccio: -normal = dalla superficie verso il robot
-            # è anche l'asse X_ee (impostato dall'IK).
-            # Usata come feedforward di velocità per seguire la normale in diagonale.
-            self._approach_dir = -normal.copy()   # verso il torso
+
+            if self.approach_mode == 'vertical':
+                # Approccio verticale: ignora la normale reale, scende lungo -Z world.
+                # La normale "efficace" è [0,0,1] (world Z up, dal torso verso robot),
+                # così target = [p_surf.x, p_surf.y, p_surf.z + (0.2-accum)] → scende dritto.
+                self._normal_latched = np.array([0.0, 0.0, 1.0])
+                self.get_logger().info('🔒 Superficie latched — modalità VERTICAL ↓ (normal=[0,0,1])')
+            else:
+                self._normal_latched = normal.copy()
+                self.get_logger().info(
+                    f'🔒 Superficie latched — modalità NORMAL '
+                    f'n=[{normal[0]:.2f},{normal[1]:.2f},{normal[2]:.2f}]'
+                )
+
+            # Direzione di approccio: -normal_eff = verso il torso
+            # Usata come feedforward di velocità per seguire la direzione corretta.
+            self._approach_dir = -self._normal_latched.copy()   # verso il torso
 
             # _R_latched NON viene latched qui: durante APPROACH si usa solo
             # damping angolare per non interferire con la direzione della normale.
             # Il latch avviene alla transizione APPROACH→HOLD (vedi sotto).
 
-            # Proiezione EE sulla normale rispetto alla superficie
+            # Proiezione EE sulla normale effettiva (reale o [0,0,1] in modalità vertical)
+            # per calcolare l'accum iniziale senza jerk.
             ee_pos = x_current.translation
-            proj   = float(np.dot(ee_pos - p_surf, normal))
+            proj   = float(np.dot(ee_pos - p_surf, self._normal_latched))
             self.approach_distance_accum = float(np.clip(
                 self.desired_normal_offset - proj,
                 0.0,
                 self.max_approach_distance
             ))
             self.get_logger().info(
-                f'🔒 Superficie latched: p=[{p_surf[0]:.3f},{p_surf[1]:.3f},{p_surf[2]:.3f}] '
-                f'n=[{normal[0]:.2f},{normal[1]:.2f},{normal[2]:.2f}] | '
+                f'  p=[{p_surf[0]:.3f},{p_surf[1]:.3f},{p_surf[2]:.3f}] '
                 f'proj={proj*100:.1f}cm accum_init={self.approach_distance_accum*100:.1f}cm'
             )
 

@@ -30,10 +30,16 @@ z1_FSM:
     arm_base_pos: [0.0, 0.0, 0.0]  # [m]
 
     # ── Approccio perpendicolare (surface frame) ───────────────────
-    # Il JTC porta l'EE a standoff metri davanti al torso, perpendicolare
-    # alla superficie (come un'ecografia). L'orientamento impone X = -normal.
+    # Il JTC porta l'EE a standoff metri dal torso con X_ee puntato verso il torso.
+    #
+    # approach_mode: "normal"   → standoff lungo la normale superficiale
+    #                             (classico approccio frontale/ecografico)
+    #                "vertical" → standoff direttamente sopra al torso,
+    #                             discesa dritto in -Z world
+    #                             (X_ee = [0,0,-1], punta verso il basso = verso il torso)
     surface_frame_topic:  "/torso_surface_frame"
     ik_approach_standoff: 0.200   # [m] distanza di standoff dalla superficie
+    approach_mode:        "normal"   # "normal" | "vertical"
 
     # ── Debug ──────────────────────────────────────────────────────
     # Se true: dopo WAIT_IK_DONE torna in WAITING senza avviare impedance.
