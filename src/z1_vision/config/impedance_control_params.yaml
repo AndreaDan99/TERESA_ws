@@ -25,17 +25,17 @@ impedance_controller_realsense:
     # perpendicolare al torso anche quando spalla/gomito si muovono.
     # Se l'EE ruota troppo durante approccio → aumenta K_p_rotation.
     # Se oscilla → aumenta K_d_rotation.
-    K_p_rotation: [10.0, 10.0, 10.0]   # [Nm/rad] — conservativo per inizio test
-    K_d_rotation: [1.0,  1.0,  1.0]    # [Nm·s/rad]
+    K_p_rotation: [30.0, 30.0, 30.0]   # [Nm/rad] — conservativo per inizio test
+    K_d_rotation: [3.0,  3.0,  3.0]    # [Nm·s/rad]
     K_i_rotation: [0.0,  0.0,  0.0]
 
     # ── Parametri generali ── TUNED ────────────────────────────────
     integral_limit: 0.02
     torque_limit:   70.0        # [Nm]
-    max_step_distance: 0.40     # [m] limite sicurezza step x_desired
+    max_step_distance: 0.1    # [m] limite sicurezza step x_desired
 
     # ── Avvio sicuro ───────────────────────────────────────────────
-    safe_startup_duration: 3.0  # [s]
+    safe_startup_duration: 2.0  # [s]
 
     # ── Compensazione dinamica ── TUNED ────────────────────────────
     gravity_scale_factor_j2: 1.3
@@ -53,7 +53,7 @@ impedance_controller_realsense:
     # Il braccio deve riuscire a seguire il target → se troppo veloce, il braccio
     # rimane indietro e fa uno scatto quando APPROACH finisce.
     # Regola empirica: con K_p=150 e m_eff≈4kg, ω_n≈6 rad/s → max_track ≈ 0.02-0.03 m/s
-    approach_speed:         0.025   # [m/s] → ~8s per 20cm (controllato, braccio riesce a seguire)
+    approach_speed:         0.035   # [m/s] → ~8s per 20cm (controllato, braccio riesce a seguire)
     retract_speed:          0.10    # [m/s] → ~2s per 20cm ritorno
 
     # ── Hold al contatto ───────────────────────────────────────────
