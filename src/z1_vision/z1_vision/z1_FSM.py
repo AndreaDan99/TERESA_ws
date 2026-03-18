@@ -10,7 +10,7 @@ from std_srvs.srv import Trigger
 from geometry_msgs.msg import PoseStamped
 from visualization_msgs.msg import Marker
 
-from tf_transformations import quaternion_matrix, quaternion_from_matrix
+from tf_transformations import quaternion_matrix
 
 from z1_vision.workspace_checker import WorkspaceChecker
 
@@ -305,18 +305,13 @@ class Z1FSM(Node):
 
     def _make_approach_pose(self) -> PoseStamped | None:
         """
-        Posa di approccio perpendicolare alla superficie del torso (stile ecografo):
+        Posa di approccio al torso:
         - Posizione:    p_surf + standoff * normal   (standoff m davanti al torso)
-        - Orientamento: Z_ee = -normal  (asse tool di link06 punta verso il torso)
-                        X_ee ≈ -world_up (X punta verso il basso)
-                        Y_ee = Z_ee × X_ee (terna destra, laterale)
+        - Orientamento: uguale alla home pose → nessuna rotazione del polso.
 
-        Convenzione frame link06 di Unitree Z1 in posizione home:
-          X home = avanti, Z home = su.
-        Per approccio frontale il polso ruota ~90° attorno a Y:
-          Z_ee → verso il torso   (asse tool, ex-avanti)
-          X_ee → verso il basso   (ex-alto ruotato di 90°)
-          Y_ee → laterale         (terna destra: Z × X)
+        L'IK porta il braccio alla posizione di standoff mantenendo
+        l'orientamento di home. Risultato in home: X=avanti (verso il torso),
+        Z=su, Y=laterale → il gripper punta dritto verso il target.
 
         Fallback al target torso grezzo se il surface frame non è disponibile.
         """
@@ -336,29 +331,7 @@ class Z1FSM(Node):
         p_surf = np.array([sf.pose.position.x, sf.pose.position.y, sf.pose.position.z])
 
         # La normale del surface node punta DAL torso VERSO il robot (TCP).
-        # Usiamo direttamente quella direzione per il standoff.
         p_approach = p_surf + self._ik_approach_standoff * normal   # standoff davanti al torso
-
-        # Orientamento EE desiderato:
-        #   Z_ee = -normal         (asse tool di Z1: gripper punta verso il torso)
-        #   X_ee ≈ -world_up       (X punta verso il basso, come home ruotato 90° su Y)
-        #   Y_ee = Z_ee × X_ee    (terna destra: Z × X = Y, punta lateralmente)
-        z_ee       = -normal                          # asse tool (verso torso)
-        world_down = np.array([0.0, 0.0, -1.0])      # direzione "verso il basso"
-        if abs(np.dot(world_down, z_ee)) > 0.9:      # z_ee quasi verticale → usa -world_Y
-            world_down = np.array([0.0, -1.0, 0.0])
-        # Ortogonalizza world_down rispetto a z_ee → X_ee punta "giù" il più possibile
-        x_ee = world_down - np.dot(world_down, z_ee) * z_ee
-        x_ee /= np.linalg.norm(x_ee)
-        # Y_ee = Z_ee × X_ee per garantire terna destra (Z × X = Y)
-        y_ee = np.cross(z_ee, x_ee)
-        y_ee /= np.linalg.norm(y_ee)
-
-        T = np.eye(4)
-        T[:3, 0] = x_ee
-        T[:3, 1] = y_ee
-        T[:3, 2] = z_ee
-        q_approach = quaternion_from_matrix(T)
 
         goal = PoseStamped()
         goal.header.frame_id    = 'world'
@@ -366,15 +339,16 @@ class Z1FSM(Node):
         goal.pose.position.x    = float(p_approach[0])
         goal.pose.position.y    = float(p_approach[1])
         goal.pose.position.z    = float(p_approach[2])
-        goal.pose.orientation.x = float(q_approach[0])
-        goal.pose.orientation.y = float(q_approach[1])
-        goal.pose.orientation.z = float(q_approach[2])
-        goal.pose.orientation.w = float(q_approach[3])
+        # Orientamento home: nessuna rotazione del polso rispetto alla posizione di partenza
+        goal.pose.orientation.x = float(self._home_orientation[0])
+        goal.pose.orientation.y = float(self._home_orientation[1])
+        goal.pose.orientation.z = float(self._home_orientation[2])
+        goal.pose.orientation.w = float(self._home_orientation[3])
 
         self.get_logger().info(
             f'🎯 IK goal: pos=[{p_approach[0]:.3f},{p_approach[1]:.3f},{p_approach[2]:.3f}] '
             f'n=[{normal[0]:.2f},{normal[1]:.2f},{normal[2]:.2f}] '
-            f'standoff={self._ik_approach_standoff:.3f}m'
+            f'standoff={self._ik_approach_standoff:.3f}m | orient=home'
         )
 
         return goal
