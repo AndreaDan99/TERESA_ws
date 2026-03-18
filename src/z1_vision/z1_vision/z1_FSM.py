@@ -307,9 +307,14 @@ class Z1FSM(Node):
         """
         Posa di approccio perpendicolare alla superficie del torso:
         - Posizione:    p_surf + standoff * normal   (standoff m davanti al torso)
-        - Orientamento: X_ee = -normal (asse approccio verso il torso),
-                        Z_ee ≈ world_up (gripper dritto, Z verso l'alto),
-                        Y_ee = Z_ee × X_ee (terna destra, punta di lato).
+        - Orientamento: X_ee = -normal (asse approccio lungo la normale),
+                        Y e Z: NESSUN vincolo — si ottengono con la rotazione
+                        MINIMA dall'orientamento home che porta X su -normal.
+                        Questo evita qualsiasi rotazione "inutile" del polso.
+
+        Algoritmo "minimal rotation" (formula di Rodrigues):
+          Ruota R_home del minimo angolo necessario per portare X_home → -normal.
+          Y e Z ruotano solidali con X, senza roll aggiuntivo attorno a X.
 
         Fallback al target torso grezzo se il surface frame non è disponibile.
         """
@@ -331,23 +336,42 @@ class Z1FSM(Node):
         # La normale punta DAL torso VERSO il robot → standoff davanti al torso
         p_approach = p_surf + self._ik_approach_standoff * normal
 
-        # Orientamento EE:
-        #   X_ee = -normal  → asse approccio (verso il torso, lungo la normale)
-        #   Z_ee ≈ world_up → gripper dritto, Z verso l'alto (ortogonalizzato)
-        #   Y_ee = Z × X    → completa terna destra, punta lateralmente
-        x_ee     = -normal
-        world_up = np.array([0.0, 0.0, 1.0])
-        if abs(np.dot(world_up, x_ee)) > 0.9:    # x_ee quasi verticale → usa world_Y
-            world_up = np.array([0.0, 1.0, 0.0])
-        z_ee = world_up - np.dot(world_up, x_ee) * x_ee
-        z_ee /= np.linalg.norm(z_ee)
-        y_ee = np.cross(z_ee, x_ee)
-        y_ee /= np.linalg.norm(y_ee)
+        # ── Orientamento: rotazione minima da home per allineare X → -normal ──
+        # R_home = orientamento di home (nessun vincolo su Y e Z)
+        R_home = quaternion_matrix(self._home_orientation)[:3, :3]
+        x_home = R_home[:, 0]          # asse X in home
+        x_ee   = -normal               # asse X desiderato (verso il torso)
+
+        cos_a = float(np.clip(np.dot(x_home, x_ee), -1.0, 1.0))
+        axis  = np.cross(x_home, x_ee)
+        sin_a = np.linalg.norm(axis)
+
+        if sin_a < 1e-6:
+            # x_home già allineato (o antiparallelo) a x_ee
+            if cos_a > 0:
+                R_approach = R_home                    # già allineato
+            else:
+                # 180°: ruota attorno a Z world (o Y se necessario)
+                perp = np.array([0.0, 0.0, 1.0])
+                if abs(np.dot(perp, x_home)) > 0.9:
+                    perp = np.array([0.0, 1.0, 0.0])
+                perp -= np.dot(perp, x_home) * x_home
+                perp /= np.linalg.norm(perp)
+                K = np.array([[     0, -perp[2],  perp[1]],
+                              [ perp[2],      0, -perp[0]],
+                              [-perp[1],  perp[0],      0]])
+                R_approach = (2.0 * np.outer(perp, perp) - np.eye(3)) @ R_home
+        else:
+            axis  /= sin_a
+            K      = np.array([[    0, -axis[2],  axis[1]],
+                               [ axis[2],     0, -axis[0]],
+                               [-axis[1],  axis[0],     0]])
+            # Rodrigues: R_align = I + sin(θ)K + (1-cos(θ))K²
+            R_align    = np.eye(3) + sin_a * K + (1.0 - cos_a) * (K @ K)
+            R_approach = R_align @ R_home
 
         T = np.eye(4)
-        T[:3, 0] = x_ee
-        T[:3, 1] = y_ee
-        T[:3, 2] = z_ee
+        T[:3, :3]  = R_approach
         q_approach = quaternion_from_matrix(T)
 
         goal = PoseStamped()
