@@ -166,6 +166,9 @@ class ImpedanceController(Node):
         self._surface_latched  = False
         self._p_surf_latched   = None   # np.array [3]
         self._normal_latched   = None   # np.array [3]
+        # Direzione di approccio latched (= -normal, verso il torso)
+        # usata per il feedforward di velocità in APPROACH/RETRACT
+        self._approach_dir     = None   # np.array [3], verso torso
 
         # Stato superficie (RealSense)
         self.surface_frame = None
@@ -263,6 +266,7 @@ class ImpedanceController(Node):
             self._surface_latched        = False
             self._p_surf_latched         = None
             self._normal_latched         = None
+            self._approach_dir           = None
             self.x_desired_initialized   = False
             self.get_logger().info('🛑 Impedance disabled — reset')
 
@@ -275,6 +279,7 @@ class ImpedanceController(Node):
             self._surface_latched        = False   # verrà latched al primo tick valido
             self._p_surf_latched         = None
             self._normal_latched         = None
+            self._approach_dir           = None
             self.get_logger().info('✅ Impedance enabled — fase APPROACH')
 
     def impedance_callback(self, msg):
@@ -399,6 +404,10 @@ class ImpedanceController(Node):
             self._p_surf_latched  = p_surf.copy()
             self._normal_latched  = normal.copy()
             self._surface_latched = True
+            # Direzione di approccio: -normal = dalla superficie verso il robot
+            # è anche l'asse X_ee (impostato dall'IK).
+            # Usata come feedforward di velocità per seguire la normale in diagonale.
+            self._approach_dir = -normal.copy()   # verso il torso
 
             # _R_latched NON viene latched qui: durante APPROACH si usa solo
             # damping angolare per non interferire con la direzione della normale.
@@ -517,7 +526,18 @@ class ImpedanceController(Node):
         K_d_eff = self.K_d * scale_kd
         F_max   = 80.0
 
-        F_cartesian    = K_p_eff @ x_error - K_d_eff @ dx + self.K_i @ self.error_integral
+        # ── Velocity feedforward per APPROACH e RETRACT ───────────────
+        # Senza feedforward il controller dipende solo da K_p * errore_posizione,
+        # che è insufficiente per seguire una normale inclinata (componente Z vs gravità).
+        # Con feedforward: K_d smorzua l'errore di velocità (dx - v_des) invece di dx,
+        # così il braccio segue la direzione della normale anche in diagonale.
+        v_ff = np.zeros(6)   # [m/s, m/s, m/s, rad/s, rad/s, rad/s]
+        if self._phase == 'APPROACH' and self._approach_dir is not None:
+            v_ff[:3] = self.approach_speed * self._approach_dir   # verso torso
+        elif self._phase == 'RETRACT' and self._approach_dir is not None:
+            v_ff[:3] = -self.retract_speed * self._approach_dir   # via dal torso
+
+        F_cartesian    = K_p_eff @ x_error - K_d_eff @ (dx - v_ff) + self.K_i @ self.error_integral
 
         # ── 1. Monitor manipolabilità + damping vicino a singolarità ──────
         # w = sqrt(det(J_pos · J_pos^T)): → 0 vicino a singolarità
