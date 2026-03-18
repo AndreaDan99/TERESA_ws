@@ -159,7 +159,7 @@ class ImpedanceController(Node):
         self.approach_distance_accum = 0.0
         self._hold_start_time        = None     # rclpy.Time quando inizia HOLD
         self._done_published         = False
-        self._R_latched              = None   # rotazione EE latched all'avvio APPROACH
+        self._R_latched              = None   # rotazione EE latched alla transizione APPROACH→HOLD
 
         # Latch superficie: congelata al primo tick di APPROACH
         # evita salti del target quando la persona si muove durante l'avanzamento
@@ -271,7 +271,7 @@ class ImpedanceController(Node):
             self.approach_distance_accum = 0.0
             self._hold_start_time        = None
             self._done_published         = False
-            self._R_latched              = None   # verrà latched al primo tick APPROACH
+            self._R_latched              = None   # verrà latched alla transizione APPROACH→HOLD
             self._surface_latched        = False   # verrà latched al primo tick valido
             self._p_surf_latched         = None
             self._normal_latched         = None
@@ -400,9 +400,9 @@ class ImpedanceController(Node):
             self._normal_latched  = normal.copy()
             self._surface_latched = True
 
-            # Latch orientamento EE Cartesiano — mantenuto per tutta la sequenza
-            self._R_latched = x_current.rotation.copy()
-            self.get_logger().info('🔒 Orientamento EE latched per controllo Cartesiano')
+            # _R_latched NON viene latched qui: durante APPROACH si usa solo
+            # damping angolare per non interferire con la direzione della normale.
+            # Il latch avviene alla transizione APPROACH→HOLD (vedi sotto).
 
             # Proiezione EE sulla normale rispetto alla superficie
             ee_pos = x_current.translation
@@ -434,8 +434,13 @@ class ImpedanceController(Node):
             if self.approach_distance_accum >= self.max_approach_distance:
                 self._phase           = 'HOLD'
                 self._hold_start_time = self.get_clock().now()
+                # Latch orientamento EE al termine dell'APPROACH:
+                # si mantiene la rotazione reale raggiunta (non quella iniziale)
+                # così il controllo orientamento non deve "combattere" la traiettoria.
+                self._R_latched = x_current.rotation.copy()
                 self.get_logger().info(
                     f'📍 APPROACH completato ({self.max_approach_distance*100:.0f} cm) → HOLD {self.hold_time:.0f}s'
+                    f' | Rot latched: X=[{x_current.rotation[0,0]:.2f},{x_current.rotation[1,0]:.2f},{x_current.rotation[2,0]:.2f}]'
                 )
 
         # ── Fase HOLD: rimani fermo per hold_time secondi ─────────────
@@ -533,10 +538,14 @@ class ImpedanceController(Node):
         F_cartesian[:3] = np.clip(F_cartesian[:3], -F_max, F_max)
 
         # ── Controllo orientamento Cartesiano ───────────────────────────
-        # Usa la rotazione EE latched al primo tick di APPROACH come riferimento.
-        # Mantiene l'orientamento anche quando spalla/gomito si muovono
-        # (il controllo joint-space non funziona perché q_wrist fisso ≠ R_ee fisso).
-        if self._R_latched is not None:
+        # Durante APPROACH si usa SOLO damping angolare (da K_p_eff @ x_error già
+        # calcolato sopra con x_error[3:6]=0): questo evita che le coppie correttive
+        # dell'orientamento interferiscano con il moto lungo la normale superficiale.
+        #
+        # Durante HOLD / RETRACT / DONE il latch _R_latched (acquisito alla fine
+        # dell'APPROACH) garantisce che l'EE mantenga la perpendicolarità al torso
+        # contro le forze di contatto.
+        if self._phase in ('HOLD', 'RETRACT', 'DONE') and self._R_latched is not None:
             R_err   = self._R_latched @ x_current.rotation.T   # frame mondo
             e_omega = pin.log3(R_err)                           # asse-angolo 3D
             K_p_rot = np.diag(self.K_p)[3:6]
@@ -544,8 +553,8 @@ class ImpedanceController(Node):
             F_rot   = K_p_rot * e_omega - K_d_rot * dx[3:6]
             F_max_rot = 15.0                                     # [Nm] limite sicurezza
             F_cartesian[3:6] = np.clip(F_rot, -F_max_rot, F_max_rot)
-        else:
-            F_cartesian[3:6] = 0.0
+        # else (APPROACH o _R_latched non ancora disponibile):
+        #   F_cartesian[3:6] rimane = -K_d_eff[3:6,3:6] @ dx[3:6]  (solo smorzamento)
 
         tau_impedance = (J.T @ F_cartesian)[:self.n_joints]
 
