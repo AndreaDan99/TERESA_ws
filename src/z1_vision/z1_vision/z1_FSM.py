@@ -307,13 +307,16 @@ class Z1FSM(Node):
         """
         Posa di approccio perpendicolare alla superficie del torso (stile ecografo):
         - Posizione:    p_surf + standoff * normal   (standoff m davanti al torso)
-        - Orientamento: Z_ee = -normal (asse tool di link06 punta verso il torso)
-                        Y_ee ≈ world_up (braccio "dritto", Y verso l'alto)
-                        X_ee = Y_ee × Z_ee (completa terna destra, punta di lato)
+        - Orientamento: Z_ee = -normal  (asse tool di link06 punta verso il torso)
+                        X_ee ≈ -world_up (X punta verso il basso)
+                        Y_ee = Z_ee × X_ee (terna destra, laterale)
 
-        NOTA: per Unitree Z1, link06 ha Z come asse tool (direzione gripper).
-        Assegnare l'asse di approccio a X causava una rotazione di 180° del braccio
-        (l'IK trovava una configurazione sul lato opposto del manichino).
+        Convenzione frame link06 di Unitree Z1 in posizione home:
+          X home = avanti, Z home = su.
+        Per approccio frontale il polso ruota ~90° attorno a Y:
+          Z_ee → verso il torso   (asse tool, ex-avanti)
+          X_ee → verso il basso   (ex-alto ruotato di 90°)
+          Y_ee → laterale         (terna destra: Z × X)
 
         Fallback al target torso grezzo se il surface frame non è disponibile.
         """
@@ -337,19 +340,19 @@ class Z1FSM(Node):
         p_approach = p_surf + self._ik_approach_standoff * normal   # standoff davanti al torso
 
         # Orientamento EE desiderato:
-        #   Z_ee = -normal  (asse tool di Z1: gripper punta verso il torso)
-        #   Y_ee ≈ world_up (braccio dritto, Y verso l'alto)
-        #   X_ee = Y_ee × Z_ee (completa terna destra)
-        z_ee    = -normal                          # asse tool (verso torso)
-        world_up = np.array([0.0, 0.0, 1.0])
-        if abs(np.dot(world_up, z_ee)) > 0.9:     # z_ee quasi verticale → usa world_Y
-            world_up = np.array([0.0, 1.0, 0.0])
-        # Ortogonalizza world_up rispetto a z_ee → Y_ee punta "su" il più possibile
-        y_ee = world_up - np.dot(world_up, z_ee) * z_ee
-        y_ee /= np.linalg.norm(y_ee)
-        # X_ee = Y_ee × Z_ee per garantire terna destra
-        x_ee = np.cross(y_ee, z_ee)
+        #   Z_ee = -normal         (asse tool di Z1: gripper punta verso il torso)
+        #   X_ee ≈ -world_up       (X punta verso il basso, come home ruotato 90° su Y)
+        #   Y_ee = Z_ee × X_ee    (terna destra: Z × X = Y, punta lateralmente)
+        z_ee       = -normal                          # asse tool (verso torso)
+        world_down = np.array([0.0, 0.0, -1.0])      # direzione "verso il basso"
+        if abs(np.dot(world_down, z_ee)) > 0.9:      # z_ee quasi verticale → usa -world_Y
+            world_down = np.array([0.0, -1.0, 0.0])
+        # Ortogonalizza world_down rispetto a z_ee → X_ee punta "giù" il più possibile
+        x_ee = world_down - np.dot(world_down, z_ee) * z_ee
         x_ee /= np.linalg.norm(x_ee)
+        # Y_ee = Z_ee × X_ee per garantire terna destra (Z × X = Y)
+        y_ee = np.cross(z_ee, x_ee)
+        y_ee /= np.linalg.norm(y_ee)
 
         T = np.eye(4)
         T[:3, 0] = x_ee
