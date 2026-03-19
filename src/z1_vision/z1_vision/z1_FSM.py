@@ -78,13 +78,9 @@ class Z1FSM(Node):
         self._approach_mode        = self.get_parameter("approach_mode").value
 
         # ── Modalità scansione (delegata a ScanManager) ─────────────────
-        # Tutti i parametri scan (scan_mode, scan_delta_*, scan_clearance_z,
-        # scan_center_y_offset) vengono dichiarati e letti da ScanManager.
-        self.declare_parameter("scan_mode",             "single")
-        self.declare_parameter("scan_delta_lateral",    0.06)
-        self.declare_parameter("scan_delta_axial",      0.06)
-        self.declare_parameter("scan_center_y_offset",  0.05)
-        self.declare_parameter("scan_clearance_z",      0.120)
+        # Tutti i parametri scan vengono dichiarati e letti internamente
+        # da ScanManager.from_params(): scan_mode, scan_delta_lateral/axial,
+        # scan_center_y_offset, scan_clearance_x, wait_ik_timeout_s.
         self._scan_mgr = ScanManager.from_params(self)
 
         # ── Debug: skip impedance per verificare solo allineamento JTC ──

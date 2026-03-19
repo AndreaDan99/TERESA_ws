@@ -78,6 +78,14 @@ class ScanManager:
         """
         Costruisce ScanManager leggendo i ROS parameters dal nodo.
         Dichiara i parametri se non già dichiarati.
+
+        Parametri ROS letti:
+          scan_mode             : "single" | qualsiasi stringa (default "single")
+          scan_delta_lateral    : offset ±Z destra/sinistra [m]
+          scan_delta_axial      : offset ±Y spalla/fianco [m]
+          scan_center_y_offset  : shift +Y del centro rispetto alle spalle [m]
+          scan_clearance_x      : clearance aggiuntivo lungo -X in SCAN_PRELIFT [m]
+          wait_ik_timeout_s     : timeout IK condiviso con z1_FSM [s]
         """
         def _declare(name, default):
             try:
@@ -90,7 +98,7 @@ class ScanManager:
         _dl  = float(_declare("scan_delta_lateral",   0.06))
         _da  = float(_declare("scan_delta_axial",     0.06))
         _cy  = float(_declare("scan_center_y_offset", 0.05))
-        clr  = float(_declare("scan_clearance_z",     0.120))
+        clr  = float(_declare("scan_clearance_x",     0.120))   # clearance lungo -X (asse approccio)
         tmo  = float(_declare("wait_ik_timeout_s",    15.0))
 
         # (dx, dy, dz): dx=0 sempre, dy=asse corpo (Y), dz=laterale (Z)
