@@ -179,6 +179,7 @@ class ImpedanceController(Node):
         self._surface_latched  = False
         self._p_surf_latched   = None   # np.array [3]
         self._normal_latched   = None   # np.array [3]
+        self._ee_xy_latched    = None   # np.array [2] — XY EE al latch (vertical mode)
         # Direzione di approccio latched (= -normal, verso il torso)
         # usata per il feedforward di velocità in APPROACH/RETRACT
         self._approach_dir     = None   # np.array [3], verso torso
@@ -287,6 +288,7 @@ class ImpedanceController(Node):
             self._surface_latched        = False
             self._p_surf_latched         = None
             self._normal_latched         = None
+            self._ee_xy_latched          = None
             self._approach_dir           = None
             self.get_logger().info('🛑 Impedance disabled — reset')
 
@@ -301,6 +303,7 @@ class ImpedanceController(Node):
             self._surface_latched        = False   # verrà latched al primo tick valido
             self._p_surf_latched         = None
             self._normal_latched         = None
+            self._ee_xy_latched          = None
             self._approach_dir           = None
             # Safe startup: 2s di hold ad alta rigidezza per smorzare la velocità
             # residua dallo switch JTC→torque prima di avviare APPROACH.
@@ -485,6 +488,11 @@ class ImpedanceController(Node):
             self._accum_init             = float(self.desired_normal_offset - proj)
             self._accum_max              = self._accum_init + self.max_approach_distance
             self.approach_distance_accum = self._accum_init
+            # In vertical mode, latch EE XY: il braccio scende dritto senza spostarsi in XY.
+            # Il target XY da p_surf potrebbe differire dall'EE reale se il surface frame
+            # è cambiato tra il calcolo JTC e l'attivazione dell'impedance.
+            if self.approach_mode == 'vertical':
+                self._ee_xy_latched = ee_pos[:2].copy()
             self.get_logger().info(
                 f'  p=[{p_surf[0]:.3f},{p_surf[1]:.3f},{p_surf[2]:.3f}] '
                 f'proj={proj*100:.1f}cm accum_init={self._accum_init*100:.1f}cm '
@@ -549,9 +557,14 @@ class ImpedanceController(Node):
 
         # ── Aggiorna target in base alla distanza accumulata ──────────
         # target = p_surf + (offset − accum) * normal
-        #   accum=0   → target al standoff (lontano dal torso)
-        #   accum=max → target al standoff−max (lieve contatto nella superficie)
-        target_pos     = p_surf + (self.desired_normal_offset - self.approach_distance_accum) * normal
+        #   accum_init → target = EE al latch (zero errore)
+        #   accum_max  → target = EE - max_approach_distance (lieve contatto)
+        target_pos = p_surf + (self.desired_normal_offset - self.approach_distance_accum) * normal
+        # In vertical mode: override XY con EE latched → il braccio scende dritto,
+        # non si sposta verso p_surf.xy (che può differire dall'EE per drift surface frame).
+        if self.approach_mode == 'vertical' and self._ee_xy_latched is not None:
+            target_pos[0] = self._ee_xy_latched[0]
+            target_pos[1] = self._ee_xy_latched[1]
         self.x_desired = pin.SE3(R_surf, target_pos)
 
         self._run_impedance(x_current)
