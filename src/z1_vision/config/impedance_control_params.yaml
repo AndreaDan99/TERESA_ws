@@ -15,9 +15,10 @@ impedance_controller_realsense:
     # FASE 1 (senza filtro dq): K_p moderato per forza sufficiente,
     #   K_d basso (15-25) per non amplificare rumore a 500Hz, K_i=0
     # FASE 2 (con filtro passa-basso su dq): K_p=200/300, K_d=30/50
-    K_p_translation: [75.0, 75.0, 125.0]
-    K_d_translation: [15.0,  15.0,  15.0]   # alzato grazie al filtro passa-basso su dx
-    K_i_translation: [0.2,   0.2,   0.2]
+    K_p_translation: [75.0,  75.0,  125.0]
+    # K_d_critico per ζ=0.7: XY → 0.7*2*sqrt(75*4)=24, Z → 0.7*2*sqrt(125*4)=31
+    K_d_translation: [24.0,  24.0,  31.0]   # ζ≈0.7 con filtro passa-basso su dx
+    K_i_translation: [0.0,   0.0,   0.0]    # disabilitato: K_i=0.2 dava max 4mN (inutile)
 
     # ── Guadagni cartesiani (rotazione) ───────────────────────────
     # Controllo orientamento EE in spazio Cartesiano via Jacobian transpose.
