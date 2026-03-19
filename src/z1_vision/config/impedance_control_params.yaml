@@ -18,7 +18,7 @@ impedance_controller_realsense:
     K_p_translation: [75.0,  75.0,  125.0]
     # K_d_critico per ζ=0.7: XY → 0.7*2*sqrt(75*4)=24, Z → 0.7*2*sqrt(125*4)=31
     K_d_translation: [24.0,  24.0,  31.0]   # ζ≈0.7 con filtro passa-basso su dx
-    K_i_translation: [0.0,   0.0,   0.0]    # disabilitato: K_i=0.2 dava max 4mN (inutile)
+    K_i_translation: [3.0,   3.0,   5.0]    # [N/(m·s)] — max forza: 1.5N XY, 2.5N Z (con integral_limit=0.5)
 
     # ── Guadagni cartesiani (rotazione) ───────────────────────────
     # Controllo orientamento EE in spazio Cartesiano via Jacobian transpose.
@@ -31,7 +31,10 @@ impedance_controller_realsense:
     K_i_rotation: [0.0,  0.0,  0.0]
 
     # ── Parametri generali ── TUNED ────────────────────────────────
-    integral_limit: 0.02
+    # integral_limit: saturazione dell'integrale [m·s]
+    # Con K_i=5 e limit=0.5: forza max integrale = 5*0.5 = 2.5N
+    # (il vecchio limit=0.02 dava max 4mN con K_i=0.2 → inutile)
+    integral_limit: 0.5
     torque_limit:   70.0        # [Nm]
     max_step_distance: 0.05   # [m] limite sicurezza step x_desired
 
