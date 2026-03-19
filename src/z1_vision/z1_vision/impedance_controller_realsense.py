@@ -146,9 +146,16 @@ class ImpedanceController(Node):
         self._R_latched: np.ndarray | None = None
 
         # Controllo PID
-        self.control_dt       = 1.0 / control_rate
-        self.error_integral   = np.zeros(6)
+        self.control_dt        = 1.0 / control_rate
+        self.error_integral    = np.zeros(6)
         self.scale_j2_filtered = 1.0
+
+        # Filtro passa-basso su velocità Cartesiana (dx = J @ dq).
+        # A 500Hz il rumore encoder amplificato da K_d causa oscillazioni.
+        # α=0.15 → τ ≈ 0.013s (fc ≈ 12Hz): filtra bene il rumore >50Hz
+        # mantenendo la dinamica reale del braccio (<5Hz).
+        self._dx_filtered   = np.zeros(6)
+        self._dx_filter_alpha = 0.15   # coefficiente filtro IIR primo ordine
 
         # Safe startup
         self.safe_startup_mode    = True
@@ -294,6 +301,7 @@ class ImpedanceController(Node):
             self.safe_startup_counter  = 0
             self.error_integral        = np.zeros(6)
             self.scale_j2_filtered     = self.gravity_scale_j2
+            self._dx_filtered          = np.zeros(6)   # reset filtro velocità
             self.get_logger().info('✅ Impedance enabled — safe startup → APPROACH')
 
     def impedance_callback(self, msg):
@@ -343,10 +351,21 @@ class ImpedanceController(Node):
                     self.model, self.data, self.q, self.ee_frame_id,
                     pin.ReferenceFrame.LOCAL_WORLD_ALIGNED
                 )
-                dx = J @ self.dq
+                dx_raw = J @ self.dq
+                self._dx_filtered = (self._dx_filter_alpha * dx_raw
+                                     + (1.0 - self._dx_filter_alpha) * self._dx_filtered)
+                dx = self._dx_filtered
 
-                K_p_s = np.diag([200.0, 200.0, 200.0, 20.0, 20.0, 20.0])
-                K_d_s = np.diag([20.0,  20.0,  20.0,  2.0,  2.0,  2.0])
+                # Stessi K_p del controller principale per zero discontinuità
+                # alla transizione safe_startup→APPROACH.
+                # K_d alzato (critico ≈ 2*sqrt(K_p*m_eff)): smorzamento forte
+                # per fermare velocità residua dal switch JTC→torque senza oscillare.
+                # Stessi K_p del controller principale → zero discontinuità
+                # alla transizione safe_startup→APPROACH.
+                # K_d alzato verso il valore critico (2*sqrt(K_p*m_eff)≈49)
+                # per smorzare rapidamente la velocità residua dal switch JTC→torque.
+                K_p_s = self.K_p.copy()
+                K_d_s = np.diag([45.0, 45.0, 45.0, 8.0, 8.0, 8.0])
 
                 F_cartesian  = K_p_s @ x_error - K_d_s @ dx
                 tau_total    = (J.T @ F_cartesian)[:self.n_joints] + self.compute_compensation()
@@ -532,7 +551,12 @@ class ImpedanceController(Node):
             self.model, self.data, self.q, self.ee_frame_id,
             pin.ReferenceFrame.LOCAL_WORLD_ALIGNED
         )
-        dx = J @ self.dq
+        dx_raw = J @ self.dq
+        # Filtro IIR passa-basso su dx: elimina rumore encoder ad alta frequenza
+        # che K_d amplificherebbe in coppia causando oscillazioni a 500Hz.
+        self._dx_filtered = (self._dx_filter_alpha * dx_raw
+                             + (1.0 - self._dx_filter_alpha) * self._dx_filtered)
+        dx = self._dx_filtered
 
         # Anti-windup
         error_norm = np.linalg.norm(x_error[:3])
