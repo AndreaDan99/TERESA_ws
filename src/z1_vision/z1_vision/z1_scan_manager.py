@@ -40,8 +40,10 @@ class ScanManager:
     """
 
     # ── Costanti modalità ─────────────────────────────────────────────────
-    MODE_SINGLE          = "single"
-    MODE_FAST_ULTRASOUND = "fast_ultrasound"
+    # MODE_SINGLE è l'unica costante hardcoded: tutto ciò che non è "single"
+    # è trattato come scansione multi-punto. Il nome della modalità multi-punto
+    # (es. "fast_ultrasound") è definito solo nel YAML (scan_mode).
+    MODE_SINGLE = "single"
 
     # ── Costruttori ────────────────────────────────────────────────────────
 
@@ -55,7 +57,7 @@ class ScanManager:
         """
         Parameters
         ----------
-        mode       : ScanManager.MODE_SINGLE | ScanManager.MODE_FAST_ULTRASOUND
+        mode       : ScanManager.MODE_SINGLE | qualsiasi stringa dal YAML (scan_mode)
         offsets    : lista di (dx, dy, dz) in world frame; offsets[0] = centro
         clearance  : clearance aggiuntivo lungo -X durante SCAN_PRELIFT [m]
         ik_timeout : timeout IK identico a WAIT_IK_DONE [s]
@@ -198,7 +200,7 @@ class ScanManager:
         "SCAN_PRELIFT" → ci sono altri punti da scansionare
         "HOMING"       → scansione completata, si torna a home
         """
-        if self.mode == self.MODE_FAST_ULTRASOUND and not self.is_complete:
+        if self.mode != self.MODE_SINGLE and not self.is_complete:
             self.advance()
             off = self.current_offset
             fsm.get_logger().info(
