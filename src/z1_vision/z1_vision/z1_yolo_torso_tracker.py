@@ -25,14 +25,17 @@ from tf2_geometry_msgs import do_transform_point
 from .kalman_filter import Kalman3D
 
 
-# COCO Keypoints: spalle + fianchi
-TORSO_KEYPOINTS = [5, 6, 11, 12]
+# COCO Keypoints (indici standard)
+SHOULDER_KEYPOINTS = [5, 6]             # spalla sx, spalla dx
+HIP_KEYPOINTS      = [11, 12]           # fianco sx, fianco dx
+FACE_KEYPOINTS     = [0, 1, 2, 3, 4]   # naso, occhio sx, occhio dx, orecchio sx, orecchio dx
+TORSO_KEYPOINTS    = SHOULDER_KEYPOINTS + HIP_KEYPOINTS   # spalle + fianchi
 
 TORSO_EDGES = [
-    (5, 6),
-    (5, 11),
-    (6, 12),
-    (11, 12),
+    (5, 6),   # spalle
+    (5, 11),  # spalla sx → fianco sx
+    (6, 12),  # spalla dx → fianco dx
+    (11, 12), # fianchi
 ]
 
 STATE_COLORS = {
@@ -72,6 +75,12 @@ class Z1YoloTorsoTracker(Node):
         # ── Parametri velocità ─────────────────────────────────────
         self.declare_parameter('tracking_speed',     0.05)   # invariato (interpolazione verso target)
 
+        # ── Stima centro torso ─────────────────────────────────────
+        # Metodo primario:  media spalle + fianchi (se fianchi rilevati)
+        # Metodo fallback:  shoulder_mid + chest_offset lungo asse corpo (direzione opposta al viso)
+        self.declare_parameter('use_face_fallback',           True)
+        self.declare_parameter('chest_offset_from_shoulder',  0.15)  # [m]
+
         # ── Parametri sync RGB+Depth ───────────────────────────────
         self.declare_parameter('sync_slop',          0.10)   # secondi tolleranza sync timestamp
         self.declare_parameter('sync_queue_size',    10)
@@ -93,6 +102,8 @@ class Z1YoloTorsoTracker(Node):
 
         self.recovery_frames    = int(self.get_parameter('recovery_frames').value)
         self.tracking_speed     = float(self.get_parameter('tracking_speed').value)
+        self.use_face_fallback  = bool(self.get_parameter('use_face_fallback').value)
+        self.chest_offset_m     = float(self.get_parameter('chest_offset_from_shoulder').value)
         sync_slop               = float(self.get_parameter('sync_slop').value)
         sync_queue_size         = int(self.get_parameter('sync_queue_size').value)
 
@@ -290,9 +301,10 @@ class Z1YoloTorsoTracker(Node):
         fx, fy = K[0, 0], K[1, 1]
         cx, cy = K[0, 2], K[1, 2]
 
-        torso_pts, kp_3d, confs = [], {}, []
-        for idx in TORSO_KEYPOINTS:
-            if kp_conf[idx] < self.conf_thr:
+        # ── Estrai in 3D tutti i keypoint rilevanti (torso + viso) ────
+        kp_3d, kp_3d_conf = {}, {}
+        for idx in (TORSO_KEYPOINTS + FACE_KEYPOINTS):
+            if idx >= len(kp_conf) or kp_conf[idx] < self.conf_thr:
                 continue
             u, v = int(kp_xy[idx, 0]), int(kp_xy[idx, 1])
             if not (0 <= v < depth.shape[0] and 0 <= u < depth.shape[1]):
@@ -302,14 +314,44 @@ class Z1YoloTorsoTracker(Node):
                 continue
             X = (u - cx) * d / fx
             Y = (v - cy) * d / fy
-            torso_pts.append([X, Y, d])
-            kp_3d[idx] = [X, Y, d]
-            confs.append(kp_conf[idx])
+            kp_3d[idx]      = [X, Y, d]
+            kp_3d_conf[idx] = float(kp_conf[idx])
 
-        if len(torso_pts) < 2:
-            return None, {}, 0, 0.0
+        shoulder_pts  = [kp_3d[i] for i in SHOULDER_KEYPOINTS if i in kp_3d]
+        hip_pts       = [kp_3d[i] for i in HIP_KEYPOINTS      if i in kp_3d]
+        shoulder_conf = [kp_3d_conf[i] for i in SHOULDER_KEYPOINTS if i in kp_3d]
+        hip_conf      = [kp_3d_conf[i] for i in HIP_KEYPOINTS      if i in kp_3d]
 
-        return np.mean(torso_pts, axis=0), kp_3d, len(torso_pts), float(np.mean(confs))
+        # ── Metodo primario: spalle + fianchi ─────────────────────────
+        if len(shoulder_pts) >= 1 and len(hip_pts) >= 1:
+            torso_pts = shoulder_pts + hip_pts
+            all_confs = shoulder_conf + hip_conf
+            return np.mean(torso_pts, axis=0), kp_3d, len(torso_pts), float(np.mean(all_confs))
+
+        # ── Metodo fallback: spalle + direzione viso ──────────────────
+        # Il viso è "sopra" le spalle lungo l'asse del corpo.
+        # Il centro del petto = shoulder_mid + chest_offset * (-direzione_viso)
+        if self.use_face_fallback and len(shoulder_pts) >= 1:
+            face_pts   = [kp_3d[i] for i in FACE_KEYPOINTS if i in kp_3d]
+            face_confs = [kp_3d_conf[i] for i in FACE_KEYPOINTS if i in kp_3d]
+            if len(face_pts) >= 1:
+                shoulder_mid = np.mean(shoulder_pts, axis=0)
+                face_center  = np.mean(face_pts,     axis=0)
+                up_dir       = face_center - shoulder_mid
+                up_norm      = np.linalg.norm(up_dir)
+                if up_norm > 0.01:
+                    up_dir /= up_norm
+                    torso_raw = shoulder_mid + self.chest_offset_m * (-up_dir)
+                else:
+                    torso_raw = shoulder_mid  # direzione non stimabile
+                n_valid  = len(shoulder_pts) + len(face_pts)
+                avg_conf = float(np.mean(shoulder_conf + face_confs))
+                self.get_logger().debug(
+                    f'[tracker] fallback face: shoulder_mid→chest offset {self.chest_offset_m:.2f}m',
+                    throttle_duration_sec=2.0)
+                return torso_raw, kp_3d, n_valid, avg_conf
+
+        return None, kp_3d, 0, 0.0
 
     # ──────────────────────────────────────────────────────────────
     def _update_state(self, torso_raw, n_valid, avg_conf, header):
@@ -474,7 +516,7 @@ class Z1YoloTorsoTracker(Node):
         cm.lifetime.nanosec   = 200_000_000
         markers.markers.append(cm)
 
-        # 2. Sfere keypoint
+        # 2a. Sfere keypoint torso (spalle + fianchi) — blu
         for i, idx in enumerate(TORSO_KEYPOINTS):
             if idx not in kp_3d_w:
                 continue
@@ -492,6 +534,27 @@ class Z1YoloTorsoTracker(Node):
             m.pose.orientation.w = 1.0
             m.scale.x = m.scale.y = m.scale.z = 0.04
             m.color   = ColorRGBA(r=0.0, g=0.5, b=1.0, a=0.8)
+            m.lifetime.nanosec   = 200_000_000
+            markers.markers.append(m)
+
+        # 2b. Sfere keypoint viso (naso/occhi/orecchie) — giallo
+        for i, idx in enumerate(FACE_KEYPOINTS):
+            if idx not in kp_3d_w:
+                continue
+            kp = kp_3d_w[idx]
+            m = Marker()
+            m.header.frame_id    = frame
+            m.header.stamp       = stamp
+            m.ns                 = 'face_keypoints'
+            m.id                 = i + 1
+            m.type               = Marker.SPHERE
+            m.action             = Marker.ADD
+            m.pose.position.x    = float(kp[0])
+            m.pose.position.y    = float(kp[1])
+            m.pose.position.z    = float(kp[2])
+            m.pose.orientation.w = 1.0
+            m.scale.x = m.scale.y = m.scale.z = 0.03
+            m.color   = ColorRGBA(r=1.0, g=0.9, b=0.0, a=0.8)  # giallo
             m.lifetime.nanosec   = 200_000_000
             markers.markers.append(m)
 

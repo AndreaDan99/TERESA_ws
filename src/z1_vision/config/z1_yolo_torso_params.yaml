@@ -21,3 +21,10 @@ z1_yolo_torso_tracker:
     kf_process_noise:  0.00005
     kf_meas_noise:     1.0
     kf_vel_damping:    0.9
+
+    # ── Stima centro torso ─────────────────────────────────────────
+    # Metodo primario:  media spalle [5,6] + fianchi [11,12]
+    # Metodo fallback:  shoulder_mid + chest_offset lungo (-direzione_viso)
+    #                   attivo quando i fianchi non sono rilevati (es. persona seduta)
+    use_face_fallback:            true
+    chest_offset_from_shoulder:   0.15   # [m] distanza shoulder_mid → centro petto
