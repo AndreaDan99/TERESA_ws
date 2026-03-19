@@ -54,12 +54,12 @@ impedance_controller_realsense:
     approach_mode:          "vertical"   # "normal" | "vertical"
     use_surface_frame:      true
     desired_normal_offset:  0.070   # [m] = standoff JTC → zero errore al latch
-    max_approach_distance:  0.120   # [m] standoff + 5mm contatto
+    max_approach_distance:  0.075   # [m] = standoff + 5mm contatto (0.070+0.005)
     # Velocità approccio: il target avanza verso il torso a questa velocità.
     # Il braccio deve riuscire a seguire il target → se troppo veloce, il braccio
     # rimane indietro e fa uno scatto quando APPROACH finisce.
     # Regola empirica: con K_p=150 e m_eff≈4kg, ω_n≈6 rad/s → max_track ≈ 0.02-0.03 m/s
-    approach_speed:         0.015   # [m/s] → ~8s per 12cm (controllato, braccio riesce a seguire)
+    approach_speed:         0.015   # [m/s] → ~5s per 7.5cm (controllato, braccio riesce a seguire)
     retract_speed:          0.10    # [m/s] → ~2s per 20cm ritorno
 
     # ── Hold al contatto ───────────────────────────────────────────
