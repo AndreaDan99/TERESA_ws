@@ -301,7 +301,10 @@ class ImpedanceController(Node):
             self.safe_startup_counter  = 0
             self.error_integral        = np.zeros(6)
             self.scale_j2_filtered     = self.gravity_scale_j2
-            self._dx_filtered          = np.zeros(6)   # reset filtro velocità
+            # _dx_filtered NON resettato: era già aggiornato dal branch "not enabled"
+            # durante la fase disabilitata, quindi è già converso alla velocità reale.
+            # Resettarlo a zero farebbe ripartire il filtro dal basso → K_d effettivo
+            # molto basso per ~14ms → oscillazioni al primo avvio del safe startup.
             self.get_logger().info('✅ Impedance enabled — safe startup → APPROACH')
 
     def impedance_callback(self, msg):
