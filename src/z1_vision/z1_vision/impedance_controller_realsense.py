@@ -17,6 +17,8 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import PoseStamped, WrenchStamped
 from std_msgs.msg import Float64MultiArray, Float32, Bool
+from visualization_msgs.msg import Marker
+from builtin_interfaces.msg import Duration as BuiltinDuration
 from tf_transformations import quaternion_matrix
 
 import signal
@@ -212,10 +214,11 @@ class ImpedanceController(Node):
         )
 
         # ── Publishers ────────────────────────────────────────────
-        self.torque_pub       = self.create_publisher(Float64MultiArray, '/torque_controller/commands', 10)
-        self.current_pose_pub = self.create_publisher(PoseStamped,       '/current_ee_pose',            10)
-        self.wrench_pub       = self.create_publisher(WrenchStamped,     '/cartesian_wrench',           10)
-        self.pub_done         = self.create_publisher(Bool,              impedance_done_topic,          10)
+        self.torque_pub       = self.create_publisher(Float64MultiArray, '/torque_controller/commands',  10)
+        self.current_pose_pub = self.create_publisher(PoseStamped,       '/current_ee_pose',             10)
+        self.wrench_pub       = self.create_publisher(WrenchStamped,     '/cartesian_wrench',            10)
+        self.pub_done         = self.create_publisher(Bool,              impedance_done_topic,           10)
+        self.target_marker_pub = self.create_publisher(Marker,           '/impedance_target_marker',     10)
 
         # ── Timers ────────────────────────────────────────────────
         self.timer     = self.create_timer(self.control_dt,          self.control_loop)
@@ -540,6 +543,7 @@ class ImpedanceController(Node):
         self.x_desired = pin.SE3(R_surf, target_pos)
 
         self._run_impedance(x_current)
+        self.publish_target_marker()
 
     # ──────────────────────────────────────────────────────────────
     def _run_impedance(self, x_current):
@@ -703,6 +707,36 @@ class ImpedanceController(Node):
         msg.pose.orientation.y = quat.y
         msg.pose.orientation.z = quat.z
         self.current_pose_pub.publish(msg)
+
+    def publish_target_marker(self):
+        """Pubblica un marker RViz per la posizione target dell'impedance controller."""
+        if self.x_desired is None:
+            return
+        # Colore per fase: arancione=APPROACH, verde=HOLD, blu=RETRACT, grigio=IDLE
+        phase_colors = {
+            'APPROACH': (1.0, 0.5, 0.0),
+            'HOLD':     (0.0, 1.0, 0.2),
+            'RETRACT':  (0.2, 0.4, 1.0),
+            'DONE':     (0.8, 0.8, 0.8),
+            'IDLE':     (0.5, 0.5, 0.5),
+        }
+        r, g, b = phase_colors.get(self._phase, (0.5, 0.5, 0.5))
+
+        m = Marker()
+        m.header.frame_id = 'world'
+        m.header.stamp    = self.get_clock().now().to_msg()
+        m.ns     = 'impedance_target'
+        m.id     = 0
+        m.type   = Marker.SPHERE
+        m.action = Marker.ADD
+        m.pose.position.x = float(self.x_desired.translation[0])
+        m.pose.position.y = float(self.x_desired.translation[1])
+        m.pose.position.z = float(self.x_desired.translation[2])
+        m.pose.orientation.w = 1.0
+        m.scale.x = m.scale.y = m.scale.z = 0.04
+        m.color.r = r; m.color.g = g; m.color.b = b; m.color.a = 0.85
+        m.lifetime = BuiltinDuration(sec=1, nanosec=0)   # scompare se non aggiornato
+        self.target_marker_pub.publish(m)
 
     def publish_wrench(self, F_cartesian):
         msg                  = WrenchStamped()
