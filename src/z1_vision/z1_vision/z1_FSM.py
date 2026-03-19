@@ -338,13 +338,16 @@ class Z1FSM(Node):
 
         if self._approach_mode == 'vertical':
             # ── Modalità verticale: sopra al torso, discesa in -Z ─────────
-            # Standoff: stesso XY del torso, Z + offset sopra
-            p_approach = np.array([p_surf[0],
-                                   p_surf[1],
+            # XY: usa il centro torso da YOLO (più accurato del centroide PCA del surface frame)
+            # Z:  usa p_surf.z (piano superficiale) + standoff
+            torso_ref = self._checker_input_pose if self._checker_input_pose is not None \
+                        else self.last_torso_pose
+            p_approach = np.array([torso_ref.pose.position.x,
+                                   torso_ref.pose.position.y,
                                    p_surf[2] + self._ik_approach_standoff])
             # X_ee punta verso il basso = verso il torso (che è sotto il braccio)
             x_ee = np.array([0.0, 0.0, -1.0])
-            mode_log = f'vertical ↓ (sopra torso +{self._ik_approach_standoff:.2f}m)'
+            mode_log = f'vertical ↓ (XY YOLO, Z surf +{self._ik_approach_standoff:.2f}m)'
         else:
             # ── Modalità normale: standoff lungo la normale superficiale ──
             # La normale punta DAL torso VERSO il robot → standoff davanti al torso
