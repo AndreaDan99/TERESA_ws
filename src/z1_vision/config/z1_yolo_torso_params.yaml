@@ -6,7 +6,7 @@ z1_yolo_torso_tracker:
 
     # ── YOLO ──────────────────────────────────────────────────────
     model_path:   'yolo11n-pose.pt'
-    conf_thr:     0.30
+    conf_thr:     0.15
     max_depth:    4.0
     device:       'cpu'
     imgsz:        416

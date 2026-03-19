@@ -38,8 +38,8 @@ z1_FSM:
     #                             discesa dritto in -Z world
     #                             (X_ee = [0,0,-1], punta verso il basso = verso il torso)
     surface_frame_topic:  "/torso_surface_frame"
-    ik_approach_standoff: 0.200   # [m] distanza di standoff dalla superficie
-    approach_mode:        "normal"   # "normal" | "vertical"
+    ik_approach_standoff: 0.070   # [m] distanza di standoff dalla superficie
+    approach_mode:        "vertical"   # "normal" | "vertical"
 
     # ── Debug ──────────────────────────────────────────────────────
     # Se true: dopo WAIT_IK_DONE torna in WAITING senza avviare impedance.
@@ -57,5 +57,5 @@ z1_FSM:
     # Valori di default — da aggiornare con la posa di sicurezza reale:
     #home_position:    [0.1714, 0.0146, 0.5449]        # [m]  x, y, z in world frame
     #home_orientation: [-0.0155, 0.2918, 0.0748, 0.9543]  # [qx, qy, qz, qw]
-    home_position:    [-0.1838, -0.0009, 0.3603]     # [m]  x, y, z in world frame
-    home_orientation: [-0.0015, 0.1922, 0.0591, 0.9796] # [qx, qy, qz, qw]
+    home_position:    [-0.0946, 0.0009, 0.4392]     # [m]  x, y, z in world frame
+    home_orientation:  [-0.0039, 0.2911, -0.0155, 0.9566] # [qx, qy, qz, qw]
