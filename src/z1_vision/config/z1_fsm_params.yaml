@@ -57,6 +57,12 @@ z1_FSM:
     scan_delta_lateral:     0.03   # [m] offset ±Z destra/sinistra
     scan_delta_axial:       0.03   # [m] offset ±Y basso(fianco)/alto(spalla)
     scan_center_y_offset:   0.05   # [m] shift +Y centro (spalla → torso)
+    # Altezza extra (sopra lo standoff) durante SCAN_PRELIFT:
+    # prima di spostarsi al prossimo punto il braccio sale a
+    # (standoff + scan_clearance_z) per evitare collisioni con
+    # la superficie non piatta del torso.
+    # Regola: ≥ 2× lo standoff garantisce clearance sufficiente
+    scan_clearance_z:       0.120  # [m] (= standoff 0.120m → 2× clearance)
 
     # ── Debug ──────────────────────────────────────────────────────
     # Se true: dopo WAIT_IK_DONE torna in WAITING senza avviare impedance.
