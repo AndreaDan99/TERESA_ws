@@ -260,7 +260,11 @@ class ImpedanceController(Node):
         self.impedance_enabled = bool(msg.data)
 
         if not self.impedance_enabled and prev:
-            # Disabilitato: reset completo
+            # Disabilitato: reset fase e latch superficie.
+            # x_desired_initialized NON resettato: il branch "not enabled" continua
+            # a pubblicare torque (x_desired = x_current) anche mentre il torque
+            # controller è attivo ma l'impedance è disabilitata, eliminando il gap
+            # di 50ms senza coppia tra switch JTC→torque e impedance_enable=True.
             self._phase                  = 'IDLE'
             self.approach_distance_accum = 0.0
             self._hold_start_time        = None
@@ -270,7 +274,6 @@ class ImpedanceController(Node):
             self._p_surf_latched         = None
             self._normal_latched         = None
             self._approach_dir           = None
-            self.x_desired_initialized   = False
             self.get_logger().info('🛑 Impedance disabled — reset')
 
         if self.impedance_enabled and not prev:
@@ -283,14 +286,14 @@ class ImpedanceController(Node):
             self._p_surf_latched         = None
             self._normal_latched         = None
             self._approach_dir           = None
-            # Reset safe startup: garantisce stabilizzazione identica ad ogni ciclo.
-            # Senza questo, dal 2° ciclo il braccio parte in APPROACH con velocità
-            # residua dallo switch JTC→torque, causando contatto obliquo e slittamento.
+            # Safe startup: 2s di hold ad alta rigidezza per smorzare la velocità
+            # residua dallo switch JTC→torque prima di avviare APPROACH.
+            # x_desired è già aggiornato dal branch "not enabled" → x_startup
+            # coincide con la posizione corrente, zero errore iniziale.
             self.safe_startup_mode     = True
             self.safe_startup_counter  = 0
-            self.x_desired_initialized = False
             self.error_integral        = np.zeros(6)
-            self.scale_j2_filtered     = self.gravity_scale_j2  # reset filtro gravità
+            self.scale_j2_filtered     = self.gravity_scale_j2
             self.get_logger().info('✅ Impedance enabled — safe startup → APPROACH')
 
     def impedance_callback(self, msg):
