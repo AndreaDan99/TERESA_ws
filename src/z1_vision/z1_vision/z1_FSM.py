@@ -357,7 +357,7 @@ class Z1FSM(Node):
         msg.pose.position.z  = float(clipped_pos[2])
         return msg
 
-    def _make_approach_pose(self, extra_z: float = 0.0) -> PoseStamped | None:
+    def _make_approach_pose(self, extra_clearance: float = 0.0) -> PoseStamped | None:
         """
         Calcola la posa di approccio in base a self._approach_mode:
 
@@ -365,12 +365,13 @@ class Z1FSM(Node):
                       pos  = p_surf + standoff * normal
                       X_ee = -normal  (punta verso il torso)
 
-        "vertical" — standoff direttamente sopra al torso, discesa in -Z world:
-                      pos  = [p_surf.x, p_surf.y, p_surf.z + standoff + extra_z]
-                      X_ee = [0, 0, -1]  (punta verso il basso = verso il torso)
+        "vertical" — discesa lungo l'asse X world (X punta verso il torso):
+                      pos  = [p_surf.x - standoff - extra_clearance,
+                               torso.y + dy, p_surf.z + dz]
+                      X_ee = [1, 0, 0]  (punta verso il torso = +X world)
 
-        extra_z [m]: altezza aggiuntiva sopra allo standoff normale
-                     (usato da SCAN_PRELIFT per alzarsi prima di spostarsi lateralmente)
+        extra_clearance [m]: distanza aggiuntiva di allontanamento dal torso lungo -X
+                             (usato da SCAN_PRELIFT prima dello spostamento laterale)
 
         In entrambi i casi l'orientamento è la ROTAZIONE MINIMA di R_home
         che porta X_home → x_ee (formula di Rodrigues), senza vincoli su Y/Z.
@@ -392,21 +393,24 @@ class Z1FSM(Node):
         p_surf = np.array([sf.pose.position.x, sf.pose.position.y, sf.pose.position.z])
 
         if self._approach_mode == 'vertical':
-            # ── Modalità verticale: sopra al torso, discesa in -Z ─────────
-            # XY: usa il centro torso da YOLO (più accurato del centroide PCA del surface frame)
-            # Z:  usa p_surf.z (piano superficiale) + standoff
-            # Scan offset: aggiunto in world frame per i punti fast_ultrasound
+            # ── Modalità verticale: approccio lungo X world (X punta verso il torso) ──
+            # X:  p_surf.x - standoff - extra_clearance  (arretra lungo -X = lontano dal torso)
+            # Y:  YOLO + offset assiale (spalla↔fianco)
+            # Z:  p_surf.z + offset laterale (dx/sx)
             torso_ref = self._checker_input_pose if self._checker_input_pose is not None \
                         else self.last_torso_pose
             off = self._scan_offsets[self._scan_idx]   # (dx, dy, dz) world frame
-            p_approach = np.array([torso_ref.pose.position.x + off[0],
-                                   torso_ref.pose.position.y + off[1],
-                                   p_surf[2] + self._ik_approach_standoff + off[2] + extra_z])
-            # X_ee punta verso il basso = verso il torso (che è sotto il braccio)
-            x_ee = np.array([0.0, 0.0, -1.0])
+            p_approach = np.array([
+                p_surf[0] - self._ik_approach_standoff - extra_clearance + off[0],
+                torso_ref.pose.position.y + off[1],
+                p_surf[2] + off[2]
+            ])
+            # X_ee punta verso il torso = +X world
+            x_ee = np.array([1.0, 0.0, 0.0])
             scan_lbl = f'pt{self._scan_idx} off=({off[0]:.2f},{off[1]:.2f},{off[2]:.2f})'
-            extra_lbl = f' +{extra_z:.3f}m' if extra_z != 0.0 else ''
-            mode_log = f'vertical ↓ (XY YOLO, Z surf +{self._ik_approach_standoff:.2f}m{extra_lbl}) [{scan_lbl}]'
+            extra_lbl = f' clr={extra_clearance:.3f}m' if extra_clearance != 0.0 else ''
+            mode_log = (f'vertical →X (standoff={self._ik_approach_standoff:.2f}m{extra_lbl})'
+                        f' [{scan_lbl}]')
         else:
             # ── Modalità normale: standoff lungo la normale superficiale ──
             # La normale punta DAL torso VERSO il robot → standoff davanti al torso
@@ -777,7 +781,7 @@ class Z1FSM(Node):
         # Quando l'IK è done → APPROACHING (che usa standoff normale).
         elif self.state == self.SCAN_PRELIFT:
             if not self._prelift_command_sent:
-                target = self._make_approach_pose(extra_z=self._scan_clearance_z)
+                target = self._make_approach_pose(extra_clearance=self._scan_clearance_z)
                 if target is None:
                     return
 

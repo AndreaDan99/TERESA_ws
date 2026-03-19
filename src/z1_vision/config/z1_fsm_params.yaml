@@ -34,9 +34,9 @@ z1_FSM:
     #
     # approach_mode: "normal"   → standoff lungo la normale superficiale
     #                             (classico approccio frontale/ecografico)
-    #                "vertical" → standoff direttamente sopra al torso,
-    #                             discesa dritto in -Z world
-    #                             (X_ee = [0,0,-1], punta verso il basso = verso il torso)
+    #                "vertical" → approccio lungo X world (X punta verso il torso):
+    #                             pos = [p_surf.x - standoff, torso.y + dy, p_surf.z + dz]
+    #                             (X_ee = [1,0,0], punta verso il torso = +X world)
     surface_frame_topic:  "/torso_surface_frame"
     ik_approach_standoff: 0.120   # [m] distanza di standoff dalla superficie
     approach_mode:        "vertical"   # "normal" | "vertical"
@@ -57,12 +57,11 @@ z1_FSM:
     scan_delta_lateral:     0.03   # [m] offset ±Z destra/sinistra
     scan_delta_axial:       0.03   # [m] offset ±Y basso(fianco)/alto(spalla)
     scan_center_y_offset:   0.05   # [m] shift +Y centro (spalla → torso)
-    # Altezza extra (sopra lo standoff) durante SCAN_PRELIFT:
-    # prima di spostarsi al prossimo punto il braccio sale a
-    # (standoff + scan_clearance_z) per evitare collisioni con
-    # la superficie non piatta del torso.
-    # Regola: ≥ 2× lo standoff garantisce clearance sufficiente
-    scan_clearance_z:       0.120  # [m] (= standoff 0.120m → 2× clearance)
+    # Clearance aggiuntivo durante SCAN_PRELIFT lungo -X (lontano dal torso):
+    # prima di spostarsi al prossimo punto il braccio arretra di
+    # (standoff + scan_clearance_z) lungo -X per evitare collisioni con
+    # la superficie non piatta del torso durante lo spostamento laterale.
+    scan_clearance_z:       0.120  # [m] extra clearance lungo -X (= standoff)
 
     # ── Debug ──────────────────────────────────────────────────────
     # Se true: dopo WAIT_IK_DONE torna in WAITING senza avviare impedance.
