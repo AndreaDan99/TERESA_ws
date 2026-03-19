@@ -43,13 +43,14 @@ z1_FSM:
 
     # ── Modalità scansione ─────────────────────────────────────────
     # "single"          → singolo punto al centro (default)
-    # "fast_ultrasound" → 5 punti: centro, basso-dx, basso-sx, alto-dx, alto-sx
-    #   Offset in world frame applicati al centro torso (Y=laterale, Z=alto/basso):
-    #     scan_delta_lateral [m] → ±Y
-    #     scan_delta_axial   [m] → ±Z
-    scan_mode:           "single"
-    scan_delta_lateral:  0.06   # [m]
-    scan_delta_axial:    0.06   # [m]
+    # "fast_ultrasound" → 5 punti lungo Y:
+    #   alto-sx  basso-sx  centro  basso-dx  alto-dx
+    #   Tutti gli offset sono in Y (laterale). dz=0 per tutti.
+    #   scan_center_y_offset: shift fisso del centro rispetto al torso YOLO [m]
+    scan_mode:              "single"
+    scan_delta_lateral:     0.06   # [m] offset Y basso-dx/sx
+    scan_delta_axial:       0.09   # [m] offset Y alto-dx/sx
+    scan_center_y_offset:   0.05   # [m] shift +Y del punto centrale (es. 5cm a dx)
 
     # ── Debug ──────────────────────────────────────────────────────
     # Se true: dopo WAIT_IK_DONE torna in WAITING senza avviare impedance.

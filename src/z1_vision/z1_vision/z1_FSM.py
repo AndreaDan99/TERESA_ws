@@ -77,23 +77,28 @@ class Z1FSM(Node):
 
         # ── Modalità scansione ──────────────────────────────────────────
         # "single"          → singolo punto al centro (comportamento attuale)
-        # "fast_ultrasound" → 5 punti: centro + 4 angoli del busto
-        #   Offset in world frame (Y = laterale, Z = alto/basso sul busto):
-        #     scan_delta_lateral [m] → ±Y
-        #     scan_delta_axial   [m] → ±Z
-        self.declare_parameter("scan_mode",           "single")
-        self.declare_parameter("scan_delta_lateral",  0.06)   # [m]
-        self.declare_parameter("scan_delta_axial",    0.06)   # [m]
+        # "fast_ultrasound" → 5 punti lungo Y:
+        #   alto-sx  basso-sx  centro  basso-dx  alto-dx
+        #   Tutti gli offset sono su Y (laterale).
+        #   dz=0 per tutti: in vertical approach, cambiare Z standoff modifica
+        #   solo la profondità di discesa, NON quale zona del busto si tocca.
+        #   scan_center_y_offset: shift fisso in +Y del punto centrale rispetto
+        #                         al centro torso YOLO (es. 5cm verso destra).
+        self.declare_parameter("scan_mode",             "single")
+        self.declare_parameter("scan_delta_lateral",    0.06)   # [m] offset Y basso-dx/sx
+        self.declare_parameter("scan_delta_axial",      0.09)   # [m] offset Y alto-dx/sx (> lateral)
+        self.declare_parameter("scan_center_y_offset",  0.05)   # [m] shift Y centro rispetto torso
         self._scan_mode = self.get_parameter("scan_mode").value
         _dl = float(self.get_parameter("scan_delta_lateral").value)
         _da = float(self.get_parameter("scan_delta_axial").value)
-        # (dx, dy, dz) rispetto al centro torso in world frame
+        _cy = float(self.get_parameter("scan_center_y_offset").value)
+        # (dx, dy, dz) in world frame — tutti offset in Y, dz=0
         self._scan_offsets = [
-            ( 0.0,   0.0,   0.0),   # 0: centro
-            ( 0.0,  +_dl,  -_da),   # 1: basso-destra
-            ( 0.0,  -_dl,  -_da),   # 2: basso-sinistra
-            ( 0.0,  +_dl,  +_da),   # 3: alto-destra
-            ( 0.0,  -_dl,  +_da),   # 4: alto-sinistra
+            (0.0,  _cy,        0.0),   # 0: centro        (+cy Y)
+            (0.0,  _cy + _dl,  0.0),   # 1: basso-destra  (Y+ piccolo)
+            (0.0,  _cy - _dl,  0.0),   # 2: basso-sinistra(Y- piccolo)
+            (0.0,  _cy + _da,  0.0),   # 3: alto-destra   (Y+ grande)
+            (0.0,  _cy - _da,  0.0),   # 4: alto-sinistra (Y- grande)
         ]
         self._scan_idx = 0   # punto corrente (resettato a WAITING)
 
