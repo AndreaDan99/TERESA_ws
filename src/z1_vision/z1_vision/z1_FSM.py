@@ -13,6 +13,7 @@ from visualization_msgs.msg import Marker
 from tf_transformations import quaternion_matrix, quaternion_from_matrix
 
 from z1_vision.workspace_checker import WorkspaceChecker
+from z1_vision.z1_scan_manager   import ScanManager
 
 
 class Z1FSM(Node):
@@ -76,48 +77,15 @@ class Z1FSM(Node):
         self._ik_approach_standoff = float(self.get_parameter("ik_approach_standoff").value)
         self._approach_mode        = self.get_parameter("approach_mode").value
 
-        # ── Modalità scansione ──────────────────────────────────────────
-        # "single"          → singolo punto al centro (comportamento attuale)
-        # "fast_ultrasound" → 5 punti su griglia 2D (body frame):
-        #
-        #   World frame (robot su TERESA):
-        #     X  → verso il basso  (direzione discesa braccio)
-        #     Y  → da faccia verso torso/gambe  (asse corpo, spalla→fianco)
-        #     Z  → da fianco dx a fianco sx     (asse laterale)
-        #
-        #   scan_center_y_offset [m]: shift +Y del centro (spalla → torso)
-        #   scan_delta_axial     [m]: offset ±Y per basso (→ fianco) / alto (← spalla)
-        #   scan_delta_lateral   [m]: offset ±Z per destra/sinistra
-        #
-        #   Layout (vista dall'alto):
-        #              Z- (destra)   Z=0     Z+ (sinistra)
-        #   Y- (alto)     pt3                    pt4
-        #   Y=0 (centro)             pt0
-        #   Y+ (basso)    pt1                    pt2
+        # ── Modalità scansione (delegata a ScanManager) ─────────────────
+        # Tutti i parametri scan (scan_mode, scan_delta_*, scan_clearance_z,
+        # scan_center_y_offset) vengono dichiarati e letti da ScanManager.
         self.declare_parameter("scan_mode",             "single")
-        self.declare_parameter("scan_delta_lateral",    0.06)   # [m] offset ±Z destra/sinistra
-        self.declare_parameter("scan_delta_axial",      0.06)   # [m] offset ±Y basso/alto busto
-        self.declare_parameter("scan_center_y_offset",  0.05)   # [m] shift +Y centro (spalla→torso)
-        self._scan_mode = self.get_parameter("scan_mode").value
-        _dl = float(self.get_parameter("scan_delta_lateral").value)
-        _da = float(self.get_parameter("scan_delta_axial").value)
-        _cy = float(self.get_parameter("scan_center_y_offset").value)
-        # (dx, dy, dz): dx=0 sempre, dy=asse corpo (Y), dz=laterale (Z)
-        self._scan_offsets = [
-            (0.0,  _cy,        0.0),   # 0: centro
-            (0.0,  _cy + _da,  -_dl),  # 1: basso-destra  (Y+ = verso fianco, Z- = destra)
-            (0.0,  _cy + _da,  +_dl),  # 2: basso-sinistra(Y+ = verso fianco, Z+ = sinistra)
-            (0.0,  _cy - _da,  -_dl),  # 3: alto-destra   (Y- = verso spalla, Z- = destra)
-            (0.0,  _cy - _da,  +_dl),  # 4: alto-sinistra (Y- = verso spalla, Z+ = sinistra)
-        ]
-        self._scan_idx = 0   # punto corrente (resettato a WAITING)
-
-        # ── Scan prelift: altezza extra per riposizionamento laterale ───
-        # Prima di spostarsi su un punto non-centrale, il JTC sale a
-        # (standoff + scan_clearance_z) per evitare collisioni con la
-        # superficie non piatta del torso durante lo spostamento laterale.
-        self.declare_parameter("scan_clearance_z", 0.120)   # [m] altezza aggiuntiva
-        self._scan_clearance_z = float(self.get_parameter("scan_clearance_z").value)
+        self.declare_parameter("scan_delta_lateral",    0.06)
+        self.declare_parameter("scan_delta_axial",      0.06)
+        self.declare_parameter("scan_center_y_offset",  0.05)
+        self.declare_parameter("scan_clearance_z",      0.120)
+        self._scan_mgr = ScanManager.from_params(self)
 
         # ── Debug: skip impedance per verificare solo allineamento JTC ──
         # Se True: dopo WAIT_IK_DONE torna in WAITING senza avviare impedance.
@@ -221,8 +189,6 @@ class Z1FSM(Node):
         # ── FSM state variables ─────────────────────────────────────────
         self.state                   = None
         self._approach_command_sent  = False
-        self._prelift_command_sent   = False
-        self._prelift_wait_start: float | None = None
         self._impedance_command_sent = False
         self._homing_command_sent    = False
         self._homing_next_state      = self.WAITING   # where to go after HOMING
@@ -291,7 +257,7 @@ class Z1FSM(Node):
         if s == self.WAITING:
             self.ik_done                = False
             self._approach_command_sent = False
-            self._scan_idx              = 0   # reset indice scan ad ogni nuovo ciclo
+            self._scan_mgr.reset()   # reset indice scan ad ogni nuovo ciclo
 
         if s == self.CHECKING_WORKSPACE:
             self._workspace_future   = None
@@ -303,9 +269,8 @@ class Z1FSM(Node):
             self._approach_command_sent = False
 
         if s == self.SCAN_PRELIFT:
-            self._prelift_command_sent = False
-            self._prelift_wait_start   = None
-            self.ik_done               = False
+            self._scan_mgr.reset_prelift()
+            self.ik_done = False
 
         if s == self.SWITCHING_TO_TORQUE:
             self._switch_future = None
@@ -399,7 +364,7 @@ class Z1FSM(Node):
             # Z:  p_surf.z + offset laterale (dx/sx)
             torso_ref = self._checker_input_pose if self._checker_input_pose is not None \
                         else self.last_torso_pose
-            off = self._scan_offsets[self._scan_idx]   # (dx, dy, dz) world frame
+            off = self._scan_mgr.current_offset   # (dx, dy, dz) world frame
             p_approach = np.array([
                 p_surf[0] - self._ik_approach_standoff - extra_clearance + off[0],
                 torso_ref.pose.position.y + off[1],
@@ -407,7 +372,7 @@ class Z1FSM(Node):
             ])
             # X_ee punta verso il torso = +X world
             x_ee = np.array([1.0, 0.0, 0.0])
-            scan_lbl = f'pt{self._scan_idx} off=({off[0]:.2f},{off[1]:.2f},{off[2]:.2f})'
+            scan_lbl = f'pt{self._scan_mgr.idx} off=({off[0]:.2f},{off[1]:.2f},{off[2]:.2f})'
             extra_lbl = f' clr={extra_clearance:.3f}m' if extra_clearance != 0.0 else ''
             mode_log = (f'vertical →X (standoff={self._ik_approach_standoff:.2f}m{extra_lbl})'
                         f' [{scan_lbl}]')
@@ -746,27 +711,13 @@ class Z1FSM(Node):
 
             result = self._switch_future.result()
             if result.success:
-                n_pts = len(self._scan_offsets)
-                if self._scan_mode == 'fast_ultrasound' and self._scan_idx < n_pts - 1:
-                    # ── Fast ultrasound: vai al prossimo punto ────────────
-                    # Prima sali (SCAN_PRELIFT) per evitare collisioni con
-                    # la superficie non piatta, poi scendi al nuovo standoff.
-                    self._scan_idx += 1
-                    off = self._scan_offsets[self._scan_idx]
-                    self.get_logger().info(
-                        f"✅ Switch → JTC | Fast US: punto {self._scan_idx}/{n_pts - 1} "
-                        f"off=({off[0]:.2f},{off[1]:.2f},{off[2]:.2f}) → SCAN_PRELIFT"
-                    )
+                next_st = self._scan_mgr.on_jtc_switch_success(self)
+                if next_st == "SCAN_PRELIFT":
                     self.set_state(self.SCAN_PRELIFT)
                 else:
-                    # ── Fine scansione (single o ultimo punto fast_us) ────
-                    self._scan_idx = 0
-                    self.get_logger().info(
-                        "✅ Switch torque_controller → JTC riuscito → HOMING (poi WAITING)"
-                    )
-                    self._post_impedance_hold = True   # non ripartire subito al prossimo lock
+                    # Scansione completa → HOMING poi WAITING
+                    self._post_impedance_hold = True
                     self._homing_next_state   = self.WAITING
-                    # Reset del tracker: forza IDLE così può ri-acquisire il torso al ciclo successivo
                     self.pub_tracker_reset.publish(Bool(data=True))
                     self.get_logger().info("🔄 Tracker reset inviato → torso tracker → IDLE")
                     self.set_state(self.HOMING)
@@ -775,58 +726,8 @@ class Z1FSM(Node):
                 self.set_state(self.FAULT)
 
         # ── SCAN_PRELIFT ──────────────────────────────────────────────────
-        # Prima di spostarsi al prossimo punto fast_ultrasound: il JTC porta
-        # il braccio a (standoff + scan_clearance_z) sul punto target per
-        # garantire il clearance necessario su una superficie non piatta.
-        # Quando l'IK è done → APPROACHING (che usa standoff normale).
         elif self.state == self.SCAN_PRELIFT:
-            if not self._prelift_command_sent:
-                target = self._make_approach_pose(extra_clearance=self._scan_clearance_z)
-                if target is None:
-                    return
-
-                self.pub_ik_goal.publish(target)
-                self.pub_ik_enable.publish(Bool(data=True))
-                self._prelift_command_sent = True
-                self._prelift_wait_start   = self.get_clock().now().nanoseconds * 1e-9
-
-                # Marker arancione per il prelift
-                from builtin_interfaces.msg import Duration as BuiltinDuration
-                m = Marker()
-                m.header.frame_id = 'world'
-                m.header.stamp    = self.get_clock().now().to_msg()
-                m.ns = 'ik_goal'; m.id = 1
-                m.type = Marker.SPHERE; m.action = Marker.ADD
-                m.pose = target.pose
-                m.scale.x = m.scale.y = m.scale.z = 0.06
-                m.color.r = 1.0; m.color.g = 0.5; m.color.b = 0.0; m.color.a = 0.9
-                m.lifetime = BuiltinDuration(sec=30, nanosec=0)
-                self.pub_ik_goal_marker.publish(m)
-
-                off = self._scan_offsets[self._scan_idx]
-                self.get_logger().info(
-                    f"🔼 SCAN_PRELIFT pt{self._scan_idx}: "
-                    f"z_extra=+{self._scan_clearance_z:.3f}m "
-                    f"off=({off[0]:.2f},{off[1]:.2f},{off[2]:.2f})"
-                )
-                return
-
-            # Timeout identico a WAIT_IK_DONE
-            if self._prelift_wait_start is not None:
-                elapsed = self.get_clock().now().nanoseconds * 1e-9 - self._prelift_wait_start
-                if elapsed > self._wait_ik_timeout:
-                    self.get_logger().warn(
-                        f'⏱️  SCAN_PRELIFT timeout ({elapsed:.1f}s) → WAITING'
-                    )
-                    self.pub_ik_enable.publish(Bool(data=False))
-                    self.set_state(self.WAITING)
-                    return
-
-            if self.ik_done:
-                self.pub_ik_enable.publish(Bool(data=False))
-                self.get_logger().info(
-                    f"✅ SCAN_PRELIFT completato → APPROACHING pt{self._scan_idx}"
-                )
+            if self._scan_mgr.tick_prelift(self):
                 self.set_state(self.APPROACHING)
 
         # ── HOMING ────────────────────────────────────────────────────────
