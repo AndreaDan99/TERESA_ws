@@ -465,12 +465,16 @@ class ImpedanceController(Node):
             # Il latch avviene alla transizione APPROACH→HOLD (vedi sotto).
 
             # Proiezione EE sulla normale effettiva (reale o [0,0,1] in modalità vertical)
-            # per calcolare l'accum iniziale senza jerk.
+            # per calcolare l'accum iniziale con ZERO errore al latch.
+            #
+            # Formula: target = p_surf + (desired_normal_offset - accum) * normal
+            # Per target = ee_pos al latch: accum_init = desired_normal_offset - proj
+            # (NO lower-clip a 0: se proj > desired_normal_offset, accum_init è negativo
+            #  e il target parte esattamente dove si trova l'EE, zero errore garantito.)
             ee_pos = x_current.translation
             proj   = float(np.dot(ee_pos - p_surf, self._normal_latched))
-            self.approach_distance_accum = float(np.clip(
+            self.approach_distance_accum = float(min(
                 self.desired_normal_offset - proj,
-                0.0,
                 self.max_approach_distance
             ))
             self.get_logger().info(
