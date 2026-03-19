@@ -39,6 +39,10 @@ class ScanManager:
       Y+ (fianco)  pt1                    pt2
     """
 
+    # ── Costanti modalità ─────────────────────────────────────────────────
+    MODE_SINGLE          = "single"
+    MODE_FAST_ULTRASOUND = "fast_ultrasound"
+
     # ── Costruttori ────────────────────────────────────────────────────────
 
     def __init__(
@@ -51,7 +55,7 @@ class ScanManager:
         """
         Parameters
         ----------
-        mode       : "single" | "fast_ultrasound"
+        mode       : ScanManager.MODE_SINGLE | ScanManager.MODE_FAST_ULTRASOUND
         offsets    : lista di (dx, dy, dz) in world frame; offsets[0] = centro
         clearance  : clearance aggiuntivo lungo -X durante SCAN_PRELIFT [m]
         ik_timeout : timeout IK identico a WAIT_IK_DONE [s]
@@ -194,7 +198,7 @@ class ScanManager:
         "SCAN_PRELIFT" → ci sono altri punti da scansionare
         "HOMING"       → scansione completata, si torna a home
         """
-        if self.mode == "fast_ultrasound" and not self.is_complete:
+        if self.mode == self.MODE_FAST_ULTRASOUND and not self.is_complete:
             self.advance()
             off = self.current_offset
             fsm.get_logger().info(
