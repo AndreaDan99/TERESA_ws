@@ -777,8 +777,6 @@ class Z1FSM(Node):
         # Quando l'IK è done → APPROACHING (che usa standoff normale).
         elif self.state == self.SCAN_PRELIFT:
             if not self._prelift_command_sent:
-                self.ik_done = False
-
                 target = self._make_approach_pose(extra_z=self._scan_clearance_z)
                 if target is None:
                     return
