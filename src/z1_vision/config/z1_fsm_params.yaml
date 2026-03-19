@@ -43,14 +43,20 @@ z1_FSM:
 
     # ── Modalità scansione ─────────────────────────────────────────
     # "single"          → singolo punto al centro (default)
-    # "fast_ultrasound" → 5 punti lungo Y:
-    #   alto-sx  basso-sx  centro  basso-dx  alto-dx
-    #   Tutti gli offset sono in Y (laterale). dz=0 per tutti.
-    #   scan_center_y_offset: shift fisso del centro rispetto al torso YOLO [m]
+    # "fast_ultrasound" → griglia 2D 5 punti sul busto
+    #
+    # World frame (TERESA):
+    #   X → verso il basso (discesa braccio)
+    #   Y → da faccia verso torso/gambe (asse corpo: spalla→fianco)
+    #   Z → da fianco dx a fianco sx (laterale)
+    #
+    # scan_center_y_offset: shift +Y del punto centrale (spalla → centro torso)
+    # scan_delta_axial:     offset ±Y per alto(←spalla) / basso(→fianco)
+    # scan_delta_lateral:   offset ±Z per destra / sinistra
     scan_mode:              "single"
-    scan_delta_lateral:     0.06   # [m] offset Y basso-dx/sx
-    scan_delta_axial:       0.09   # [m] offset Y alto-dx/sx
-    scan_center_y_offset:   0.05   # [m] shift +Y del punto centrale (es. 5cm a dx)
+    scan_delta_lateral:     0.06   # [m] offset ±Z destra/sinistra
+    scan_delta_axial:       0.06   # [m] offset ±Y basso(fianco)/alto(spalla)
+    scan_center_y_offset:   0.05   # [m] shift +Y centro (spalla → torso)
 
     # ── Debug ──────────────────────────────────────────────────────
     # Se true: dopo WAIT_IK_DONE torna in WAITING senza avviare impedance.

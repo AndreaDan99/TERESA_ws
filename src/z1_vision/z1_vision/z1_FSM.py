@@ -77,28 +77,37 @@ class Z1FSM(Node):
 
         # ── Modalità scansione ──────────────────────────────────────────
         # "single"          → singolo punto al centro (comportamento attuale)
-        # "fast_ultrasound" → 5 punti lungo Y:
-        #   alto-sx  basso-sx  centro  basso-dx  alto-dx
-        #   Tutti gli offset sono su Y (laterale).
-        #   dz=0 per tutti: in vertical approach, cambiare Z standoff modifica
-        #   solo la profondità di discesa, NON quale zona del busto si tocca.
-        #   scan_center_y_offset: shift fisso in +Y del punto centrale rispetto
-        #                         al centro torso YOLO (es. 5cm verso destra).
+        # "fast_ultrasound" → 5 punti su griglia 2D (body frame):
+        #
+        #   World frame (robot su TERESA):
+        #     X  → verso il basso  (direzione discesa braccio)
+        #     Y  → da faccia verso torso/gambe  (asse corpo, spalla→fianco)
+        #     Z  → da fianco dx a fianco sx     (asse laterale)
+        #
+        #   scan_center_y_offset [m]: shift +Y del centro (spalla → torso)
+        #   scan_delta_axial     [m]: offset ±Y per basso (→ fianco) / alto (← spalla)
+        #   scan_delta_lateral   [m]: offset ±Z per destra/sinistra
+        #
+        #   Layout (vista dall'alto):
+        #              Z- (destra)   Z=0     Z+ (sinistra)
+        #   Y- (alto)     pt3                    pt4
+        #   Y=0 (centro)             pt0
+        #   Y+ (basso)    pt1                    pt2
         self.declare_parameter("scan_mode",             "single")
-        self.declare_parameter("scan_delta_lateral",    0.06)   # [m] offset Y basso-dx/sx
-        self.declare_parameter("scan_delta_axial",      0.09)   # [m] offset Y alto-dx/sx (> lateral)
-        self.declare_parameter("scan_center_y_offset",  0.05)   # [m] shift Y centro rispetto torso
+        self.declare_parameter("scan_delta_lateral",    0.06)   # [m] offset ±Z destra/sinistra
+        self.declare_parameter("scan_delta_axial",      0.06)   # [m] offset ±Y basso/alto busto
+        self.declare_parameter("scan_center_y_offset",  0.05)   # [m] shift +Y centro (spalla→torso)
         self._scan_mode = self.get_parameter("scan_mode").value
         _dl = float(self.get_parameter("scan_delta_lateral").value)
         _da = float(self.get_parameter("scan_delta_axial").value)
         _cy = float(self.get_parameter("scan_center_y_offset").value)
-        # (dx, dy, dz) in world frame — tutti offset in Y, dz=0
+        # (dx, dy, dz): dx=0 sempre, dy=asse corpo (Y), dz=laterale (Z)
         self._scan_offsets = [
-            (0.0,  _cy,        0.0),   # 0: centro        (+cy Y)
-            (0.0,  _cy + _dl,  0.0),   # 1: basso-destra  (Y+ piccolo)
-            (0.0,  _cy - _dl,  0.0),   # 2: basso-sinistra(Y- piccolo)
-            (0.0,  _cy + _da,  0.0),   # 3: alto-destra   (Y+ grande)
-            (0.0,  _cy - _da,  0.0),   # 4: alto-sinistra (Y- grande)
+            (0.0,  _cy,        0.0),   # 0: centro
+            (0.0,  _cy + _da,  -_dl),  # 1: basso-destra  (Y+ = verso fianco, Z- = destra)
+            (0.0,  _cy + _da,  +_dl),  # 2: basso-sinistra(Y+ = verso fianco, Z+ = sinistra)
+            (0.0,  _cy - _da,  -_dl),  # 3: alto-destra   (Y- = verso spalla, Z- = destra)
+            (0.0,  _cy - _da,  +_dl),  # 4: alto-sinistra (Y- = verso spalla, Z+ = sinistra)
         ]
         self._scan_idx = 0   # punto corrente (resettato a WAITING)
 
