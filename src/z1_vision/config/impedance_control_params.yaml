@@ -15,9 +15,9 @@ impedance_controller_realsense:
     # FASE 1 (senza filtro dq): K_p moderato per forza sufficiente,
     #   K_d basso (15-25) per non amplificare rumore a 500Hz, K_i=0
     # FASE 2 (con filtro passa-basso su dq): K_p=200/300, K_d=30/50
-    K_p_translation: [75.0,  75.0,  125.0]
-    # K_d_critico per ζ=0.7: XY → 0.7*2*sqrt(75*4)=24, Z → 0.7*2*sqrt(125*4)=31
-    K_d_translation: [24.0,  24.0,  31.0]   # ζ≈0.7 con filtro passa-basso su dx
+    K_p_translation: [75.0,  75.0,  200.0]
+    # K_d_critico per ζ=0.7: XY → 0.7*2*sqrt(75*4)=24, Z → 0.7*2*sqrt(200*4)=40
+    K_d_translation: [24.0,  24.0,  40.0]   # ζ≈0.7 con filtro passa-basso su dx
     K_i_translation: [3.0,   3.0,   5.0]    # [N/(m·s)] — max forza: 1.5N XY, 2.5N Z (con integral_limit=0.5)
 
     # ── Guadagni cartesiani (rotazione) ───────────────────────────
@@ -62,7 +62,7 @@ impedance_controller_realsense:
     # Il braccio deve riuscire a seguire il target → se troppo veloce, il braccio
     # rimane indietro e fa uno scatto quando APPROACH finisce.
     # Regola empirica: con K_p=150 e m_eff≈4kg, ω_n≈6 rad/s → max_track ≈ 0.02-0.03 m/s
-    approach_speed:         0.015   # [m/s] → ~5s per 7.5cm (controllato, braccio riesce a seguire)
+    approach_speed:         0.025   # [m/s] → ~3s per 7.5cm | feedforward: K_d*v=40*0.025=1N
     retract_speed:          0.10    # [m/s] → ~2s per 20cm ritorno
 
     # ── Hold al contatto ───────────────────────────────────────────
