@@ -531,10 +531,15 @@ class ImpedanceController(Node):
             self.error_integral += x_error * self.control_dt
             self.error_integral  = np.clip(self.error_integral, -self.integral_limit, self.integral_limit)
 
-        # Scaling adattivo Kp/Kd in funzione dell'estensione
+        # Scaling adattivo Kp/Kd in funzione dell'estensione.
+        # Durante HOLD: K_p piena (no scaling) per massima rigidezza al contatto.
+        # Durante APPROACH/RETRACT: scaling riduce K_p alle estensioni elevate.
         reach_xy   = np.linalg.norm(x_current.translation[:2])
         reach_norm = np.clip(reach_xy / 0.6, 0.0, 1.0)
-        scale_kp   = 1.0 - 0.65 * reach_norm
+        if self._phase == 'HOLD':
+            scale_kp = 1.0
+        else:
+            scale_kp = 1.0 - 0.65 * reach_norm
         scale_kd   = 1.0 + 1.00 * reach_norm
 
         K_p_eff = self.K_p * scale_kp
