@@ -41,6 +41,16 @@ z1_FSM:
     ik_approach_standoff: 0.070   # [m] distanza di standoff dalla superficie
     approach_mode:        "vertical"   # "normal" | "vertical"
 
+    # ── Modalità scansione ─────────────────────────────────────────
+    # "single"          → singolo punto al centro (default)
+    # "fast_ultrasound" → 5 punti: centro, basso-dx, basso-sx, alto-dx, alto-sx
+    #   Offset in world frame applicati al centro torso (Y=laterale, Z=alto/basso):
+    #     scan_delta_lateral [m] → ±Y
+    #     scan_delta_axial   [m] → ±Z
+    scan_mode:           "single"
+    scan_delta_lateral:  0.06   # [m]
+    scan_delta_axial:    0.06   # [m]
+
     # ── Debug ──────────────────────────────────────────────────────
     # Se true: dopo WAIT_IK_DONE torna in WAITING senza avviare impedance.
     # Usare per verificare che il JTC allinei correttamente l'EE alla normale

@@ -75,6 +75,28 @@ class Z1FSM(Node):
         self._ik_approach_standoff = float(self.get_parameter("ik_approach_standoff").value)
         self._approach_mode        = self.get_parameter("approach_mode").value
 
+        # ── Modalità scansione ──────────────────────────────────────────
+        # "single"          → singolo punto al centro (comportamento attuale)
+        # "fast_ultrasound" → 5 punti: centro + 4 angoli del busto
+        #   Offset in world frame (Y = laterale, Z = alto/basso sul busto):
+        #     scan_delta_lateral [m] → ±Y
+        #     scan_delta_axial   [m] → ±Z
+        self.declare_parameter("scan_mode",           "single")
+        self.declare_parameter("scan_delta_lateral",  0.06)   # [m]
+        self.declare_parameter("scan_delta_axial",    0.06)   # [m]
+        self._scan_mode = self.get_parameter("scan_mode").value
+        _dl = float(self.get_parameter("scan_delta_lateral").value)
+        _da = float(self.get_parameter("scan_delta_axial").value)
+        # (dx, dy, dz) rispetto al centro torso in world frame
+        self._scan_offsets = [
+            ( 0.0,   0.0,   0.0),   # 0: centro
+            ( 0.0,  +_dl,  -_da),   # 1: basso-destra
+            ( 0.0,  -_dl,  -_da),   # 2: basso-sinistra
+            ( 0.0,  +_dl,  +_da),   # 3: alto-destra
+            ( 0.0,  -_dl,  +_da),   # 4: alto-sinistra
+        ]
+        self._scan_idx = 0   # punto corrente (resettato a WAITING)
+
         # ── Debug: skip impedance per verificare solo allineamento JTC ──
         # Se True: dopo WAIT_IK_DONE torna in WAITING senza avviare impedance.
         # Utile per verificare visivamente se il JTC allinea l'EE alla normale
@@ -245,6 +267,7 @@ class Z1FSM(Node):
         if s == self.WAITING:
             self.ik_done                = False
             self._approach_command_sent = False
+            self._scan_idx              = 0   # reset indice scan ad ogni nuovo ciclo
 
         if s == self.CHECKING_WORKSPACE:
             self._workspace_future   = None
@@ -340,14 +363,17 @@ class Z1FSM(Node):
             # ── Modalità verticale: sopra al torso, discesa in -Z ─────────
             # XY: usa il centro torso da YOLO (più accurato del centroide PCA del surface frame)
             # Z:  usa p_surf.z (piano superficiale) + standoff
+            # Scan offset: aggiunto in world frame per i punti fast_ultrasound
             torso_ref = self._checker_input_pose if self._checker_input_pose is not None \
                         else self.last_torso_pose
-            p_approach = np.array([torso_ref.pose.position.x,
-                                   torso_ref.pose.position.y,
-                                   p_surf[2] + self._ik_approach_standoff])
+            off = self._scan_offsets[self._scan_idx]   # (dx, dy, dz) world frame
+            p_approach = np.array([torso_ref.pose.position.x + off[0],
+                                   torso_ref.pose.position.y + off[1],
+                                   p_surf[2] + self._ik_approach_standoff + off[2]])
             # X_ee punta verso il basso = verso il torso (che è sotto il braccio)
             x_ee = np.array([0.0, 0.0, -1.0])
-            mode_log = f'vertical ↓ (XY YOLO, Z surf +{self._ik_approach_standoff:.2f}m)'
+            scan_lbl = f'pt{self._scan_idx} off=({off[0]:.2f},{off[1]:.2f},{off[2]:.2f})'
+            mode_log = f'vertical ↓ (XY YOLO, Z surf +{self._ik_approach_standoff:.2f}m) [{scan_lbl}]'
         else:
             # ── Modalità normale: standoff lungo la normale superficiale ──
             # La normale punta DAL torso VERSO il robot → standoff davanti al torso
@@ -683,15 +709,28 @@ class Z1FSM(Node):
 
             result = self._switch_future.result()
             if result.success:
-                self.get_logger().info(
-                    "✅ Switch torque_controller → JTC riuscito → HOMING (poi WAITING)"
-                )
-                self._post_impedance_hold = True   # non ripartire subito al prossimo lock
-                self._homing_next_state   = self.WAITING
-                # Reset del tracker: forza IDLE così può ri-acquisire il torso al ciclo successivo
-                self.pub_tracker_reset.publish(Bool(data=True))
-                self.get_logger().info("🔄 Tracker reset inviato → torso tracker → IDLE")
-                self.set_state(self.HOMING)
+                n_pts = len(self._scan_offsets)
+                if self._scan_mode == 'fast_ultrasound' and self._scan_idx < n_pts - 1:
+                    # ── Fast ultrasound: vai al prossimo punto ────────────
+                    self._scan_idx += 1
+                    off = self._scan_offsets[self._scan_idx]
+                    self.get_logger().info(
+                        f"✅ Switch → JTC | Fast US: punto {self._scan_idx}/{n_pts - 1} "
+                        f"off=({off[0]:.2f},{off[1]:.2f},{off[2]:.2f}) → APPROACHING"
+                    )
+                    self.set_state(self.APPROACHING)
+                else:
+                    # ── Fine scansione (single o ultimo punto fast_us) ────
+                    self._scan_idx = 0
+                    self.get_logger().info(
+                        "✅ Switch torque_controller → JTC riuscito → HOMING (poi WAITING)"
+                    )
+                    self._post_impedance_hold = True   # non ripartire subito al prossimo lock
+                    self._homing_next_state   = self.WAITING
+                    # Reset del tracker: forza IDLE così può ri-acquisire il torso al ciclo successivo
+                    self.pub_tracker_reset.publish(Bool(data=True))
+                    self.get_logger().info("🔄 Tracker reset inviato → torso tracker → IDLE")
+                    self.set_state(self.HOMING)
             else:
                 self.get_logger().error(f"❌ Switch fallito: {result.message}")
                 self.set_state(self.FAULT)
