@@ -283,7 +283,14 @@ class ImpedanceController(Node):
             self._p_surf_latched         = None
             self._normal_latched         = None
             self._approach_dir           = None
-            self.get_logger().info('✅ Impedance enabled — fase APPROACH')
+            # Reset safe startup: garantisce stabilizzazione identica ad ogni ciclo.
+            # Senza questo, dal 2° ciclo il braccio parte in APPROACH con velocità
+            # residua dallo switch JTC→torque, causando contatto obliquo e slittamento.
+            self.safe_startup_mode    = True
+            self.safe_startup_counter = 0
+            self.x_desired_initialized = False
+            self.error_integral        = np.zeros(6)
+            self.get_logger().info('✅ Impedance enabled — safe startup → APPROACH')
 
     def impedance_callback(self, msg):
         if len(msg.data) == 12:
