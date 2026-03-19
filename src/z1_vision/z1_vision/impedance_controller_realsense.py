@@ -168,6 +168,8 @@ class ImpedanceController(Node):
         self.impedance_enabled       = False
         self._phase                  = 'IDLE'   # fase interna
         self.approach_distance_accum = 0.0
+        self._accum_init             = 0.0    # accum al latch (= desired_normal_offset - proj)
+        self._accum_max              = self.max_approach_distance  # = _accum_init + max_approach_distance
         self._hold_start_time        = None     # rclpy.Time quando inizia HOLD
         self._done_published         = False
         self._R_latched              = None   # rotazione EE latched alla transizione APPROACH→HOLD
@@ -277,6 +279,8 @@ class ImpedanceController(Node):
             # di 50ms senza coppia tra switch JTC→torque e impedance_enable=True.
             self._phase                  = 'IDLE'
             self.approach_distance_accum = 0.0
+            self._accum_init             = 0.0
+            self._accum_max              = self.max_approach_distance
             self._hold_start_time        = None
             self._done_published         = False
             self._R_latched              = None
@@ -289,6 +293,8 @@ class ImpedanceController(Node):
         if self.impedance_enabled and not prev:
             self._phase                  = 'APPROACH'
             self.approach_distance_accum = 0.0
+            self._accum_init             = 0.0
+            self._accum_max              = self.max_approach_distance
             self._hold_start_time        = None
             self._done_published         = False
             self._R_latched              = None   # verrà latched alla transizione APPROACH→HOLD
@@ -473,13 +479,16 @@ class ImpedanceController(Node):
             #  e il target parte esattamente dove si trova l'EE, zero errore garantito.)
             ee_pos = x_current.translation
             proj   = float(np.dot(ee_pos - p_surf, self._normal_latched))
-            self.approach_distance_accum = float(min(
-                self.desired_normal_offset - proj,
-                self.max_approach_distance
-            ))
+            # accum_init garantisce zero errore al latch: target = p_surf + proj*normal = ee_pos
+            # accum_max = accum_init + max_approach_distance → discesa SEMPRE = max_approach_distance
+            # (indipendente da dove il JTC ha lasciato l'EE rispetto alla superficie)
+            self._accum_init             = float(self.desired_normal_offset - proj)
+            self._accum_max              = self._accum_init + self.max_approach_distance
+            self.approach_distance_accum = self._accum_init
             self.get_logger().info(
                 f'  p=[{p_surf[0]:.3f},{p_surf[1]:.3f},{p_surf[2]:.3f}] '
-                f'proj={proj*100:.1f}cm accum_init={self.approach_distance_accum*100:.1f}cm'
+                f'proj={proj*100:.1f}cm accum_init={self._accum_init*100:.1f}cm '
+                f'accum_max={self._accum_max*100:.1f}cm (discesa={self.max_approach_distance*100:.1f}cm)'
             )
 
         # Usa valori latched se disponibili, altrimenti quelli correnti
@@ -489,13 +498,13 @@ class ImpedanceController(Node):
 
         step = self.approach_speed * self.control_dt
 
-        # ── Fase APPROACH: avanza fino a max_approach_distance ────────
+        # ── Fase APPROACH: avanza di max_approach_distance dalla posizione di partenza ──
         if self._phase == 'APPROACH':
             self.approach_distance_accum = min(
                 self.approach_distance_accum + step,
-                self.max_approach_distance
+                self._accum_max
             )
-            if self.approach_distance_accum >= self.max_approach_distance:
+            if self.approach_distance_accum >= self._accum_max:
                 self._phase           = 'HOLD'
                 self._hold_start_time = self.get_clock().now()
                 # Latch orientamento EE al termine dell'APPROACH:
@@ -511,24 +520,23 @@ class ImpedanceController(Node):
         elif self._phase == 'HOLD':
             elapsed = (self.get_clock().now() - self._hold_start_time).nanoseconds * 1e-9
             if elapsed >= self.hold_time:
-                # Snap accum a desired_normal_offset: target parte esattamente
-                # dalla superficie (non da dentro), così il primo tick di RETRACT
-                # ha forza = 0 e cresce immediatamente nella direzione di uscita.
-                self.approach_distance_accum = self.desired_normal_offset
+                # Snap accum a _accum_max: il RETRACT riparte dal punto di contatto
+                # (non da dove si è fermato il robot, che potrebbe aver slittato).
+                self.approach_distance_accum = self._accum_max
                 self._phase = 'RETRACT'
                 self.get_logger().info(
                     f'↩️  HOLD completato ({elapsed:.1f}s) → RETRACT '
-                    f'(accum snap → {self.desired_normal_offset*100:.1f}cm)'
+                    f'(accum snap → {self._accum_max*100:.1f}cm)'
                 )
 
-        # ── Fase RETRACT: torna al standoff lungo la stessa normale ───
+        # ── Fase RETRACT: torna alla posizione di partenza (accum_init) ──
         elif self._phase == 'RETRACT':
             retract_step = self.retract_speed * self.control_dt
             self.approach_distance_accum = max(
                 self.approach_distance_accum - retract_step,
-                0.0
+                self._accum_init
             )
-            if self.approach_distance_accum <= 0.0:
+            if self.approach_distance_accum <= self._accum_init:
                 self._phase = 'DONE'
                 self.get_logger().info('✅ RETRACT completato → DONE')
 
