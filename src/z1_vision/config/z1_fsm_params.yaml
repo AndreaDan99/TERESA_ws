@@ -38,7 +38,7 @@ z1_FSM:
     #                             discesa dritto in -Z world
     #                             (X_ee = [0,0,-1], punta verso il basso = verso il torso)
     surface_frame_topic:  "/torso_surface_frame"
-    ik_approach_standoff: 0.070   # [m] distanza di standoff dalla superficie
+    ik_approach_standoff: 0.120   # [m] distanza di standoff dalla superficie
     approach_mode:        "vertical"   # "normal" | "vertical"
 
     # ── Modalità scansione ─────────────────────────────────────────
@@ -53,9 +53,9 @@ z1_FSM:
     # scan_center_y_offset: shift +Y del punto centrale (spalla → centro torso)
     # scan_delta_axial:     offset ±Y per alto(←spalla) / basso(→fianco)
     # scan_delta_lateral:   offset ±Z per destra / sinistra
-    scan_mode:              "single"
-    scan_delta_lateral:     0.06   # [m] offset ±Z destra/sinistra
-    scan_delta_axial:       0.06   # [m] offset ±Y basso(fianco)/alto(spalla)
+    scan_mode:              "fast_ultrasound"
+    scan_delta_lateral:     0.03   # [m] offset ±Z destra/sinistra
+    scan_delta_axial:       0.03   # [m] offset ±Y basso(fianco)/alto(spalla)
     scan_center_y_offset:   0.05   # [m] shift +Y centro (spalla → torso)
 
     # ── Debug ──────────────────────────────────────────────────────
