@@ -286,10 +286,11 @@ class ImpedanceController(Node):
             # Reset safe startup: garantisce stabilizzazione identica ad ogni ciclo.
             # Senza questo, dal 2° ciclo il braccio parte in APPROACH con velocità
             # residua dallo switch JTC→torque, causando contatto obliquo e slittamento.
-            self.safe_startup_mode    = True
-            self.safe_startup_counter = 0
+            self.safe_startup_mode     = True
+            self.safe_startup_counter  = 0
             self.x_desired_initialized = False
             self.error_integral        = np.zeros(6)
+            self.scale_j2_filtered     = self.gravity_scale_j2  # reset filtro gravità
             self.get_logger().info('✅ Impedance enabled — safe startup → APPROACH')
 
     def impedance_callback(self, msg):
@@ -538,19 +539,10 @@ class ImpedanceController(Node):
             self.error_integral += x_error * self.control_dt
             self.error_integral  = np.clip(self.error_integral, -self.integral_limit, self.integral_limit)
 
-        # Scaling adattivo Kp/Kd in funzione dell'estensione.
-        # Durante HOLD: K_p piena (no scaling) per massima rigidezza al contatto.
-        # Durante APPROACH/RETRACT: scaling riduce K_p alle estensioni elevate.
-        reach_xy   = np.linalg.norm(x_current.translation[:2])
-        reach_norm = np.clip(reach_xy / 0.6, 0.0, 1.0)
-        if self._phase == 'HOLD':
-            scale_kp = 1.0
-        else:
-            scale_kp = 1.0 - 0.65 * reach_norm
-        scale_kd   = 1.0 + 1.00 * reach_norm
-
-        K_p_eff = self.K_p * scale_kp
-        K_d_eff = self.K_d * scale_kd
+        # Guadagni fissi: nessuno scaling adattivo per garantire comportamento
+        # identico ad ogni ciclo indipendentemente dalla posizione del braccio.
+        K_p_eff = self.K_p
+        K_d_eff = self.K_d
         F_max   = 80.0
 
         # ── Velocity feedforward per APPROACH e RETRACT ───────────────
