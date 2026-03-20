@@ -50,7 +50,7 @@ impedance_controller_realsense:
     #   accum=max → EE a (standoff − max) = lieve contatto nella superficie
     #
     # approach_mode: "normal"   → normal_eff = normale superficiale reale (da surface_frame)
-    #                "vertical" → normal_eff = [-1,0,0] (X world verso torso), avanza in +X
+    #                "vertical" → normal_eff = [0,0,1] (world Z up), scende dritto in -Z
     #                             (deve corrispondere ad approach_mode in z1_fsm_params.yaml)
     # Regola: desired_normal_offset = ik_approach_standoff (in z1_fsm_params.yaml)
     #         max_approach_distance  = standoff + contact_depth (es. 0.200 + 0.005)
