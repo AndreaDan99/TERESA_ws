@@ -6,7 +6,7 @@ z1_yolo_torso_tracker:
 
     # ── YOLO ──────────────────────────────────────────────────────
     model_path:   'yolo11n-pose.pt'
-    conf_thr:     0.15
+    conf_thr:     0.25          # alzato da 0.15: riduce keypoint rumorosi
     max_depth:    4.0
     device:       'cpu'
     imgsz:        416
@@ -18,9 +18,14 @@ z1_yolo_torso_tracker:
     # ── Kalman Filter ──────────────────────────────────────────────
     # Q basso = mi fido del modello (corpo fermo)
     # R alto  = non mi fido troppo di YOLO (misura rumorosa)
-    kf_process_noise:  0.00005
-    kf_meas_noise:     1.0
+    kf_process_noise:  0.0001   # leggermente più alto: KF segue meglio se il torso si sposta
+    kf_meas_noise:     0.5     # ridotto da 1.0: Kalman usa di più la misura YOLO
     kf_vel_damping:    0.9
+
+    # ── Tolleranza frame persi (ESTIMATING) ────────────────────────
+    # Quanti frame consecutivi senza buona rilevazione prima di tornare IDLE.
+    # Evita il flickering ESTIMATING↔IDLE su singoli frame persi.
+    recovery_frames:   8
 
     # ── Stima centro torso ─────────────────────────────────────────
     # Metodo primario:  media spalle [5,6] + fianchi [11,12]

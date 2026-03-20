@@ -375,6 +375,8 @@ class Z1YoloTorsoTracker(Node):
                     and n_valid >= self.min_keypoints
                     and avg_conf >= self.min_det_conf):
 
+                self.recovery_counter = 0   # buona rilevazione: azzera contatore recovery
+
                 self.kf.predict(self.vel_damping)
                 self.kf.update(torso_raw)
                 estimated_cam = self.kf.get_position()
@@ -386,8 +388,6 @@ class Z1YoloTorsoTracker(Node):
                 target_world = self._camera_to_world(estimated_cam)
                 if target_world is not None:
                     interpolated = self._interpolate_to_target(target_world)
-                    # self._publish_target_world(interpolated)
-                    # self._publish_visible(True)
 
                 if len(self.position_history) >= self.lock_stable_frames:
                     variance = np.var(self.position_history, axis=0).sum()
@@ -403,12 +403,25 @@ class Z1YoloTorsoTracker(Node):
                     else:
                         self.stable_counter = 0
             else:
-                self.get_logger().warn('⚠️ Torso perso durante stima → IDLE')
-                self.state = 'IDLE'
-                self.kf.reset()
-                self.position_history     = []
-                self.tracking_current_pos = None
-                # self._publish_visible(False)
+                # Frame non valido: non tornare subito a IDLE, usa recovery_frames
+                self.recovery_counter += 1
+                if self.recovery_counter >= self.recovery_frames:
+                    self.get_logger().warn(
+                        f'⚠️ Torso perso durante stima '
+                        f'({self.recovery_counter} frame consecutivi) → IDLE'
+                    )
+                    self.state            = 'IDLE'
+                    self.kf.reset()
+                    self.position_history     = []
+                    self.tracking_current_pos = None
+                    self.recovery_counter     = 0
+                else:
+                    # Predict-only: mantiene stima KF senza aggiornamento
+                    self.kf.predict(self.vel_damping)
+                    self.get_logger().debug(
+                        f'[ESTIMATING] recovery {self.recovery_counter}/{self.recovery_frames}',
+                        throttle_duration_sec=0.5
+                    )
 
         elif self.state == 'LOCKED':
             if self.locked_target is None:
