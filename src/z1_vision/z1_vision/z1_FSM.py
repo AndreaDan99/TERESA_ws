@@ -90,8 +90,7 @@ class Z1FSM(Node):
         self.declare_parameter("skip_impedance", False)
         self._skip_impedance = bool(self.get_parameter("skip_impedance").value)
 
-        # ── Timeout WAIT_IK_DONE ────────────────────────────────────────
-        self.declare_parameter("wait_ik_timeout_s", 15.0)
+        # ── Timeout WAIT_IK_DONE (dichiarato da ScanManager.from_params) ──
         self._wait_ik_timeout = float(self.get_parameter("wait_ik_timeout_s").value)
         self._wait_ik_start: float | None = None
 
