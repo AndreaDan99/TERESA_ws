@@ -12,7 +12,7 @@ z1_ik_to_jtc:
     ik_done_topic:   '/ik_done'
 
     # ── IK solver (damped pseudo-inverse Jacobian) ─────────────────
-    ik_max_iter:    200
+    ik_max_iter:    400
     ik_tol:         5.0e-4
     ik_damping:     5.0e-4
     ik_alpha:       0.5         # step size dell'integrazione

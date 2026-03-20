@@ -15,8 +15,8 @@ impedance_controller_realsense:
     # FASE 1 (senza filtro dq): K_p moderato per forza sufficiente,
     #   K_d basso (15-25) per non amplificare rumore a 500Hz, K_i=0
     # FASE 2 (con filtro passa-basso su dq): K_p=200/300, K_d=30/50
-    K_p_translation: [150.0, 150.0, 250.0]
-    K_d_translation: [35.0,  35.0,  55.0]
+    K_p_translation: [150.0, 150.0, 300.0]
+    K_d_translation: [40.0,  40.0,  50.0]
     K_i_translation: [3.0,   3.0,   5.0]    # [N/(m·s)] — max forza: 1.5N XY, 2.5N Z (con integral_limit=0.5)
 
     # ── Guadagni cartesiani (rotazione) ───────────────────────────
@@ -26,7 +26,7 @@ impedance_controller_realsense:
     # Se l'EE ruota troppo durante approccio → aumenta K_p_rotation.
     # Se oscilla → aumenta K_d_rotation.
     K_p_rotation: [50.0, 50.0, 50.0]   # [Nm/rad]
-    K_d_rotation: [10.0, 10.0, 10.0]  # [Nm·s/rad]
+    K_d_rotation: [5.0,  5.0,  5.0]   # [Nm·s/rad]
     K_i_rotation: [0.0,  0.0,  0.0]
 
     # ── Parametri generali ── TUNED ────────────────────────────────
@@ -41,7 +41,7 @@ impedance_controller_realsense:
     safe_startup_duration: 2.0  # [s]
 
     # ── Compensazione dinamica ── TUNED ────────────────────────────
-    gravity_scale_factor_j2: 1.0
+    gravity_scale_factor_j2: 1.2
 
     # ── Approccio lungo la normale superficie ─────────────────────
     # Formula target: p_surf + (desired_normal_offset − accum) * normal_eff
