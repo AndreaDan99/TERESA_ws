@@ -11,7 +11,7 @@ from message_filters import Subscriber, ApproximateTimeSynchronizer
 
 from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import PointStamped, PoseStamped, Point
-from std_msgs.msg import Bool, ColorRGBA, String
+from std_msgs.msg import Bool, ColorRGBA, Float32MultiArray, String
 from visualization_msgs.msg import Marker, MarkerArray
 from cv_bridge import CvBridge
 
@@ -81,6 +81,10 @@ class Z1YoloTorsoTracker(Node):
         self.declare_parameter('use_face_fallback',           True)
         self.declare_parameter('chest_offset_from_shoulder',  0.15)  # [m]
 
+        # ── Scan mode (body search scanner) ────────────────────────
+        # Numero minimo di frame validi per dichiarare SCAN_POINT_LOCKED
+        self.declare_parameter('scan_min_frames', 8)
+
         # ── Parametri sync RGB+Depth ───────────────────────────────
         self.declare_parameter('sync_slop',          0.10)   # secondi tolleranza sync timestamp
         self.declare_parameter('sync_queue_size',    10)
@@ -106,6 +110,7 @@ class Z1YoloTorsoTracker(Node):
         self.chest_offset_m     = float(self.get_parameter('chest_offset_from_shoulder').value)
         sync_slop               = float(self.get_parameter('sync_slop').value)
         sync_queue_size         = int(self.get_parameter('sync_queue_size').value)
+        self._scan_min_frames   = int(self.get_parameter('scan_min_frames').value)
 
         device = self.get_parameter('device').value
 
@@ -151,20 +156,44 @@ class Z1YoloTorsoTracker(Node):
         self.sub_tracker_reset = self.create_subscription(
             Bool, '/tracker_reset', self.cb_tracker_reset, 10)
 
+        # ── Scan mode: comandi dalla FSM ────────────────────────────
+        # /tracker_scan_mode True  → attiva scan mode
+        # /tracker_scan_mode False → disattiva scan mode (reset a IDLE normale)
+        self.sub_scan_mode = self.create_subscription(
+            Bool, '/tracker_scan_mode', self._cb_scan_mode, 10)
+
+        # /tracker_scan_next True → reset punto corrente (prossima posa del braccio)
+        self.sub_scan_next = self.create_subscription(
+            Bool, '/tracker_scan_next', self._cb_scan_next, 10)
+
         # ── Publishers (NUOVA FSM) ─────────────────────────────────
-        self.pub_torso_ee          = self.create_publisher(PoseStamped,  '/torso_target_ee',     10)
+        self.pub_torso_ee          = self.create_publisher(PoseStamped,  '/torso_target_ee',        10)
         self.pub_torso_ee_locked   = self.create_publisher(PoseStamped,  '/torso_target_ee_locked', 10)
+        self.pub_markers           = self.create_publisher(MarkerArray,  '/torso_markers',          10)
+        self.pub_tracker_state     = self.create_publisher(String,       '/torso_tracker_state',    10)
 
-        self.pub_markers           = self.create_publisher(MarkerArray, '/torso_markers',        10)
-        self.pub_tracker_state     = self.create_publisher(String,      '/torso_tracker_state',  10)
+        # ── Publisher scan mode ─────────────────────────────────────
+        # Pubblica ogni frame mentre scan mode è attivo:
+        #   Float32MultiArray data = [score, n_kp, conf, x_world, y_world, z_world]
+        # score = (n_kp / 4) * conf  per frame validi; 0.0 per frame non validi.
+        self.pub_scan_point = self.create_publisher(
+            Float32MultiArray, '/torso_scan_point', 10)
 
-        # ── Stato interno (invariato) ──────────────────────────────
+        # ── Stato interno normale ──────────────────────────────────
         self.state            = 'IDLE'
         self.stable_counter   = 0
         self.recovery_counter = 0
         self.drift_counter    = 0
         self.position_history = []
         self.locked_target    = None  # world frame
+
+        # ── Stato scan mode ────────────────────────────────────────
+        # _scan_mode:  True quando la FSM ha attivato la modalità scan
+        # _scan_state: stato interno della scan  (IDLE / COLLECTING / POINT_LOCKED)
+        # _scan_valid: contatore frame validi accumulati nel punto corrente
+        self._scan_mode  = False
+        self._scan_state = 'IDLE'       # IDLE | COLLECTING | POINT_LOCKED
+        self._scan_valid = 0
 
         # ── Interpolazione tracking (invariata) ────────────────────
         self.tracking_current_pos = None  # world frame
@@ -199,6 +228,45 @@ class Z1YoloTorsoTracker(Node):
         self.recovery_counter = 0
         self.kf.reset()
         self.get_logger().info(f'🔄 Tracker reset: {prev} → IDLE (richiesto da FSM)')
+
+    def _cb_scan_mode(self, msg: Bool):
+        """
+        /tracker_scan_mode True  → entra in scan mode (congela LOCKED normale)
+        /tracker_scan_mode False → esce da scan mode, resettta a IDLE normale
+        """
+        if msg.data == self._scan_mode:
+            return
+        self._scan_mode = msg.data
+        if msg.data:
+            # Attivazione: reset stato scan
+            self._scan_state = 'IDLE'
+            self._scan_valid = 0
+            self.get_logger().info('🔍 Scan mode ATTIVATO')
+        else:
+            # Disattivazione: reset tracker normale → il tracker rileverà
+            # da solo il torso dalla posizione corrente (migliore) e andrà in LOCKED
+            self._scan_state = 'IDLE'
+            self._scan_valid = 0
+            self.state            = 'IDLE'
+            self.locked_target    = None
+            self.tracking_current_pos = None
+            self.position_history = []
+            self.stable_counter   = 0
+            self.drift_counter    = 0
+            self.recovery_counter = 0
+            self.kf.reset()
+            self.get_logger().info('🔍 Scan mode DISATTIVATO → IDLE normale')
+
+    def _cb_scan_next(self, msg: Bool):
+        """
+        /tracker_scan_next True → resettta il punto corrente della scan.
+        Chiamato dalla FSM quando il braccio arriva alla posa successiva.
+        """
+        if not msg.data or not self._scan_mode:
+            return
+        self._scan_state = 'IDLE'
+        self._scan_valid = 0
+        self.get_logger().info('🔄 Scan next: reset punto corrente')
 
     # ──────────────────────────────────────────────────────────────
     def _camera_to_world(self, point_camera):
@@ -276,8 +344,11 @@ class Z1YoloTorsoTracker(Node):
         # ── Estrai misura torso (camera frame) ────────────────────
         torso_raw, kp_3d, n_valid, avg_conf = self._extract_torso(results, depth)
 
-        # ── Macchina a stati (identica) ────────────────────────────
-        self._update_state(torso_raw, n_valid, avg_conf, rgb_msg.header)
+        # ── Macchina a stati: normale o scan mode ──────────────────
+        if self._scan_mode:
+            self._update_scan(torso_raw, n_valid, avg_conf)
+        else:
+            self._update_state(torso_raw, n_valid, avg_conf, rgb_msg.header)
 
         # ── Markers ───────────────────────────────────────────────
         target = self.locked_target if self.locked_target is not None \
@@ -352,6 +423,68 @@ class Z1YoloTorsoTracker(Node):
                 return torso_raw, kp_3d, n_valid, avg_conf
 
         return None, kp_3d, 0, 0.0
+
+    # ──────────────────────────────────────────────────────────────
+    def _update_scan(self, torso_raw, n_valid, avg_conf):
+        """
+        Logica di update in scan mode.
+        Pubblica ogni frame su /torso_scan_point:
+          [score, n_kp, conf, x_world, y_world, z_world]
+        score = (n_kp / 4) * conf  per frame validi, 0.0 altrimenti.
+
+        Stato interno:
+          IDLE       → aspetta prima detection valida
+          COLLECTING → accumula frame validi
+          POINT_LOCKED → ha raggiunto scan_min_frames (continua a pubblicare)
+        """
+        TORSO_KP_MAX = 4  # spalle + anche (max keypoint torso)
+
+        valid = (torso_raw is not None
+                 and n_valid >= self.min_keypoints
+                 and avg_conf >= self.min_det_conf)
+
+        if valid:
+            per_frame_score = (min(n_valid, TORSO_KP_MAX) / TORSO_KP_MAX) * avg_conf
+            torso_world     = self._camera_to_world(torso_raw)
+        else:
+            per_frame_score = 0.0
+            torso_world     = None
+
+        # ── Pubblica dato per-frame ──
+        if torso_world is not None:
+            data = [per_frame_score, float(n_valid), avg_conf,
+                    float(torso_world[0]), float(torso_world[1]), float(torso_world[2])]
+        else:
+            data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        msg = Float32MultiArray()
+        msg.data = data
+        self.pub_scan_point.publish(msg)
+
+        # ── Aggiorna stato scan ──
+        prev_scan = self._scan_state
+        if self._scan_state == 'IDLE':
+            if valid:
+                self._scan_state = 'COLLECTING'
+                self._scan_valid = 1
+        elif self._scan_state == 'COLLECTING':
+            if valid:
+                self._scan_valid += 1
+                if self._scan_valid >= self._scan_min_frames:
+                    self._scan_state = 'POINT_LOCKED'
+                    self.get_logger().info(
+                        f'🔒 SCAN_POINT_LOCKED ({self._scan_valid} frame validi)')
+            else:
+                # Frame non valido: decrementa (tollera qualche frame perso)
+                self._scan_valid = max(0, self._scan_valid - 1)
+                if self._scan_valid == 0:
+                    self._scan_state = 'IDLE'
+        # In POINT_LOCKED: continua a pubblicare, aspetta scan_next dalla FSM
+
+        # Pubblica stato (con prefisso SCAN_ per distinguerlo dal normale)
+        scan_label = f'SCAN_{self._scan_state}'
+        if self._scan_state != prev_scan:
+            self.get_logger().info(f'🔄 Scan state: {prev_scan} → {self._scan_state}')
+        self.pub_tracker_state.publish(String(data=scan_label))
 
     # ──────────────────────────────────────────────────────────────
     def _update_state(self, torso_raw, n_valid, avg_conf, header):

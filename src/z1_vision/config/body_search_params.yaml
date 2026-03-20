@@ -1,0 +1,61 @@
+# body_search_params.yaml
+# Parametri per la scansione a griglia (BodySearchScanner)
+#
+# La scansione muove il braccio attraverso una griglia di pose in world frame
+# per trovare la posizione dalla quale il tracker YOLO vede meglio il torso.
+#
+# World frame (TERESA):
+#   X → verso il basso (discesa braccio verso torso)
+#   Y → da faccia del paziente verso gambe (asse corpo)
+#   Z → laterale (da fianco dx a fianco sx)
+#
+# Il centro della griglia dovrebbe essere vicino alla home position del braccio.
+# L'EE mantiene l'orientamento home durante tutta la scansione.
+
+z1_FSM:
+  ros__parameters:
+
+    # ── Abilita/disabilita ──────────────────────────────────────────
+    # Se true: all'avvio (dopo HOMING) la FSM entra in BODY_SCANNING
+    # prima di aspettare il lock normale del tracker.
+    # Se false: comportamento precedente (aspetta lock direttamente in WAITING).
+    body_scan_on_start: true
+
+    # ── Griglia di scansione (pose del braccio in world frame) ─────
+    #
+    # Centro della griglia: posizione EE intorno alla quale si genera la griglia.
+    # Di default vicino alla home position del braccio.
+    body_scan_center: [-0.09, 0.00, 0.44]    # [x, y, z] in metri
+
+    # Semi-estensioni della griglia (metà del range totale):
+    #   body_scan_ext_y: ±Y intorno al centro (lungo asse corpo paziente)
+    #   body_scan_ext_z: ±Z intorno al centro (laterale)
+    # Esempio: ext_y=0.20 → sweep da center_y-0.20 a center_y+0.20
+    body_scan_ext_y: 0.20   # [m]  sweep lungo Y (spalla→fianco)
+    body_scan_ext_z: 0.00   # [m]  sweep laterale (0.0 = scan 1D solo in Y)
+
+    # Numero di punti lungo Y e Z della griglia:
+    body_scan_ny: 3          # es. 3 = [centro-ext, centro, centro+ext]
+    body_scan_nz: 1          # 1 = nessun sweep laterale
+
+    # ── Parametri temporali per punto ──────────────────────────────
+    # Timeout per punto: se entro questo tempo non si raccolgono
+    # scan_min_frames validi, il punto viene marcato score=0 e si avanza.
+    body_scan_point_timeout: 4.0   # [s]
+
+    # Numero minimo di frame validi per considerare un punto "pronto"
+    # (trigger per calcolare score e avanzare, prima del timeout).
+    body_scan_min_frames: 8
+
+    # Score oltre il quale si interrompe la scansione anticipatamente
+    # (early stop: il punto corrente è già abbastanza buono).
+    body_scan_early_stop: 0.85
+
+
+# ── Parametri scan mode nel tracker ────────────────────────────────────────
+z1_yolo_torso_tracker:
+  ros__parameters:
+
+    # Numero di frame validi consecutivi per dichiarare SCAN_POINT_LOCKED
+    # (stato interno del tracker in scan mode).
+    scan_min_frames: 8

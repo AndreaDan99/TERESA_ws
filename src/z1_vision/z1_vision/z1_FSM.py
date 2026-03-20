@@ -5,15 +5,16 @@ from rclpy.node import Node
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, Float32MultiArray, String
 from std_srvs.srv import Trigger
 from geometry_msgs.msg import PoseStamped
 from visualization_msgs.msg import Marker
 
 from tf_transformations import quaternion_matrix, quaternion_from_matrix
 
-from z1_vision.workspace_checker import WorkspaceChecker
-from z1_vision.z1_scan_manager   import ScanManager
+from z1_vision.workspace_checker   import WorkspaceChecker
+from z1_vision.z1_scan_manager     import ScanManager
+from z1_vision.body_search_scanner import BodySearchScanner, ScanAction
 
 
 class Z1FSM(Node):
@@ -31,6 +32,7 @@ class Z1FSM(Node):
     EMERGENCY_SWITCHING  = "EMERGENCY_SWITCHING"
     EMERGENCY            = "EMERGENCY"
     FAULT                = "FAULT"
+    BODY_SCANNING        = "BODY_SCANNING"
 
     # States where the torque_controller may be active.
     # Any keyboard command arriving in these states must first switch to JTC.
@@ -128,6 +130,27 @@ class Z1FSM(Node):
             self.get_parameter("home_orientation").value, dtype=float
         )
 
+        # ── Body scan params ─────────────────────────────────────────────
+        self.declare_parameter("body_scan_on_start",      True)
+        self.declare_parameter("body_scan_center",        [-0.09, 0.00, 0.44])
+        self.declare_parameter("body_scan_ext_y",         0.20)
+        self.declare_parameter("body_scan_ext_z",         0.00)
+        self.declare_parameter("body_scan_ny",            3)
+        self.declare_parameter("body_scan_nz",            1)
+        self.declare_parameter("body_scan_point_timeout", 4.0)
+        self.declare_parameter("body_scan_min_frames",    8)
+        self.declare_parameter("body_scan_early_stop",    0.85)
+
+        self._scan_on_start     = bool(self.get_parameter("body_scan_on_start").value)
+        self._body_scan_center  = np.array(self.get_parameter("body_scan_center").value, dtype=float)
+        self._body_scan_ext_y   = float(self.get_parameter("body_scan_ext_y").value)
+        self._body_scan_ext_z   = float(self.get_parameter("body_scan_ext_z").value)
+        self._body_scan_ny      = int(self.get_parameter("body_scan_ny").value)
+        self._body_scan_nz      = int(self.get_parameter("body_scan_nz").value)
+        self._body_scan_timeout = float(self.get_parameter("body_scan_point_timeout").value)
+        self._body_scan_min_fr  = int(self.get_parameter("body_scan_min_frames").value)
+        self._body_scan_early   = float(self.get_parameter("body_scan_early_stop").value)
+
         # ── WorkspaceChecker (Pinocchio, bloccante → thread) ────────────
         try:
             self._checker = WorkspaceChecker(
@@ -158,15 +181,23 @@ class Z1FSM(Node):
         self._skip_impedance_hold: bool                    = False  # blocca retry in skip_impedance mode
         self._post_impedance_hold: bool                    = False  # blocca retry dopo ciclo impedance completo
 
+        # ── Body scan state ──────────────────────────────────────────────
+        # _body_scan_done: True dopo che la scan è stata eseguita in questo ciclo
+        #   (reset a False quando si torna in HOMING, così ogni ciclo ri-scansiona)
+        # _body_scanner: istanza BodySearchScanner, creata in set_state(BODY_SCANNING)
+        self._body_scan_done: bool                         = False
+        self._body_scanner:   BodySearchScanner | None     = None
+
         self.create_subscription(
             PoseStamped, self.torso_locked_topic, self.on_torso_locked, 10
         )
         self.create_subscription(
             PoseStamped, self._surface_frame_topic, self._on_surface_frame, 10
         )
-        self.create_subscription(Bool,   self.ik_done_topic,        self.on_ik_done,        10)
-        self.create_subscription(Bool,   self.impedance_done_topic, self.on_impedance_done, 10)
-        self.create_subscription(String, self.keyboard_cmd_topic,   self._on_keyboard_cmd,  10)
+        self.create_subscription(Bool,              self.ik_done_topic,        self.on_ik_done,        10)
+        self.create_subscription(Bool,              self.impedance_done_topic, self.on_impedance_done, 10)
+        self.create_subscription(String,            self.keyboard_cmd_topic,   self._on_keyboard_cmd,  10)
+        self.create_subscription(Float32MultiArray, '/torso_scan_point',       self._on_scan_point,    10)
 
         # ── Publishers ──────────────────────────────────────────────────
         self.pub_ik_enable        = self.create_publisher(Bool,        self.ik_enable_topic,              10)
@@ -174,8 +205,11 @@ class Z1FSM(Node):
         self.pub_state            = self.create_publisher(String,      self.state_topic,                   10)
         self.pub_impedance_enable = self.create_publisher(Bool,        self.impedance_enable_topic,        10)
         self.pub_out_of_workspace = self.create_publisher(Bool,        self.target_out_of_workspace_topic, 10)
-        self.pub_ik_goal_marker   = self.create_publisher(Marker,      '/ik_goal_marker',                  10)
-        self.pub_tracker_reset    = self.create_publisher(Bool,        '/tracker_reset',                   10)
+        self.pub_ik_goal_marker      = self.create_publisher(Marker, '/ik_goal_marker',       10)
+        self.pub_tracker_reset       = self.create_publisher(Bool,  '/tracker_reset',        10)
+        # Body scan: comandi al tracker
+        self.pub_tracker_scan_mode   = self.create_publisher(Bool,  '/tracker_scan_mode',    10)
+        self.pub_tracker_scan_next   = self.create_publisher(Bool,  '/tracker_scan_next',    10)
 
         # ── Service clients: switch controller ──────────────────────────
         self.switch_to_torque_client = self.create_client(Trigger, '/safe_switch/to_torque')
@@ -289,9 +323,24 @@ class Z1FSM(Node):
             self._wrist_align_sent  = False
             self._wrist_align_start = self.get_clock().now().nanoseconds * 1e-9
 
+        if s == self.BODY_SCANNING:
+            self.ik_done      = False
+            poses             = self._generate_scan_poses()
+            self._body_scanner = BodySearchScanner(
+                scan_poses         = poses,
+                scan_point_timeout = self._body_scan_timeout,
+                scan_min_frames    = self._body_scan_min_fr,
+                early_stop_score   = self._body_scan_early,
+                logger             = self.get_logger(),
+            )
+            self._body_scanner.reset()
+            # Attiva scan mode nel tracker
+            self.pub_tracker_scan_mode.publish(Bool(data=True))
+
         if s == self.HOMING:
             self.ik_done              = False
             self._homing_command_sent = False
+            self._body_scan_done      = False   # ri-scansiona al prossimo ciclo
 
         if s == self.EMERGENCY_SWITCHING:
             self._switch_future = None
@@ -495,6 +544,59 @@ class Z1FSM(Node):
         )
         return goal
 
+    # ──────────────────────────────────────────────────────────────
+    def _generate_scan_poses(self) -> list:
+        """
+        Genera la lista di PoseStamped per la body search scan.
+        Griglia ny × nz nel piano YZ in world frame, X fisso = body_scan_center[0].
+        L'EE mantiene l'orientamento home per tutte le pose (camera guarda verso torso).
+        """
+        center = self._body_scan_center
+        ny     = self._body_scan_ny
+        nz     = self._body_scan_nz
+        ext_y  = self._body_scan_ext_y
+        ext_z  = self._body_scan_ext_z
+
+        ys = (np.linspace(center[1] - ext_y, center[1] + ext_y, ny)
+              if ny > 1 else np.array([center[1]]))
+        zs = (np.linspace(center[2] - ext_z, center[2] + ext_z, nz)
+              if nz > 1 else np.array([center[2]]))
+
+        q   = self._home_orientation
+        now = self.get_clock().now().to_msg()
+
+        poses = []
+        for z in zs:
+            for y in ys:
+                p = PoseStamped()
+                p.header.frame_id    = 'world'
+                p.header.stamp       = now
+                p.pose.position.x    = float(center[0])
+                p.pose.position.y    = float(y)
+                p.pose.position.z    = float(z)
+                p.pose.orientation.x = float(q[0])
+                p.pose.orientation.y = float(q[1])
+                p.pose.orientation.z = float(q[2])
+                p.pose.orientation.w = float(q[3])
+                poses.append(p)
+
+        self.get_logger().info(
+            f'🗺️  Scan grid: {len(poses)} pose '
+            f'(ny={ny} × nz={nz}), '
+            f'center=[{center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f}], '
+            f'ext_y=±{ext_y:.2f} ext_z=±{ext_z:.2f}'
+        )
+        return poses
+
+    def _on_scan_point(self, msg: Float32MultiArray):
+        """
+        Callback /torso_scan_point: riceve dati per-frame dal tracker
+        durante la body scan e li invia allo scanner.
+        data = [score, n_kp, conf, x_world, y_world, z_world]
+        """
+        if self.state == self.BODY_SCANNING and self._body_scanner is not None:
+            self._body_scanner.feed_scan_data(list(msg.data))
+
     def _make_home_pose(self) -> PoseStamped:
         """Costruisce un PoseStamped con la posizione home definita dai parametri YAML."""
         msg = PoseStamped()
@@ -584,6 +686,10 @@ class Z1FSM(Node):
                     self.get_logger().info("🔓 Lock perso → post_impedance hold rilasciato")
                 else:
                     return
+            # Body scan: se abilitato e non ancora eseguito in questo ciclo
+            if self._scan_on_start and not self._body_scan_done:
+                self.set_state(self.BODY_SCANNING)
+                return
             if self.torso_target_fresh():
                 self.set_state(self.CHECKING_WORKSPACE)
 
@@ -776,6 +882,55 @@ class Z1FSM(Node):
                 self.pub_ik_enable.publish(Bool(data=False))
                 self.get_logger().info('✅ WRIST_ALIGN completato → SWITCHING_TO_TORQUE')
                 self.set_state(self.SWITCHING_TO_TORQUE)
+
+        # ── BODY_SCANNING ─────────────────────────────────────────────────
+        # Scansione a griglia: trova la posa del braccio da cui il tracker
+        # vede meglio il torso, poi si sposta lì e sblocca il lock normale.
+        elif self.state == self.BODY_SCANNING:
+            if self._body_scanner is None:
+                self.get_logger().warn('⚠️  BODY_SCANNING: scanner non inizializzato → WAITING')
+                self._body_scan_done = True
+                self.set_state(self.WAITING)
+                return
+
+            now = self.get_clock().now().nanoseconds * 1e-9
+            st  = self._body_scanner.tick(ik_done=self.ik_done, now=now)
+
+            if st.action == ScanAction.SEND_IK:
+                # Invia il prossimo goal IK (posa della griglia o best pose finale)
+                self.ik_done = False
+                self.pub_ik_enable.publish(Bool(data=True))
+                self.pub_ik_goal.publish(st.goal)
+                p = st.goal.pose.position
+                self.get_logger().info(
+                    f'🔍 Body scan IK goal: [{p.x:.3f}, {p.y:.3f}, {p.z:.3f}]'
+                )
+
+            elif st.action == ScanAction.RESET_TRACKER:
+                # Braccio arrivato alla posa: resetta tracker per raccogliere dati puliti
+                self.pub_tracker_scan_next.publish(Bool(data=True))
+
+            elif st.action == ScanAction.EXIT_SCAN_MODE:
+                # Scansione completata, braccio nella best pose:
+                # disattiva scan mode → tracker torna IDLE e lockerà normalmente
+                self.pub_ik_enable.publish(Bool(data=False))
+                self.pub_tracker_scan_mode.publish(Bool(data=False))
+                self.get_logger().info(
+                    '✅ Body scan completato → WAITING (tracker lockerà da best pose)'
+                )
+                self._body_scan_done = True
+                self.set_state(self.WAITING)
+
+            elif st.action == ScanAction.FAILED:
+                # Nessun punto valido trovato: disattiva scan mode, vai in WAITING
+                self.pub_ik_enable.publish(Bool(data=False))
+                self.pub_tracker_scan_mode.publish(Bool(data=False))
+                self.get_logger().warn(
+                    '⚠️  Body scan FAILED (nessun punto valido) → WAITING'
+                )
+                self._body_scan_done = True   # evita loop infinito
+                self.set_state(self.WAITING)
+            # ScanAction.WAIT: nessuna azione
 
         # ── SWITCHING_TO_TORQUE ───────────────────────────────────────────
         elif self.state == self.SWITCHING_TO_TORQUE:
