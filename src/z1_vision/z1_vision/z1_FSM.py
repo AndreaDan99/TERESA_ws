@@ -353,23 +353,25 @@ class Z1FSM(Node):
         p_surf = np.array([sf.pose.position.x, sf.pose.position.y, sf.pose.position.z])
 
         if self._approach_mode == 'vertical':
-            # ── Modalità verticale: approccio lungo +X world (X punta verso il torso) ──
-            # X:  p_surf.x - standoff - extra_clearance  (arretra in -X = lontano dal torso)
-            # Y:  YOLO + offset assiale (spalla↔fianco)
-            # Z:  p_surf.z + offset laterale (dx/sx)
+            # ── Modalità verticale: discesa in -Z world ───────────────────────────
+            # X:  YOLO torso X + dx - extra_clearance
+            #     (extra_clearance>0 solo in SCAN_PRELIFT: arretra in -X prima
+            #      di spostarsi lateralmente al prossimo punto)
+            # Y:  YOLO torso Y + dy  (offset assiale spalla↔fianco)
+            # Z:  p_surf.z + standoff + dz  (altezza sopra superficie + offset laterale)
+            # X_ee = [0,0,-1]: asse X EE punta verso il torso (verso il basso)
             torso_ref = self._checker_input_pose if self._checker_input_pose is not None \
                         else self.last_torso_pose
             off = self._scan_mgr.current_offset   # (dx, dy, dz) world frame
             p_approach = np.array([
-                p_surf[0] - self._ik_approach_standoff - extra_clearance + off[0],
+                torso_ref.pose.position.x + off[0] - extra_clearance,
                 torso_ref.pose.position.y + off[1],
-                p_surf[2] + off[2]
+                p_surf[2] + self._ik_approach_standoff + off[2]
             ])
-            # X_ee punta verso il torso = +X world
-            x_ee = np.array([1.0, 0.0, 0.0])
+            x_ee = np.array([0.0, 0.0, -1.0])
             scan_lbl = f'pt{self._scan_mgr.idx} off=({off[0]:.2f},{off[1]:.2f},{off[2]:.2f})'
-            extra_lbl = f' clr={extra_clearance:.3f}m' if extra_clearance != 0.0 else ''
-            mode_log = (f'vertical →X (standoff={self._ik_approach_standoff:.2f}m{extra_lbl})'
+            extra_lbl = f' clr_x={extra_clearance:.3f}m' if extra_clearance != 0.0 else ''
+            mode_log = (f'vertical ↓Z (standoff={self._ik_approach_standoff:.2f}m{extra_lbl})'
                         f' [{scan_lbl}]')
         else:
             # ── Modalità normale: standoff lungo la normale superficiale ──
