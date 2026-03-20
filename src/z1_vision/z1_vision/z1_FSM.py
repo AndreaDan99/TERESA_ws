@@ -353,13 +353,14 @@ class Z1FSM(Node):
         p_surf = np.array([sf.pose.position.x, sf.pose.position.y, sf.pose.position.z])
 
         if self._approach_mode == 'vertical':
-            # ── Modalità verticale: discesa in -Z world ───────────────────────────
+            # ── Modalità verticale: JTC porta l'EE a standoff in Z sopra la superficie ──
             # X:  YOLO torso X + dx - extra_clearance
             #     (extra_clearance>0 solo in SCAN_PRELIFT: arretra in -X prima
             #      di spostarsi lateralmente al prossimo punto)
             # Y:  YOLO torso Y + dy  (offset assiale spalla↔fianco)
             # Z:  p_surf.z + standoff + dz  (altezza sopra superficie + offset laterale)
-            # X_ee = [0,0,-1]: asse X EE punta verso il torso (verso il basso)
+            # X_ee = [0,0,-1]: asse X EE punta verso il basso (-Z world)
+            # L'impedance poi avanza in +X (normal=[-1,0,0]) per toccare il torso.
             torso_ref = self._checker_input_pose if self._checker_input_pose is not None \
                         else self.last_torso_pose
             off = self._scan_mgr.current_offset   # (dx, dy, dz) world frame
@@ -371,7 +372,7 @@ class Z1FSM(Node):
             x_ee = np.array([0.0, 0.0, -1.0])
             scan_lbl = f'pt{self._scan_mgr.idx} off=({off[0]:.2f},{off[1]:.2f},{off[2]:.2f})'
             extra_lbl = f' clr_x={extra_clearance:.3f}m' if extra_clearance != 0.0 else ''
-            mode_log = (f'vertical ↓Z (standoff={self._ik_approach_standoff:.2f}m{extra_lbl})'
+            mode_log = (f'vertical ↓Z→+X (standoff={self._ik_approach_standoff:.2f}m{extra_lbl})'
                         f' [{scan_lbl}]')
         else:
             # ── Modalità normale: standoff lungo la normale superficiale ──
@@ -599,14 +600,30 @@ class Z1FSM(Node):
             if not self._approach_command_sent:
                 self.ik_done = False
 
-                target = self._make_approach_pose()
-                if target is None:
-                    return
-
-                # Salva la posa del centro (pt0) per usarla come
-                # punto di ritorno nel SCAN_PRELIFT dei punti successivi
                 if self._scan_mgr.idx == 0:
+                    # Punto centrale: calcola normalmente con surface frame live
+                    target = self._make_approach_pose()
+                    if target is None:
+                        return
+                    # Salva la posa del centro (pt0) stabile per tutti i punti successivi
                     self._scan_mgr.save_center_approach(target)
+                else:
+                    # Punti non-centro: calcola da posa centro + offset relativo.
+                    # Evita il surface frame live (può derivare durante impedance).
+                    c = self._scan_mgr._center_approach_pose
+                    if c is None:
+                        self.get_logger().warn('⚠️  APPROACHING: center_approach_pose non salvata → WAITING')
+                        self.set_state(self.WAITING)
+                        return
+                    off_n = self._scan_mgr.current_offset
+                    off_c = self._scan_mgr.offsets[0]
+                    target = PoseStamped()
+                    target.header.frame_id    = 'world'
+                    target.header.stamp       = self.get_clock().now().to_msg()
+                    target.pose.position.x    = c.pose.position.x
+                    target.pose.position.y    = c.pose.position.y + (off_n[1] - off_c[1])
+                    target.pose.position.z    = c.pose.position.z + (off_n[2] - off_c[2])
+                    target.pose.orientation   = c.pose.orientation
 
                 p = target.pose.position
                 self.get_logger().info(

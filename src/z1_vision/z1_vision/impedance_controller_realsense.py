@@ -453,10 +453,10 @@ class ImpedanceController(Node):
             self._surface_latched = True
 
             if self.approach_mode == 'vertical':
-                # Discesa in -Z world: normale efficace = [0,0,1] (Z world up,
-                # dal torso verso il robot), approach_dir = [0,0,-1] → scende verso il torso.
-                self._normal_latched = np.array([0.0, 0.0, 1.0])
-                self.get_logger().info('🔒 Superficie latched — modalità VERTICAL ↓Z (normal=[0,0,1])')
+                # Approccio in +X world: normale efficace = [-1,0,0] (X world punta verso il torso,
+                # quindi dal torso verso il robot = -X), approach_dir = [+1,0,0] → avanza verso il torso.
+                self._normal_latched = np.array([-1.0, 0.0, 0.0])
+                self.get_logger().info('🔒 Superficie latched — modalità VERTICAL +X (normal=[-1,0,0])')
             else:
                 self._normal_latched = normal.copy()
                 self.get_logger().info(
@@ -487,11 +487,12 @@ class ImpedanceController(Node):
             self._accum_init             = float(self.desired_normal_offset - proj)
             self._accum_max              = self._accum_init + self.max_approach_distance
             self.approach_distance_accum = self._accum_init
-            # In vertical mode, latch EE XY: il braccio scende dritto senza spostarsi in XY.
-            # Il target XY da p_surf potrebbe differire dall'EE reale se il surface frame
+            # In vertical mode (+X approach), latch EE YZ: il braccio avanza dritto in +X
+            # senza spostarsi lateralmente (Y) o in altezza (Z).
+            # Il target YZ da p_surf potrebbe differire dall'EE reale se il surface frame
             # è cambiato tra il calcolo JTC e l'attivazione dell'impedance.
             if self.approach_mode == 'vertical':
-                self._ee_xy_latched = ee_pos[:2].copy()
+                self._ee_xy_latched = ee_pos[1:3].copy()   # [Y, Z] — nome storico, ora contiene YZ
             self.get_logger().info(
                 f'  p=[{p_surf[0]:.3f},{p_surf[1]:.3f},{p_surf[2]:.3f}] '
                 f'proj={proj*100:.1f}cm accum_init={self._accum_init*100:.1f}cm '
@@ -559,11 +560,11 @@ class ImpedanceController(Node):
         #   accum_init → target = EE al latch (zero errore)
         #   accum_max  → target = EE - max_approach_distance (lieve contatto)
         target_pos = p_surf + (self.desired_normal_offset - self.approach_distance_accum) * normal
-        # In vertical mode: override XY con EE latched → il braccio scende dritto,
-        # non si sposta verso p_surf.xy (che può differire dall'EE per drift surface frame).
+        # In vertical mode (+X approach): override YZ con EE latched → il braccio avanza
+        # dritto in +X senza spostarsi in Y (laterale) o Z (altezza).
         if self.approach_mode == 'vertical' and self._ee_xy_latched is not None:
-            target_pos[0] = self._ee_xy_latched[0]
-            target_pos[1] = self._ee_xy_latched[1]
+            target_pos[1] = self._ee_xy_latched[0]   # Y latched
+            target_pos[2] = self._ee_xy_latched[1]   # Z latched
         self.x_desired = pin.SE3(R_surf, target_pos)
 
         self._run_impedance(x_current)

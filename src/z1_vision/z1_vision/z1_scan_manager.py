@@ -158,9 +158,8 @@ class ScanManager:
         SCAN_PRELIFT a 2 passi dopo ogni punto non-centro:
 
         Passo 0 — Intermedio: JTC va a (centro.x, pt_n.y, pt_n.z)
-                  Stessa Y/Z del punto appena fatto, X del centro.
-                  Così il braccio si allontana dal torso lungo -X
-                  senza cambiare posizione laterale.
+                  Calcolato direttamente da _center_approach_pose + offset relativo.
+                  NON usa il surface frame live (che può derivare durante impedance).
 
         Passo 1 — Centro: JTC torna alla posa di approccio del centro (pt0).
                   Movimento laterale sicuro alla distanza X del centro.
@@ -171,15 +170,29 @@ class ScanManager:
         """
         # ── Passo 0: invia goal intermedio (centro.x, pt_n.y, pt_n.z) ──────
         if not self._prelift_sent:
-            # Punto intermedio: approach pose del punto corrente (idx non ancora avanzato)
-            # ma con X del centro → stessa formula standoff, solo X sostituita
-            target = fsm._make_approach_pose()   # Y, Z del punto corrente
-            if target is None:
-                fsm.get_logger().warn('⚠️  SCAN_PRELIFT: _make_approach_pose() = None, attendo...')
-                return False
-            if self._center_approach_pose is not None:
-                # Sostituisce la X con quella del centro (stessa distanza dal torso)
-                target.pose.position.x = self._center_approach_pose.pose.position.x
+            if self._center_approach_pose is None:
+                fsm.get_logger().warn('⚠️  SCAN_PRELIFT: center_approach_pose non salvata, skip')
+                self.advance()
+                return True
+
+            # Intermedio calcolato da posa centro + offset relativo rispetto a pt0.
+            # Usa SOLO _center_approach_pose (stabile, salvata a APPROACHING pt0).
+            # Evita del tutto _latest_surface_frame che può derivare durante impedance.
+            off_n = self.current_offset    # offset del punto corrente (pt1-4)
+            off_c = self.offsets[0]        # offset del centro (pt0)
+            c = self._center_approach_pose
+
+            target = PoseStamped()
+            target.header.frame_id    = 'world'
+            target.header.stamp       = fsm.get_clock().now().to_msg()
+            # X = centro (stessa distanza dal torso, = non ci avviciniamo più)
+            target.pose.position.x    = c.pose.position.x
+            # Y = centro + differenza offset assiale (spalla↔fianco)
+            target.pose.position.y    = c.pose.position.y + (off_n[1] - off_c[1])
+            # Z = centro + differenza offset laterale (destra↔sinistra)
+            target.pose.position.z    = c.pose.position.z + (off_n[2] - off_c[2])
+            # Stessa orientazione del centro
+            target.pose.orientation   = c.pose.orientation
 
             fsm.ik_done = False          # reset esplicito prima di ogni goal
             fsm.pub_ik_enable.publish(Bool(data=True))
@@ -188,7 +201,6 @@ class ScanManager:
             self._prelift_step  = 0
             self._prelift_start = fsm.get_clock().now().nanoseconds * 1e-9
             self._publish_marker(fsm, target)
-            off = self.current_offset
             fsm.get_logger().info(
                 f"🔼 SCAN_PRELIFT passo0 pt{self.idx}: intermedio "
                 f"x={target.pose.position.x:.3f} "

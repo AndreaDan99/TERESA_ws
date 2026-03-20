@@ -34,10 +34,9 @@ z1_FSM:
     #
     # approach_mode: "normal"   → standoff lungo la normale superficiale
     #                             (classico approccio frontale/ecografico)
-    #                "vertical" → approccio lungo +X world (X punta verso il torso):
-    #                             pos = [p_surf.x - standoff - clr + dx,
-    #                                    torso.y + dy, p_surf.z + dz]
-    #                             (X_ee = [1,0,0], x_ee verso il torso = +X world)
+    #                "vertical" → JTC standoff in Z sopra la superficie:
+    #                             pos = [torso.x + dx - clr, torso.y + dy, p_surf.z + standoff + dz]
+    #                             X_ee = [0,0,-1]; impedance avanza in +X (normal=[-1,0,0])
     surface_frame_topic:  "/torso_surface_frame"
     ik_approach_standoff: 0.250   # [m] distanza di standoff dalla superficie (= desired_normal_offset)
     approach_mode:        "vertical"   # "normal" | "vertical"
