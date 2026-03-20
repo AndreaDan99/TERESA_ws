@@ -603,6 +603,11 @@ class Z1FSM(Node):
                 if target is None:
                     return
 
+                # Salva la posa del centro (pt0) per usarla come
+                # punto di ritorno nel SCAN_PRELIFT dei punti successivi
+                if self._scan_mgr.idx == 0:
+                    self._scan_mgr.save_center_approach(target)
+
                 self.pub_ik_goal.publish(target)
                 self.pub_ik_enable.publish(Bool(data=True))
                 self._approach_command_sent = True

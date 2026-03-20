@@ -69,8 +69,13 @@ class ScanManager:
 
         self.idx: int = 0
 
-        # Stato interno SCAN_PRELIFT
+        # Posa di approccio del punto centrale (pt0), salvata al primo APPROACHING.
+        # Usata da SCAN_PRELIFT come punto di ritorno dopo ogni punto non-centro.
+        self._center_approach_pose = None   # PoseStamped | None
+
+        # Stato interno SCAN_PRELIFT (macchina a 2 passi)
         self._prelift_sent:  bool        = False
+        self._prelift_step:  int         = 0     # 0 = verso intermedio, 1 = verso centro
         self._prelift_start: float | None = None
 
     @classmethod
@@ -131,9 +136,14 @@ class ScanManager:
         self.idx = 0
         self.reset_prelift()
 
+    def save_center_approach(self, pose) -> None:
+        """Salva la posa JTC del punto centrale (idx=0) per il ritorno in SCAN_PRELIFT."""
+        self._center_approach_pose = pose
+
     def reset_prelift(self):
         """Resetta lo stato interno di SCAN_PRELIFT (chiamato su set_state)."""
         self._prelift_sent  = False
+        self._prelift_step  = 0
         self._prelift_start = None
 
     def advance(self):
@@ -145,60 +155,89 @@ class ScanManager:
 
     def tick_prelift(self, fsm) -> bool:
         """
-        Tick dello stato SCAN_PRELIFT:
-          - Primo tick: manda goal JTC a (standoff + clearance) lungo -X,
-            pubblica marker arancione, inizia timer.
-          - Tick successivi: controlla timeout e ik_done.
+        SCAN_PRELIFT a 2 passi dopo ogni punto non-centro:
 
-        Returns
-        -------
-        True  → SCAN_PRELIFT completato → FSM può andare in APPROACHING
-        False → ancora in attesa
+        Passo 0 — Intermedio: JTC va a (centro.x, pt_n.y, pt_n.z)
+                  Stessa Y/Z del punto appena fatto, X del centro.
+                  Così il braccio si allontana dal torso lungo -X
+                  senza cambiare posizione laterale.
+
+        Passo 1 — Centro: JTC torna alla posa di approccio del centro (pt0).
+                  Movimento laterale sicuro alla distanza X del centro.
+
+        Poi: advance() → APPROACHING sul prossimo punto.
+
+        Returns True quando entrambi i passi sono completati.
         """
+        # ── Passo 0: invia goal intermedio (centro.x, pt_n.y, pt_n.z) ──────
         if not self._prelift_sent:
-            # extra_clearance = altezza extra +Z (salita sopra standoff normale)
-            target = fsm._make_approach_pose(extra_clearance=self.clearance)
+            # Punto intermedio: approach pose del punto corrente (idx non ancora avanzato)
+            # ma con X del centro → stessa formula standoff, solo X sostituita
+            target = fsm._make_approach_pose()   # Y, Z del punto corrente
             if target is None:
                 return False
+            if self._center_approach_pose is not None:
+                # Sostituisce la X con quella del centro (stessa distanza dal torso)
+                target.pose.position.x = self._center_approach_pose.pose.position.x
 
+            fsm.ik_done = False
             fsm.pub_ik_goal.publish(target)
             fsm.pub_ik_enable.publish(Bool(data=True))
             self._prelift_sent  = True
+            self._prelift_step  = 0
             self._prelift_start = fsm.get_clock().now().nanoseconds * 1e-9
-
             self._publish_marker(fsm, target)
-
             off = self.current_offset
             fsm.get_logger().info(
-                f"🔼 SCAN_PRELIFT: sale da pt{self.idx} "
-                f"+Z_clearance={self.clearance:.3f}m "
-                f"off=({off[0]:.2f},{off[1]:.2f},{off[2]:.2f})"
+                f"🔼 SCAN_PRELIFT passo0: intermedio pt{self.idx} "
+                f"(x_centro, y={target.pose.position.y:.3f}, z={target.pose.position.z:.3f})"
             )
             return False
 
-        # Timeout
+        # ── Timeout ──────────────────────────────────────────────────────────
         if self._prelift_start is not None:
             elapsed = fsm.get_clock().now().nanoseconds * 1e-9 - self._prelift_start
             if elapsed > self._ik_timeout:
                 fsm.get_logger().warn(
-                    f"⏱️  SCAN_PRELIFT timeout ({elapsed:.1f}s) → WAITING"
+                    f"⏱️  SCAN_PRELIFT timeout passo{self._prelift_step} ({elapsed:.1f}s) → WAITING"
                 )
                 fsm.pub_ik_enable.publish(Bool(data=False))
                 fsm.set_state(fsm.WAITING)
                 return False
 
-        # Done: avanza al prossimo punto PRIMA di APPROACHING
-        if fsm.ik_done:
-            fsm.pub_ik_enable.publish(Bool(data=False))
-            self.advance()
-            off = self.current_offset
-            fsm.get_logger().info(
-                f"✅ SCAN_PRELIFT completato → APPROACHING pt{self.idx} "
-                f"off=({off[0]:.2f},{off[1]:.2f},{off[2]:.2f})"
-            )
-            return True
+        if not fsm.ik_done:
+            return False
 
-        return False
+        # ── Passo 0 completato → invia goal centro ───────────────────────────
+        if self._prelift_step == 0:
+            if self._center_approach_pose is None:
+                # Centro non salvato: salta direttamente ad advance
+                fsm.pub_ik_enable.publish(Bool(data=False))
+                self.advance()
+                return True
+
+            fsm.ik_done = False
+            fsm.pub_ik_goal.publish(self._center_approach_pose)
+            # ik_enable già True
+            self._prelift_step  = 1
+            self._prelift_start = fsm.get_clock().now().nanoseconds * 1e-9
+            fsm.get_logger().info(
+                f"🔼 SCAN_PRELIFT passo1: ritorno al centro "
+                f"(x={self._center_approach_pose.pose.position.x:.3f}, "
+                f"y={self._center_approach_pose.pose.position.y:.3f}, "
+                f"z={self._center_approach_pose.pose.position.z:.3f})"
+            )
+            return False
+
+        # ── Passo 1 completato → advance → APPROACHING prossimo punto ────────
+        fsm.pub_ik_enable.publish(Bool(data=False))
+        self.advance()
+        off = self.current_offset
+        fsm.get_logger().info(
+            f"✅ SCAN_PRELIFT completato → APPROACHING pt{self.idx} "
+            f"off=({off[0]:.2f},{off[1]:.2f},{off[2]:.2f})"
+        )
+        return True
 
     # ── Decisione dopo SWITCHING_TO_JTC ──────────────────────────────────
 
