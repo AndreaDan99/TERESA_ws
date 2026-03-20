@@ -453,11 +453,11 @@ class ImpedanceController(Node):
             self._surface_latched = True
 
             if self.approach_mode == 'vertical':
-                # Approccio verticale: ignora la normale reale, scende lungo -Z world.
-                # La normale "efficace" è [0,0,1] (world Z up, dal torso verso robot),
-                # così target = [p_surf.x, p_surf.y, p_surf.z + (0.2-accum)] → scende dritto.
-                self._normal_latched = np.array([0.0, 0.0, 1.0])
-                self.get_logger().info('🔒 Superficie latched — modalità VERTICAL ↓ (normal=[0,0,1])')
+                # Approccio lungo +X world (X punta verso il torso).
+                # La normale "efficace" è [-1,0,0] (dal torso verso il robot = -X world),
+                # così approach_dir = +X world → spinge verso il torso.
+                self._normal_latched = np.array([-1.0, 0.0, 0.0])
+                self.get_logger().info('🔒 Superficie latched — modalità VERTICAL →X (normal=[-1,0,0])')
             else:
                 self._normal_latched = normal.copy()
                 self.get_logger().info(

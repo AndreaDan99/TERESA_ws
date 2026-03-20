@@ -34,10 +34,10 @@ z1_FSM:
     #
     # approach_mode: "normal"   → standoff lungo la normale superficiale
     #                             (classico approccio frontale/ecografico)
-    #                "vertical" → braccio sopra al torso, discesa in -Z world (Z=verticale):
-    #                             pos = [torso.x + dx, torso.y + dy,
-    #                                    p_surf.z + standoff + dz + extra_clearance]
-    #                             (X_ee = [0,0,-1], punta verso il basso = verso il torso)
+    #                "vertical" → approccio lungo +X world (X punta verso il torso):
+    #                             pos = [p_surf.x - standoff - clr + dx,
+    #                                    torso.y + dy, p_surf.z + dz]
+    #                             (X_ee = [1,0,0], x_ee verso il torso = +X world)
     surface_frame_topic:  "/torso_surface_frame"
     ik_approach_standoff: 0.120   # [m] distanza di standoff dalla superficie
     approach_mode:        "vertical"   # "normal" | "vertical"
@@ -58,11 +58,10 @@ z1_FSM:
     scan_delta_lateral:     0.03   # [m] offset ±Z destra/sinistra
     scan_delta_axial:       0.03   # [m] offset ±Y basso(fianco)/alto(spalla)
     scan_center_y_offset:   0.05   # [m] shift +Y centro (spalla → torso)
-    # Altezza extra sopra lo standoff durante SCAN_PRELIFT (+Z = salita):
-    # prima di spostarsi al prossimo punto il braccio sale a
-    # (p_surf.z + standoff + scan_clearance_x) per evitare collisioni con
-    # la superficie non piatta del torso durante lo spostamento laterale.
-    scan_clearance_x:       0.120  # [m] extra altezza +Z prima di spostarsi (= standoff)
+    # Clearance aggiuntivo durante SCAN_PRELIFT lungo -X (lontano dal torso):
+    # prima di spostarsi al prossimo punto il braccio arretra a
+    # p_surf.x - standoff - scan_clearance_x per evitare collisioni.
+    scan_clearance_x:       0.120  # [m] extra retrazione -X (= standoff)
 
     # ── Debug ──────────────────────────────────────────────────────
     # Se true: dopo WAIT_IK_DONE torna in WAITING senza avviare impedance.
