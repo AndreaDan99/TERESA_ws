@@ -106,13 +106,19 @@ class ScanManager:
         clr  = float(_declare("scan_clearance_x",     0.120))   # clearance lungo -X (asse approccio)
         tmo  = float(_declare("wait_ik_timeout_s",    15.0))
 
-        # (dx, dy, dz): dx=0 sempre, dy=asse corpo (Y), dz=laterale (Z)
+        # (dx, dy, dz): dx=0 sempre, dz=0 sempre → linea su Y
+        # Layout 5 punti in linea lungo Y (spalla→fianco), passo = _da:
+        #   pt0: centro  (y = _cy)
+        #   pt1: +1 passo verso fianco  (y = _cy + _da)
+        #   pt2: -1 passo verso spalla  (y = _cy - _da)
+        #   pt3: +2 passi verso fianco  (y = _cy + 2*_da)
+        #   pt4: -2 passi verso spalla  (y = _cy - 2*_da)
         offsets = [
-            (0.0,  _cy,        0.0),   # 0: centro
-            (0.0,  _cy + _da,  -_dl),  # 1: basso-destra
-            (0.0,  _cy + _da,  +_dl),  # 2: basso-sinistra
-            (0.0,  _cy - _da,  -_dl),  # 3: alto-destra
-            (0.0,  _cy - _da,  +_dl),  # 4: alto-sinistra
+            (0.0,  _cy,           0.0),  # 0: centro
+            (0.0,  _cy + _da,     0.0),  # 1: verso fianco  (+Y)
+            (0.0,  _cy - _da,     0.0),  # 2: verso spalla  (-Y)
+            (0.0,  _cy + 2*_da,   0.0),  # 3: fianco+2  (+2Y)
+            (0.0,  _cy - 2*_da,   0.0),  # 4: spalla+2  (-2Y)
         ]
 
         return cls(mode=mode, offsets=offsets, clearance=clr, ik_timeout=tmo)

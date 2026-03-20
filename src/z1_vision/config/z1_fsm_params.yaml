@@ -43,19 +43,21 @@ z1_FSM:
 
     # ── Modalità scansione ─────────────────────────────────────────
     # "single"          → singolo punto al centro (default)
-    # "fast_ultrasound" → griglia 2D 5 punti sul busto
+    # "fast_ultrasound" → 5 punti in linea lungo Y (spalla→fianco)
     #
     # World frame (TERESA):
     #   X → verso il basso (discesa braccio)
     #   Y → da faccia verso torso/gambe (asse corpo: spalla→fianco)
     #   Z → da fianco dx a fianco sx (laterale)
     #
-    # scan_center_y_offset: shift +Y del punto centrale (spalla → centro torso)
-    # scan_delta_axial:     offset ±Y per alto(←spalla) / basso(→fianco)
-    # scan_delta_lateral:   offset ±Z per destra / sinistra
+    # scan_center_y_offset: shift +Y del punto centrale rispetto alla spalla [m]
+    # scan_delta_axial:     passo tra punti lungo Y (es. 0.05 = 5 cm) [m]
+    # scan_delta_lateral:   non usato in modalità linea (ignorato, dz=0)
+    #
+    # Layout 5 punti: pt0=centro, pt1=+1 passo, pt2=-1 passo, pt3=+2 passi, pt4=-2 passi
     scan_mode:              "fast_ultrasound"
-    scan_delta_lateral:     0.03   # [m] offset ±Z destra/sinistra
-    scan_delta_axial:       0.03   # [m] offset ±Y basso(fianco)/alto(spalla)
+    scan_delta_lateral:     0.00   # [m] non usato (linea, dz=0)
+    scan_delta_axial:       0.05   # [m] passo tra punti lungo Y (spalla→fianco)
     scan_center_y_offset:   0.05   # [m] shift +Y centro (spalla → torso)
     # Clearance aggiuntivo durante SCAN_PRELIFT lungo -X (lontano dal torso):
     # prima di spostarsi al prossimo punto il braccio arretra a
