@@ -22,6 +22,7 @@ class Z1FSM(Node):
     CHECKING_WORKSPACE   = "CHECKING_WORKSPACE"
     APPROACHING          = "APPROACHING"
     WAIT_IK_DONE         = "WAIT_IK_DONE"
+    WRIST_ALIGN          = "WRIST_ALIGN"
     SWITCHING_TO_TORQUE  = "SWITCHING_TO_TORQUE"
     IMPEDANCE_RUNNING    = "IMPEDANCE_RUNNING"
     SWITCHING_TO_JTC     = "SWITCHING_TO_JTC"
@@ -187,6 +188,9 @@ class Z1FSM(Node):
         self._impedance_command_sent = False
         self._homing_command_sent    = False
         self._homing_next_state      = self.WAITING   # where to go after HOMING
+        self._last_approach_pose: PoseStamped | None = None   # saved per WRIST_ALIGN
+        self._wrist_align_sent: bool                 = False
+        self._wrist_align_start: float | None        = None
 
         # ── Start timer then go immediately to HOMING ───────────────────
         self.timer = self.create_timer(0.05, self.tick)   # 20 Hz
@@ -279,6 +283,11 @@ class Z1FSM(Node):
 
         if s == self.WAIT_IK_DONE:
             self._wait_ik_start = self.get_clock().now().nanoseconds * 1e-9
+
+        if s == self.WRIST_ALIGN:
+            self.ik_done            = False
+            self._wrist_align_sent  = False
+            self._wrist_align_start = self.get_clock().now().nanoseconds * 1e-9
 
         if s == self.HOMING:
             self.ik_done              = False
@@ -384,37 +393,7 @@ class Z1FSM(Node):
                         f' standoff={self._ik_approach_standoff:.3f}m')
 
         # ── Orientamento: rotazione minima da home per allineare X_home → x_ee ──
-        # Algoritmo di Rodrigues: ruota R_home del minimo angolo necessario.
-        # Y e Z ruotano solidali con X — nessun roll aggiuntivo attorno all'asse X.
-        R_home = quaternion_matrix(self._home_orientation)[:3, :3]
-        x_home = R_home[:, 0]   # asse X dell'orientamento home
-
-        cos_a = float(np.clip(np.dot(x_home, x_ee), -1.0, 1.0))
-        axis  = np.cross(x_home, x_ee)
-        sin_a = np.linalg.norm(axis)
-
-        if sin_a < 1e-6:
-            if cos_a > 0:
-                R_approach = R_home                    # già allineato
-            else:
-                # 180°: sceglie l'asse di rotazione perpendicolare a x_home
-                perp = np.array([0.0, 0.0, 1.0])
-                if abs(np.dot(perp, x_home)) > 0.9:
-                    perp = np.array([0.0, 1.0, 0.0])
-                perp -= np.dot(perp, x_home) * x_home
-                perp /= np.linalg.norm(perp)
-                R_approach = (2.0 * np.outer(perp, perp) - np.eye(3)) @ R_home
-        else:
-            axis   /= sin_a
-            K       = np.array([[    0, -axis[2],  axis[1]],
-                                [ axis[2],     0, -axis[0]],
-                                [-axis[1],  axis[0],     0]])
-            R_align    = np.eye(3) + sin_a * K + (1.0 - cos_a) * (K @ K)
-            R_approach = R_align @ R_home
-
-        T = np.eye(4)
-        T[:3, :3]  = R_approach
-        q_approach = quaternion_from_matrix(T)
+        q_approach = self._orientation_for_xee(x_ee)
 
         goal = PoseStamped()
         goal.header.frame_id    = 'world'
@@ -432,6 +411,88 @@ class Z1FSM(Node):
             f'pos=[{p_approach[0]:.3f},{p_approach[1]:.3f},{p_approach[2]:.3f}]'
         )
 
+        return goal
+
+    def _orientation_for_xee(self, x_ee: np.ndarray) -> np.ndarray:
+        """
+        Rotazione minima (Rodrigues) da R_home per allineare X_home → x_ee.
+        Y e Z ruotano solidali — nessun roll aggiuntivo attorno all'asse X.
+        Ritorna quaternione [x, y, z, w].
+        """
+        R_home = quaternion_matrix(self._home_orientation)[:3, :3]
+        x_home = R_home[:, 0]
+
+        cos_a = float(np.clip(np.dot(x_home, x_ee), -1.0, 1.0))
+        axis  = np.cross(x_home, x_ee)
+        sin_a = np.linalg.norm(axis)
+
+        if sin_a < 1e-6:
+            if cos_a > 0:
+                R_approach = R_home
+            else:
+                perp = np.array([0.0, 0.0, 1.0])
+                if abs(np.dot(perp, x_home)) > 0.9:
+                    perp = np.array([0.0, 1.0, 0.0])
+                perp -= np.dot(perp, x_home) * x_home
+                perp /= np.linalg.norm(perp)
+                R_approach = (2.0 * np.outer(perp, perp) - np.eye(3)) @ R_home
+        else:
+            axis  /= sin_a
+            K      = np.array([[    0, -axis[2],  axis[1]],
+                               [ axis[2],     0, -axis[0]],
+                               [-axis[1],  axis[0],     0]])
+            R_approach = (np.eye(3) + sin_a * K + (1.0 - cos_a) * (K @ K)) @ R_home
+
+        T = np.eye(4)
+        T[:3, :3] = R_approach
+        return quaternion_from_matrix(T)
+
+    def _make_wrist_align_pose(self) -> PoseStamped | None:
+        """
+        Ricomputa l'orientamento EE dalla normale superficiale corrente,
+        mantenendo la posizione dell'ultimo goal IK raggiunto.
+        Usato per allineare il polso con la normale prima di passare
+        all'impedance control.
+
+        "vertical": x_ee = [0,0,-1] (discesa in -Z, stesso di _make_approach_pose)
+        "normal":   x_ee = -normal  (X_ee verso il torso)
+        """
+        if self._last_approach_pose is None:
+            self.get_logger().warn('⚠️  WRIST_ALIGN: nessuna approach pose salvata')
+            return None
+
+        if self._latest_surface_frame is None:
+            self.get_logger().warn(
+                '⚠️  WRIST_ALIGN: surface frame non disponibile → uso orientamento approach'
+            )
+            return self._last_approach_pose
+
+        sf     = self._latest_surface_frame
+        q_surf = [sf.pose.orientation.x, sf.pose.orientation.y,
+                  sf.pose.orientation.z, sf.pose.orientation.w]
+        R      = quaternion_matrix(q_surf)[:3, :3]
+        normal = R[:, 2]   # asse Z surface frame = normale, dal torso verso robot
+
+        if self._approach_mode == 'vertical':
+            x_ee = np.array([0.0, 0.0, -1.0])
+        else:
+            x_ee = -normal   # X_ee punta verso il torso
+
+        q_approach = self._orientation_for_xee(x_ee)
+
+        goal = PoseStamped()
+        goal.header.frame_id    = 'world'
+        goal.header.stamp       = self.get_clock().now().to_msg()
+        goal.pose.position      = self._last_approach_pose.pose.position
+        goal.pose.orientation.x = float(q_approach[0])
+        goal.pose.orientation.y = float(q_approach[1])
+        goal.pose.orientation.z = float(q_approach[2])
+        goal.pose.orientation.w = float(q_approach[3])
+
+        self.get_logger().info(
+            f'🔄 WRIST_ALIGN: n=[{normal[0]:.2f},{normal[1]:.2f},{normal[2]:.2f}]'
+            f' x_ee=[{x_ee[0]:.2f},{x_ee[1]:.2f},{x_ee[2]:.2f}]'
+        )
         return goal
 
     def _make_home_pose(self) -> PoseStamped:
@@ -625,6 +686,8 @@ class Z1FSM(Node):
                     target.pose.position.z    = c.pose.position.z + (off_n[2] - off_c[2])
                     target.pose.orientation   = c.pose.orientation
 
+                self._last_approach_pose = target   # salvata per WRIST_ALIGN
+
                 p = target.pose.position
                 self.get_logger().info(
                     f"🎯 APPROACHING pt{self._scan_mgr.idx}: goal "
@@ -674,7 +737,45 @@ class Z1FSM(Node):
                     self._skip_impedance_hold = True
                     self.set_state(self.WAITING)
                 else:
+                    self.set_state(self.WRIST_ALIGN)
+
+        # ── WRIST_ALIGN ───────────────────────────────────────────────────
+        # Ricomputa l'orientamento EE dalla normale superficiale corrente
+        # prima di passare all'impedance control.
+        elif self.state == self.WRIST_ALIGN:
+            if not self._wrist_align_sent:
+                goal = self._make_wrist_align_pose()
+                if goal is None:
+                    self.get_logger().warn(
+                        '⚠️  WRIST_ALIGN: posa non disponibile → SWITCHING_TO_TORQUE diretto'
+                    )
                     self.set_state(self.SWITCHING_TO_TORQUE)
+                    return
+                self.pub_ik_enable.publish(Bool(data=True))
+                self.pub_ik_goal.publish(goal)
+                self._wrist_align_sent = True
+                p = goal.pose.position
+                self.get_logger().info(
+                    f'🔄 WRIST_ALIGN: goal inviato '
+                    f'pos=[{p.x:.3f},{p.y:.3f},{p.z:.3f}]'
+                )
+                return
+
+            # Timeout
+            if self._wrist_align_start is not None:
+                elapsed = self.get_clock().now().nanoseconds * 1e-9 - self._wrist_align_start
+                if elapsed > self._wait_ik_timeout:
+                    self.get_logger().warn(
+                        f'⏱️  WRIST_ALIGN timeout ({elapsed:.1f}s) → SWITCHING_TO_TORQUE diretto'
+                    )
+                    self.pub_ik_enable.publish(Bool(data=False))
+                    self.set_state(self.SWITCHING_TO_TORQUE)
+                    return
+
+            if self.ik_done:
+                self.pub_ik_enable.publish(Bool(data=False))
+                self.get_logger().info('✅ WRIST_ALIGN completato → SWITCHING_TO_TORQUE')
+                self.set_state(self.SWITCHING_TO_TORQUE)
 
         # ── SWITCHING_TO_TORQUE ───────────────────────────────────────────
         elif self.state == self.SWITCHING_TO_TORQUE:
