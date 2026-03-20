@@ -1,6 +1,6 @@
 % ============================================================
 %  TERESA Z1 — Diario di progresso e TODO list
-%  Aggiornato: 2026-03-15
+%  Aggiornato: 2026-03-20
 % ============================================================
 \documentclass[a4paper,11pt]{article}
 
@@ -28,6 +28,8 @@
 \definecolor{codeblue}{RGB}{30,60,150}
 \definecolor{codegray}{RGB}{245,245,245}
 \definecolor{warnyellow}{RGB}{180,130,0}
+\definecolor{branchblue}{RGB}{20,80,180}
+\definecolor{branchpurple}{RGB}{120,20,160}
 
 % ── Listings style ─────────────────────────────────────────
 \lstset{
@@ -43,7 +45,7 @@
 \pagestyle{fancy}
 \fancyhf{}
 \lhead{\textbf{TERESA Z1} — Braccio robotico Unitree Z1}
-\rhead{Aggiornato: 2026-03-15}
+\rhead{Aggiornato: 2026-03-20}
 \cfoot{\thepage}
 
 % ── Ambienti custom ───────────────────────────────────────
@@ -53,6 +55,10 @@
           innerleftmargin=8pt, innerrightmargin=8pt]{todobox}
 \newmdenv[linecolor=warnyellow!80, backgroundcolor=warnyellow!5,
           innerleftmargin=8pt, innerrightmargin=8pt]{warnbox}
+\newmdenv[linecolor=branchblue!60, backgroundcolor=branchblue!5,
+          innerleftmargin=8pt, innerrightmargin=8pt]{branchbox}
+\newmdenv[linecolor=branchpurple!60, backgroundcolor=branchpurple!5,
+          innerleftmargin=8pt, innerrightmargin=8pt]{branchboxb}
 
 % ─────────────────────────────────────────────────────────
 \begin{document}
@@ -60,9 +66,12 @@
 \begin{center}
   {\LARGE \textbf{TERESA — Braccio Unitree Z1}}\\[4pt]
   {\large Diario di sviluppo, TODO list e guida di avvio}\\[2pt]
-  {\small Branch: \texttt{FSM\_main} \quad|\quad Repo:
-    \texttt{TERESA\_ws/src/z1\_vision}}\\[2pt]
-  {\small Ultimo aggiornamento: \textbf{15 Marzo 2026}}
+  {\small
+    Branch attivi:
+    \textcolor{branchblue}{\texttt{FSM\_main}} \quad|\quad
+    \textcolor{branchpurple}{\texttt{Z1\_realsense}}
+    \quad|\quad Repo: \texttt{TERESA\_ws/src/z1\_vision}}\\[2pt]
+  {\small Ultimo aggiornamento: \textbf{20 Marzo 2026}}
 \end{center}
 \vspace{0.5em}
 \hrule
@@ -77,30 +86,50 @@ avvicinarsi in modo autonomo al torso di un paziente.
 Lo stack completo è composto da:
 
 \begin{itemize}
-  \item \textbf{Percezione}: YOLO11 pose estimation + Kalman 3D + lock tracker
+  \item \textbf{Percezione}: YOLO11 pose estimation + Kalman 3D + lock tracker + body search scan
   \item \textbf{Pianificazione}: Workspace checker (Pinocchio + L-BFGS-B)
   \item \textbf{Controllo posizione}: IK Jacobiana pseudo-inversa smorzata + JointTrajectoryController
   \item \textbf{Controllo forza}: Impedance controller in spazio cartesiano (500 Hz, torque control)
   \item \textbf{Sicurezza}: keyboard safety node, stati HOMING/EMERGENCY, workspace clipping
-  \item \textbf{Orchestrazione}: FSM a 11 stati, launch files separati per controllo e percezione
+  \item \textbf{Orchestrazione}: FSM a 12 stati, launch files separati per controllo e percezione
 \end{itemize}
 
 % ============================================================
-\section{Architettura FSM (stato attuale)}
+\section{Branch attivi}
+% ============================================================
+
+\begin{branchbox}
+\textbf{\textcolor{branchblue}{Branch \texttt{FSM\_main}}} — stack completo funzionante, base stabile\\
+Contiene tutto il codice fino alla sessione del 2026-03-15 più il fix
+\texttt{ik\_rot\_weight} per l'orientamento EE durante JTC.
+\end{branchbox}
+
+\vspace{0.5em}
+
+\begin{branchboxb}
+\textbf{\textcolor{branchpurple}{Branch \texttt{Z1\_realsense}}} — feature body search scan (2026-03-20)\\
+Estende \texttt{FSM\_main} con la pipeline di scansione a griglia per trovare
+la miglior posizione del braccio prima di avvicinarsi al torso.
+\end{branchboxb}
+
+% ============================================================
+\section{Architettura FSM (stato attuale — \texttt{Z1\_realsense})}
 % ============================================================
 
 \subsection*{Stati della FSM (\texttt{z1\_FSM.py})}
 
 \begin{center}
-\begin{tabular}{lp{10cm}}
+\begin{tabular}{lp{9.5cm}}
 \toprule
 \textbf{Stato} & \textbf{Descrizione} \\
 \midrule
-\texttt{HOMING}              & Stato iniziale al boot. Invia home pose via IK/JTC, poi va in WAITING \\
-\texttt{WAITING}             & Aspetta target LOCKED fresco ($<$0.5s) dal tracker YOLO \\
+\texttt{HOMING}              & Stato iniziale al boot. Porta il braccio in home pose via IK/JTC, poi WAITING \\
+\texttt{WAITING}             & Se \texttt{body\_scan\_on\_start=true} e scan non ancora fatto $\to$ BODY\_SCANNING; altrimenti aspetta target LOCKED \\
+\textcolor{branchpurple}{\texttt{BODY\_SCANNING}} & \textcolor{branchpurple}{Scansione a griglia per trovare la posizione ottimale di visione del torso} \\
 \texttt{CHECKING\_WORKSPACE} & Verifica raggiungibilità target (thread non bloccante, Pinocchio) \\
 \texttt{APPROACHING}         & Invia goal IK verso il target (latchato al momento del check) \\
 \texttt{WAIT\_IK\_DONE}      & Attende \texttt{/ik\_done=True} dal nodo IK \\
+\texttt{WRIST\_ALIGN}        & Riallinea il polso perpendicolare alla superficie torso \\
 \texttt{SWITCHING\_TO\_TORQUE} & Switch JTC $\to$ torque\_controller via safe\_controller\_switch \\
 \texttt{IMPEDANCE\_RUNNING}  & Impedance controller attivo: approach $\to$ hold $\to$ retract \\
 \texttt{SWITCHING\_TO\_JTC}  & Switch torque\_controller $\to$ JTC \\
@@ -111,24 +140,27 @@ Lo stack completo è composto da:
 \end{tabular}
 \end{center}
 
-\subsection*{Topic principali}
+\subsection*{Topic principali (inclusi i nuovi di \texttt{Z1\_realsense})}
 \begin{center}
 \begin{tabular}{lll}
 \toprule
 \textbf{Topic} & \textbf{Tipo} & \textbf{Descrizione} \\
 \midrule
-\texttt{/torso\_target\_ee\_locked}     & PoseStamped & Target EE quando tracker LOCKED \\
-\texttt{/torso\_target\_ee}             & PoseStamped & Target EE interpolato continuo \\
-\texttt{/ik\_goal\_pose}                & PoseStamped & Goal IK da FSM \\
-\texttt{/ik\_enable}                    & Bool        & Abilita nodo IK \\
-\texttt{/ik\_done}                      & Bool        & Conferma fine movimento JTC \\
-\texttt{/impedance\_enable}             & Bool        & Abilita impedance controller \\
-\texttt{/impedance\_done}              & Bool        & Fine ciclo impedance \\
-\texttt{/target\_out\_of\_workspace}    & Bool        & Target clippato dal workspace checker \\
-\texttt{/z1\_fsm/state}                 & String      & Stato corrente FSM \\
-\texttt{/z1\_keyboard\_cmd}             & String      & Comandi da tastiera (home/emergency/reset) \\
-\texttt{/torso\_surface\_frame}         & PoseStamped & Piano superficie torso (PCA) \\
-\texttt{/surface\_signed\_distance}     & Float32     & Distanza TCP--superficie \\
+\texttt{/torso\_target\_ee\_locked}     & PoseStamped         & Target EE quando tracker LOCKED \\
+\texttt{/torso\_target\_ee}             & PoseStamped         & Target EE interpolato continuo \\
+\texttt{/ik\_goal\_pose}                & PoseStamped         & Goal IK da FSM \\
+\texttt{/ik\_enable}                    & Bool                & Abilita nodo IK \\
+\texttt{/ik\_done}                      & Bool                & Conferma fine movimento JTC \\
+\texttt{/impedance\_enable}             & Bool                & Abilita impedance controller \\
+\texttt{/impedance\_done}               & Bool                & Fine ciclo impedance \\
+\texttt{/target\_out\_of\_workspace}    & Bool                & Target clippato dal workspace checker \\
+\texttt{/z1\_fsm/state}                 & String              & Stato corrente FSM \\
+\texttt{/z1\_keyboard\_cmd}             & String              & Comandi da tastiera \\
+\texttt{/torso\_surface\_frame}         & PoseStamped         & Piano superficie torso (PCA) \\
+\texttt{/surface\_signed\_distance}     & Float32             & Distanza TCP--superficie \\
+\textcolor{branchpurple}{\texttt{/tracker\_scan\_mode}}  & \textcolor{branchpurple}{Bool} & \textcolor{branchpurple}{Attiva/disattiva scan mode nel tracker} \\
+\textcolor{branchpurple}{\texttt{/tracker\_scan\_next}}  & \textcolor{branchpurple}{Bool} & \textcolor{branchpurple}{Avanza al punto successivo della griglia} \\
+\textcolor{branchpurple}{\texttt{/torso\_scan\_point}}   & \textcolor{branchpurple}{Float32MultiArray} & \textcolor{branchpurple}{Score/dati del frame corrente [score, n\_kp, conf, x, y, z]} \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -138,118 +170,121 @@ Lo stack completo è composto da:
 % ============================================================
 
 \begin{donebox}
-\textbf{\color{donegreen} Funzionalità completate al 2026-03-15}
+\textbf{\color{donegreen} Sessione 2026-03-15 (branch \texttt{FSM\_main})}
 
-\subsection*{Pipeline base (commit precedenti)}
 \begin{itemize}[leftmargin=1.5em]
-  \item[\checkmark] Nodo \texttt{z1\_yolo\_torso\_tracker}: YOLO11 pose estimation,
-        Kalman 3D [x,y,z,vx,vy,vz] con dt adattivo, FSM IDLE/ESTIMATING/LOCKED,
-        lock su varianza 20 frame + 5 check consecutivi
-  \item[\checkmark] Nodo \texttt{z1\_ik\_to\_jtc}: IK Jacobiana pseudo-inversa smorzata
-        (frame LOCAL), smoothstep quintico ($10t^3-15t^4+6t^5$), joint unwrap anti-flip,
-        interfaccia action JTC
-  \item[\checkmark] IK funzionante sul robot reale (commit \texttt{0c5945d})
-  \item[\checkmark] JTC funzionante e collegato alla FSM (commit \texttt{2eb6ae6})
-  \item[\checkmark] Nodo \texttt{realsense\_surface\_node}: stima piano torso da depth
-        ROI con PCA, pubblica frame superficie e distanza segnata TCP--piano
+  \item[\checkmark] Pipeline base: YOLO11 + Kalman 3D + FSM IDLE/ESTIMATING/LOCKED
+  \item[\checkmark] IK Jacobiana pseudo-inversa smorzata + smoothstep quintico + JTC
+  \item[\checkmark] \texttt{realsense\_surface\_node}: stima piano torso da depth ROI (PCA)
+  \item[\checkmark] Impedance controller (500 Hz): APPROACH $\to$ HOLD $\to$ RETRACT
+  \item[\checkmark] \texttt{safe\_controller\_switch}: switch JTC $\leftrightarrow$ torque come nodo persistente
+  \item[\checkmark] Workspace checker (Pinocchio + L-BFGS-B), clip target a max\_reach $-$ 30 cm
+  \item[\checkmark] HOMING, EMERGENCY\_SWITCHING, EMERGENCY, keyboard safety (H/ESC/R/Q)
+  \item[\checkmark] Launch files: \texttt{z1\_control}, \texttt{z1\_perception}, \texttt{z1\_realsense}
+  \item[\checkmark] \textbf{Fix orientamento EE}: \texttt{ik\_rot\_weight} portato da 0.5 a 0.8 per
+        garantire EE perpendicolare alla superficie durante il JTC approach
+\end{itemize}
+\end{donebox}
+
+\vspace{0.8em}
+
+\begin{donebox}
+\textbf{\color{donegreen} Sessione 2026-03-20 (branch \texttt{Z1\_realsense})}
+
+\subsection*{Body Search Scan — nuovo file \texttt{body\_search\_scanner.py}}
+\begin{itemize}[leftmargin=1.5em]
+  \item[\checkmark] Classe \texttt{BodySearchScanner}: FSM interna pura Python (nessun nodo ROS)
+        con stati INIT $\to$ MOVING $\to$ RESETTING $\to$ COLLECTING $\to$ BEST\_MOVING $\to$ EXITING $\to$ DONE/FAILED
+  \item[\checkmark] Score per punto: $\text{detection\_rate} \times \text{avg\_per\_frame\_score}$,
+        dove \texttt{per\_frame\_score} $= (n\_kp/4) \times \text{avg\_conf}$
+  \item[\checkmark] Early stop: se score $\geq$ soglia (default 0.85) interrompe la scansione
+        anticipatamente senza visitare i punti restanti
+  \item[\checkmark] Fallback al miglior punto visto se nessuno supera la soglia
 \end{itemize}
 
-\subsection*{Impedance controller (commit \texttt{553ff7d}, 2026-03-15)}
+\subsection*{Scan mode nel tracker — \texttt{z1\_yolo\_torso\_tracker.py}}
 \begin{itemize}[leftmargin=1.5em]
-  \item[\checkmark] \texttt{impedance\_controller\_realsense.py}: mini state machine
-        interna APPROACH (20 cm lungo normale) $\to$ HOLD (10s) $\to$ RETRACT (20 cm ritorno)
-  \item[\checkmark] Interfaccia \texttt{/impedance\_enable} (Bool) / \texttt{/impedance\_done} (Bool)
-  \item[\checkmark] Safe startup 3s, compensazione dinamica (gravity+coriolis),
-        scale adattivo J2 in funzione del reach XY, Jacobiano LOCAL\_WORLD\_ALIGNED
-  \item[\checkmark] \texttt{safe\_controller\_switch.py}: convertito in nodo persistente con
-        servizi ROS2 \\\texttt{/safe\_switch/to\_torque} e \texttt{/safe\_switch/to\_jtc}
-  \item[\checkmark] FSM estesa a 7 stati con ciclo JTC $\to$ torque $\to$ JTC
-  \item[\checkmark] Vecchi file spostati in \texttt{Old/}:
-        \texttt{trajectory\_manager.py}, \texttt{z1\_FSM\_old.py},
-       \\ \texttt{z1\_ik\_to\_jtc\_old.py}, \texttt{z1\_ik\_to\_jtc\_standalone.py}
+  \item[\checkmark] Aggiunta FSM parallela scan mode (IDLE/COLLECTING/POINT\_LOCKED),
+        attivabile via topic \texttt{/tracker\_scan\_mode}
+  \item[\checkmark] In scan mode il tracker non entra mai in LOCKED normale:
+        accumula frame validi e pubblica \texttt{/torso\_scan\_point} $[$score, n\_kp, conf, x, y, z$]$
+  \item[\checkmark] \texttt{/tracker\_scan\_next}: reset del punto corrente per avanzare alla pose successiva
+  \item[\checkmark] Disattivando scan mode il tracker si resetta e riprende il ciclo IDLE $\to$ LOCKED normale
 \end{itemize}
 
-\subsection*{Workspace checker (commit \texttt{dd6c4b7}, 2026-03-15)}
+\subsection*{Stato BODY\_SCANNING nella FSM — \texttt{z1\_FSM.py}}
 \begin{itemize}[leftmargin=1.5em]
-  \item[\checkmark] \texttt{workspace\_checker.py}: calcolo raggiungibilità massima
-        con Pinocchio + scipy L-BFGS-B, clip target a (max\_reach - 30 cm)
-  \item[\checkmark] Stato \texttt{CHECKING\_WORKSPACE} nella FSM (thread non bloccante,
-        ThreadPoolExecutor)
-  \item[\checkmark] Target latchato al lancio del thread: il robot completa sempre
-        il movimento anche se il tracker perde il lock
-  \item[\checkmark] Topic \texttt{/target\_out\_of\_workspace} (Bool) per integrazione futura
-        con Spot
-  \item[\checkmark] Rimossi gli abort per target non fresco in APPROACHING e WAIT\_IK\_DONE
+  \item[\checkmark] Nuovo stato \texttt{BODY\_SCANNING} inserito in WAITING prima di aspettare il lock
+  \item[\checkmark] Generazione griglia $n_y \times n_z$ con orientamento look-at per ogni punto:
+        il punto di mira è calcolato automaticamente come
+        \texttt{home\_position + lookat\_distance $\times$ X\_ee\_home},
+        così in home l'orientamento è identico e spostandosi l'EE punta sempre
+        verso lo stesso punto fisso del torso paziente
+  \item[\checkmark] Riutilizzo di \texttt{\_orientation\_for\_xee()} già esistente per la rotazione
+        minima (Rodrigues) da home verso la direzione look-at
+  \item[\checkmark] \texttt{\_body\_scan\_done = False} ad ogni HOMING $\to$ ri-scansiona ad ogni nuovo ciclo
 \end{itemize}
 
-\subsection*{HOMING + EMERGENCY + keyboard safety (commit \texttt{22c15a2}, 2026-03-15)}
+\subsection*{Nuovo file di configurazione \texttt{config/body\_search\_params.yaml}}
 \begin{itemize}[leftmargin=1.5em]
-  \item[\checkmark] Stato iniziale FSM: \texttt{HOMING} (porta il braccio in
-        \texttt{home\_position} all'avvio, poi WAITING)
-  \item[\checkmark] Stato \texttt{EMERGENCY\_SWITCHING}: forza switch JTC se torque attivo,
-        poi torna in HOMING
-  \item[\checkmark] Stato \texttt{EMERGENCY}: bloccante, aspetta solo \texttt{reset} da tastiera
-  \item[\checkmark] Nuovo nodo \texttt{z1\_keyboard\_safety.py}: raw terminal mode (termios),
-        tasti H=Home, ESC=Emergency, R=Reset, Q=Quit; refresh stato 2Hz
-  \item[\checkmark] Parametri YAML per home pose: \texttt{home\_position},
-        \texttt{home\_orientation}
-  \item[\checkmark] Launch file \texttt{z1\_control.launch.py}: safe\_controller\_switch +
-        z1\_ik\_to\_jtc + impedance (t=0s), FSM (t=5s delay)
-  \item[\checkmark] Launch file \texttt{z1\_perception.launch.py}: YOLO tracker +
-        surface node
+  \item[\checkmark] Griglia: \texttt{body\_scan\_center}, \texttt{ext\_y/ext\_z}, \texttt{ny/nz}
+        (default: 3$\times$2 $=$ 6 punti, $\pm$20 cm Y, $\pm$10 cm Z)
+  \item[\checkmark] Look-at: \texttt{body\_scan\_lookat\_distance: 1.0} m
+  \item[\checkmark] Timing: \texttt{body\_scan\_point\_timeout: 4.0} s, \texttt{body\_scan\_min\_frames: 10}
+  \item[\checkmark] Early stop: \texttt{body\_scan\_early\_stop: 0.85}
 \end{itemize}
 \end{donebox}
 
 % ============================================================
-\section{TODO — Da completare}
+\section{TODO — Da fare domani (2026-03-21)}
 % ============================================================
 
 \begin{todobox}
-\textbf{\color{todoorange} Attività in sospeso}
+\textbf{\color{todoorange} Alta priorità — test su robot reale}
 
-\subsection*{Alta priorità}
 \begin{itemize}[leftmargin=1.5em]
-  \item[$\square$] \textbf{Calibrare la home position reale}: il valore attuale in
-        \texttt{z1\_fsm\_params.yaml} è un placeholder
-        (\texttt{[0.3, 0.0, 0.3]}, quaternione identità). Verificare con il robot
-        reale qual è la posa di riposo sicura e aggiornare il YAML.
-  \item[$\square$] \textbf{Testare la sequenza completa sul robot reale}:
-        HOMING $\to$ WAITING $\to$ CHECKING\_WORKSPACE $\to$ APPROACHING $\to$
-        WAIT\_IK\_DONE $\to$ \\ SWITCHING\_TO\_TORQUE $\to$ IMPEDANCE\_RUNNING
-        $\to$ SWITCHING\_TO\_JTC $\to$ WAITING
-  \item[$\square$] \textbf{Validare il workspace checker} con target reali:
-        verificare che il clip a (max\_reach - 30 cm) sia corretto e che la
-        posa clippata sia effettivamente raggiungibile
-  \item[$\square$] \textbf{Testare z1\_keyboard\_safety} sul robot reale:
-        verificare che H, ESC e R funzionino in tutti gli stati FSM (inclusi
-        gli stati torque)
+  \item[$\square$] \textbf{Calibrare \texttt{body\_scan\_center}} in \texttt{body\_search\_params.yaml}:
+        verificare che coincida con la home position reale del braccio
+        (attualmente placeholder \texttt{[-0.09, 0.00, 0.44]})
+  \item[$\square$] \textbf{Verificare \texttt{body\_scan\_lookat\_distance}}: misurare la distanza
+        reale tra il braccio in home e il torso del paziente e aggiornare il parametro (default 1.0 m)
+  \item[$\square$] \textbf{Testare il ciclo body scan completo}:
+        HOMING $\to$ BODY\_SCANNING (6 punti griglia) $\to$ WAITING (best pose) $\to$
+        CHECKING\_WORKSPACE $\to$ APPROACHING $\to$ IMPEDANCE
+  \item[$\square$] \textbf{Verificare l'orientamento look-at sul robot}:
+        controllare nei log che il lookat target sia plausibile e che
+        l'EE ruoti correttamente spostandosi in alto/basso e lateralmente
+  \item[$\square$] \textbf{Verificare early stop}: eseguire con paziente ben visibile
+        e controllare che la scan si interrompa anticipatamente (score $\geq$ 0.85)
+  \item[$\square$] \textbf{Testare il fix \texttt{ik\_rot\_weight: 0.8}}:
+        verificare che l'EE sia perpendicolare alla superficie durante il JTC approach
+        (problema del tilt precedente)
 \end{itemize}
 
 \subsection*{Media priorità}
 \begin{itemize}[leftmargin=1.5em]
-  \item[$\square$] \textbf{Integrazione con Spot / base mobile}: usare
-        \texttt{/target\_out\_of\_workspace} per comandare alla base di
-        avvicinarsi quando il target è fuori workspace
-  \item[$\square$] \textbf{Timeout e recovery in IMPEDANCE\_RUNNING}: aggiungere
-        timeout di sicurezza per il caso in cui il ciclo impedance non
-        termini (es. \texttt{/impedance\_done} non arriva mai)
-  \item[$\square$] \textbf{Tuning parametri impedance controller}: guadagni
-        cartesiani, distanza di approach, durata hold (10s configurabile?)
-  \item[$\square$] \textbf{z1\_keyboard\_safety nel launch file}: valutare se
-        aggiungere un modo per avviarlo automaticamente in un terminale
-        dedicato (es. \texttt{xterm} o \texttt{gnome-terminal} nel launch file)
+  \item[$\square$] \textbf{Tuning griglia}: valutare se \texttt{ext\_y=0.20} e
+        \texttt{ext\_z=0.10} coprono correttamente la zona torso
+        oppure se serve aumentare/ridurre
+  \item[$\square$] \textbf{Tuning \texttt{body\_scan\_min\_frames}}: verificare che
+        10 frame siano sufficienti per una stima affidabile dello score
+        (aumentare se la stima è instabile, ridurre se la scan è troppo lenta)
+  \item[$\square$] \textbf{Merge Z1\_realsense su FSM\_main} dopo validazione robot reale
+  \item[$\square$] \textbf{Aggiornare launch file} per caricare anche
+        \texttt{body\_search\_params.yaml} se non già incluso
 \end{itemize}
 
 \subsection*{Bassa priorità / futuri miglioramenti}
 \begin{itemize}[leftmargin=1.5em]
-  \item[$\square$] \textbf{Logging e monitoraggio}: aggiungere ROS bag recording
-        automatico al launch con i topic principali
-  \item[$\square$] \textbf{Visualizzazione RViz}: marker per il target, workspace
-        reachability, piano superficie
+  \item[$\square$] \textbf{Integrazione con Spot / base mobile}: usare
+        \texttt{/target\_out\_of\_workspace} per comandare alla base di
+        avvicinarsi quando il target è fuori workspace
+  \item[$\square$] \textbf{Logging e monitoraggio}: ROS bag recording automatico
+        al launch con i topic principali
+  \item[$\square$] \textbf{Visualizzazione RViz}: marker per griglia scan, look-at target,
+        piano superficie, workspace reachability
   \item[$\square$] \textbf{Multi-persona}: gestione del caso in cui YOLO rileva
         più persone (attualmente prende la prima/più vicina)
-  \item[$\square$] \textbf{Calibrazione estrinseci camera-braccio}: verificare e
-        documentare la trasformazione TF tra frame camera e frame base Z1
 \end{itemize}
 \end{todobox}
 
@@ -258,44 +293,29 @@ Lo stack completo è composto da:
 % ============================================================
 
 \begin{warnbox}
-\textbf{Prerequisito}: il workspace ROS2 deve essere compilato e sourced.\\
+\textbf{Prerequisito}: workspace ROS2 compilato e sourced.\\
 \texttt{cd \textasciitilde/Documents/GIT\_Repositories/TERESA\_ws}\\
 \texttt{colcon build --packages-select z1\_vision \&\& source install/setup.bash}
 \end{warnbox}
 
 \subsection*{Terminale 1 — Hardware robot + camera + TF}
-
 \begin{lstlisting}
-# Avvia driver hardware Unitree Z1, RealSense D435, TF statiche
 ros2 launch z1_vision z1_realsense.launch.py
 \end{lstlisting}
 
-\textit{Attende che il JointTrajectoryController sia attivo e la camera streaming.}
-
 \subsection*{Terminale 2 — Percezione (YOLO + surface)}
-
 \begin{lstlisting}
 ros2 launch z1_vision z1_perception.launch.py
-
-# Opzionale: solo tracker senza surface node
-# ros2 launch z1_vision z1_perception.launch.py use_surface_node:=false
 \end{lstlisting}
 
 \subsection*{Terminale 3 — Stack di controllo}
-
 \begin{lstlisting}
 # Avvia: safe_controller_switch + z1_ik_to_jtc + impedance (t=0s)
-#        z1_FSM dopo 5s (primo stato: HOMING)
+#        z1_FSM dopo 5s (primo stato: HOMING -> BODY_SCANNING -> ...)
 ros2 launch z1_vision z1_control.launch.py
-
-# Opzionale: aumentare il delay se serve piu' tempo
-# ros2 launch z1_vision z1_control.launch.py fsm_delay:=8.0
 \end{lstlisting}
 
-\textit{Attende il completamento dell'HOMING prima di passare in WAITING.}
-
-\subsection*{Terminale 4 — Keyboard safety (interattivo, separato)}
-
+\subsection*{Terminale 4 — Keyboard safety}
 \begin{lstlisting}
 ros2 run z1_vision z1_keyboard_safety
 \end{lstlisting}
@@ -313,23 +333,13 @@ ros2 run z1_vision z1_keyboard_safety
 \end{tabular}
 \end{center}
 
-\subsection*{Monitoraggio (terminali aggiuntivi opzionali)}
-
+\subsection*{Monitoraggio}
 \begin{lstlisting}
-# Stato FSM in tempo reale
-ros2 topic echo /z1_fsm/state
-
-# Target YOLO
-ros2 topic echo /torso_target_ee_locked
-
-# Distanza TCP-superficie
+ros2 topic echo /z1_fsm/state           # stato FSM
+ros2 topic echo /torso_target_ee_locked # target YOLO
 ros2 topic echo /surface_signed_distance
-
-# Target fuori workspace
-ros2 topic echo /target_out_of_workspace
-
-# FK end-effector
-ros2 run z1_vision fk_reader
+ros2 topic echo /torso_scan_point       # score scan (durante BODY_SCANNING)
+ros2 run z1_vision fk_reader            # FK end-effector
 \end{lstlisting}
 
 % ============================================================
@@ -337,30 +347,32 @@ ros2 run z1_vision fk_reader
 % ============================================================
 
 \begin{center}
-\begin{longtable}{lp{9cm}}
+\begin{longtable}{lp{8.5cm}}
 \toprule
 \textbf{File} & \textbf{Ruolo} \\
 \midrule
 \endhead
-\texttt{z1\_FSM.py}                        & FSM principale (11 stati) \\
+\texttt{z1\_FSM.py}                        & FSM principale (12 stati, include BODY\_SCANNING) \\
+\textcolor{branchpurple}{\texttt{body\_search\_scanner.py}} & \textcolor{branchpurple}{Classe BodySearchScanner: FSM interna griglia scan} \\
 \texttt{z1\_ik\_to\_jtc.py}                & IK Pinocchio $\to$ JTC action \\
 \texttt{impedance\_controller\_realsense.py}& Controllo impedenza cartesiana 500 Hz \\
 \texttt{safe\_controller\_switch.py}        & Switch JTC $\leftrightarrow$ torque (servizi ROS2) \\
 \texttt{workspace\_checker.py}             & Raggiungibilità workspace (Pinocchio + scipy) \\
-\texttt{z1\_yolo\_torso\_tracker.py}        & YOLO11 + Kalman 3D + lock \\
+\texttt{z1\_yolo\_torso\_tracker.py}        & YOLO11 + Kalman 3D + lock + scan mode \\
 \texttt{realsense\_surface\_node.py}        & Stima piano torso (PCA depth ROI) \\
 \texttt{z1\_keyboard\_safety.py}           & Safety node interattivo da terminale \\
 \texttt{kalman\_filter.py}                 & Filtro Kalman 3D [x,y,z,vx,vy,vz] \\
 \texttt{fk\_reader.py}                     & Utility: FK end-effector da joint\_states \\
 \midrule
 \texttt{config/z1\_fsm\_params.yaml}        & Parametri FSM (home pose, topic, workspace) \\
-\texttt{config/z1\_ik\_jtc\_params.yaml}    & Parametri IK/JTC (URDF, tolleranze, traiettoria) \\
+\texttt{config/z1\_ik\_jtc\_params.yaml}    & Parametri IK/JTC (\texttt{ik\_rot\_weight: 0.8}) \\
 \texttt{config/z1\_yolo\_torso\_params.yaml}& Parametri YOLO/Kalman/lock \\
 \texttt{config/impedance\_control\_params.yaml} & Parametri impedance (guadagni, timing) \\
 \texttt{config/surface\_params.yaml}        & Parametri surface node \\
+\textcolor{branchpurple}{\texttt{config/body\_search\_params.yaml}} & \textcolor{branchpurple}{Parametri griglia scan (ny$\times$nz, lookat, timeout, early stop)} \\
 \midrule
-\texttt{launch/z1\_control.launch.py}       & Avvia stack controllo (switch + IK + impedance + FSM) \\
-\texttt{launch/z1\_perception.launch.py}    & Avvia stack percezione (YOLO + surface) \\
+\texttt{launch/z1\_control.launch.py}       & Avvia stack controllo \\
+\texttt{launch/z1\_perception.launch.py}    & Avvia stack percezione \\
 \texttt{launch/z1\_realsense.launch.py}     & Avvia HW robot + camera + TF \\
 \bottomrule
 \end{longtable}
@@ -372,19 +384,22 @@ ros2 run z1_vision fk_reader
 
 \begin{itemize}
   \item \textbf{IK}: Jacobiana pseudo-inversa smorzata (\emph{damped least squares}),
-        frame LOCAL, interpolazione smoothstep quintica (zero velocità a inizio/fine),
-        joint unwrap con \texttt{\_make\_target\_near} per evitare rotazioni $>|\pi|$
+        frame LOCAL, smoothstep quintico (zero velocità a inizio/fine),
+        joint unwrap con \texttt{\_make\_target\_near}.
+        \texttt{ik\_rot\_weight: 0.8} per EE perpendicolare alla superficie
   \item \textbf{Kalman}: dt adattivo dal timestamp immagine,
         \texttt{vel\_damping = 0.9}, covarianza noise configurabile da YAML
   \item \textbf{Lock tracker}: varianza soglia su 20 frame + 5 check consecutivi sotto soglia
-  \item \textbf{Impedance}: 500 Hz, PID cartesiano posizione + joint-space polso (J4--J6),
-        compensazione gravity+coriolis, Jacobiano LOCAL\_WORLD\_ALIGNED,
-        scale adattivo J2 in funzione del reach XY
+  \item \textbf{Body scan look-at}: lookat $=$ home\_pos $+$ lookat\_dist $\times$ X\_ee\_home.
+        Rotazione per ogni punto griglia via \texttt{\_orientation\_for\_xee()} (Rodrigues,
+        rotazione minima da home). Errore angolare $< 5°$ per variazioni di distanza $\pm 50\%$
+  \item \textbf{Impedance}: 500 Hz, PID cartesiano + joint-space polso (J4--J6),
+        compensazione gravity+coriolis, Jacobiano LOCAL\_WORLD\_ALIGNED
   \item \textbf{URDF path} (hardcoded): \\
         \texttt{/home/andrea/Ros2\_repositories/unitree\_z1\_ws/install/}\\
         \texttt{z1\_description/share/z1\_description/urdf/z1.urdf}
-  \item \textbf{Branch corrente}: \texttt{FSM\_main}
-        (fare merge su \texttt{main} dopo i test sul robot reale)
+  \item \textbf{Branch}: \texttt{FSM\_main} (stabile) $\leftarrow$ base di \texttt{Z1\_realsense}
+        (feature body scan, da testare sul robot reale poi fare merge)
 \end{itemize}
 
 \end{document}

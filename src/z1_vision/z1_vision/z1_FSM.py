@@ -131,25 +131,29 @@ class Z1FSM(Node):
         )
 
         # ── Body scan params ─────────────────────────────────────────────
-        self.declare_parameter("body_scan_on_start",      True)
-        self.declare_parameter("body_scan_center",        [-0.09, 0.00, 0.44])
-        self.declare_parameter("body_scan_ext_y",         0.20)
-        self.declare_parameter("body_scan_ext_z",         0.00)
-        self.declare_parameter("body_scan_ny",            3)
-        self.declare_parameter("body_scan_nz",            1)
-        self.declare_parameter("body_scan_point_timeout", 4.0)
-        self.declare_parameter("body_scan_min_frames",    8)
-        self.declare_parameter("body_scan_early_stop",    0.85)
+        self.declare_parameter("body_scan_on_start",        True)
+        self.declare_parameter("body_scan_center",          [-0.09, 0.00, 0.44])
+        self.declare_parameter("body_scan_ext_y",           0.20)
+        self.declare_parameter("body_scan_ext_z",           0.00)
+        self.declare_parameter("body_scan_ny",              3)
+        self.declare_parameter("body_scan_nz",              1)
+        self.declare_parameter("body_scan_point_timeout",   4.0)
+        self.declare_parameter("body_scan_min_frames",      8)
+        self.declare_parameter("body_scan_early_stop",      0.85)
+        # Distanza dal punto home al look-at target (lungo l'asse X_ee home).
+        # Tutti i punti griglia punteranno verso quel target fisso.
+        self.declare_parameter("body_scan_lookat_distance", 1.0)
 
-        self._scan_on_start     = bool(self.get_parameter("body_scan_on_start").value)
-        self._body_scan_center  = np.array(self.get_parameter("body_scan_center").value, dtype=float)
-        self._body_scan_ext_y   = float(self.get_parameter("body_scan_ext_y").value)
-        self._body_scan_ext_z   = float(self.get_parameter("body_scan_ext_z").value)
-        self._body_scan_ny      = int(self.get_parameter("body_scan_ny").value)
-        self._body_scan_nz      = int(self.get_parameter("body_scan_nz").value)
-        self._body_scan_timeout = float(self.get_parameter("body_scan_point_timeout").value)
-        self._body_scan_min_fr  = int(self.get_parameter("body_scan_min_frames").value)
-        self._body_scan_early   = float(self.get_parameter("body_scan_early_stop").value)
+        self._scan_on_start          = bool(self.get_parameter("body_scan_on_start").value)
+        self._body_scan_center       = np.array(self.get_parameter("body_scan_center").value, dtype=float)
+        self._body_scan_ext_y        = float(self.get_parameter("body_scan_ext_y").value)
+        self._body_scan_ext_z        = float(self.get_parameter("body_scan_ext_z").value)
+        self._body_scan_ny           = int(self.get_parameter("body_scan_ny").value)
+        self._body_scan_nz           = int(self.get_parameter("body_scan_nz").value)
+        self._body_scan_timeout      = float(self.get_parameter("body_scan_point_timeout").value)
+        self._body_scan_min_fr       = int(self.get_parameter("body_scan_min_frames").value)
+        self._body_scan_early        = float(self.get_parameter("body_scan_early_stop").value)
+        self._body_scan_lookat_dist  = float(self.get_parameter("body_scan_lookat_distance").value)
 
         # ── WorkspaceChecker (Pinocchio, bloccante → thread) ────────────
         try:
@@ -549,7 +553,13 @@ class Z1FSM(Node):
         """
         Genera la lista di PoseStamped per la body search scan.
         Griglia ny × nz nel piano YZ in world frame, X fisso = body_scan_center[0].
-        L'EE mantiene l'orientamento home per tutte le pose (camera guarda verso torso).
+
+        Orientamento look-at: per ogni punto della griglia l'EE viene ruotato
+        in modo che il suo asse X punti verso un target fisso (lookat), calcolato
+        come home_position + body_scan_lookat_distance * home_X_axis.
+        Così in home l'orientamento è identico a quello di home; spostandosi in
+        alto/basso/laterale il polso compensa automaticamente per mantenere la
+        camera sempre puntata sullo stesso punto (centro torso paziente).
         """
         center = self._body_scan_center
         ny     = self._body_scan_ny
@@ -562,18 +572,41 @@ class Z1FSM(Node):
         zs = (np.linspace(center[2] - ext_z, center[2] + ext_z, nz)
               if nz > 1 else np.array([center[2]]))
 
-        q   = self._home_orientation
-        now = self.get_clock().now().to_msg()
+        # ── Calcola il look-at target (fisso in world frame) ──────────────
+        # È il punto che l'EE guarda quando è in home; lo stesso punto viene
+        # usato per tutti i nodi della griglia.
+        R_home   = quaternion_matrix(self._home_orientation)[:3, :3]
+        home_xax = R_home[:, 0]                                    # asse X EE in home
+        lookat   = self._home_position + self._body_scan_lookat_dist * home_xax
 
+        self.get_logger().info(
+            f'🎯 Scan look-at: [{lookat[0]:.3f}, {lookat[1]:.3f}, {lookat[2]:.3f}] '
+            f'(home + {self._body_scan_lookat_dist:.2f}m × X_ee_home)'
+        )
+
+        now   = self.get_clock().now().to_msg()
         poses = []
+
         for z in zs:
             for y in ys:
+                pos = np.array([float(center[0]), float(y), float(z)])
+
+                # direzione da questo punto verso il lookat target
+                direction = lookat - pos
+                norm      = np.linalg.norm(direction)
+                if norm < 1e-6:
+                    # coincide col target: usa orientamento home invariato
+                    q = self._home_orientation
+                else:
+                    direction /= norm
+                    q = self._orientation_for_xee(direction)
+
                 p = PoseStamped()
                 p.header.frame_id    = 'world'
                 p.header.stamp       = now
-                p.pose.position.x    = float(center[0])
-                p.pose.position.y    = float(y)
-                p.pose.position.z    = float(z)
+                p.pose.position.x    = float(pos[0])
+                p.pose.position.y    = float(pos[1])
+                p.pose.position.z    = float(pos[2])
                 p.pose.orientation.x = float(q[0])
                 p.pose.orientation.y = float(q[1])
                 p.pose.orientation.z = float(q[2])

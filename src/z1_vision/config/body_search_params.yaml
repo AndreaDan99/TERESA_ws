@@ -10,7 +10,14 @@
 #   Z → laterale (da fianco dx a fianco sx)
 #
 # Il centro della griglia dovrebbe essere vicino alla home position del braccio.
-# L'EE mantiene l'orientamento home durante tutta la scansione.
+#
+# Orientamento look-at:
+#   Per ogni punto della griglia l'EE viene orientato in modo che il suo asse X
+#   punti sempre verso lo stesso target fisso (look-at point).
+#   Il look-at viene calcolato automaticamente come:
+#       lookat = home_position + body_scan_lookat_distance * X_ee_home
+#   → In home l'orientamento è identico a quello di home.
+#   → Spostandosi in alto/basso/laterale il polso compensa automaticamente.
 
 z1_FSM:
   ros__parameters:
@@ -24,19 +31,28 @@ z1_FSM:
     # ── Griglia di scansione (pose del braccio in world frame) ─────
     #
     # Centro della griglia: posizione EE intorno alla quale si genera la griglia.
-    # Di default vicino alla home position del braccio.
+    # Di default uguale alla home position del braccio.
     body_scan_center: [-0.09, 0.00, 0.44]    # [x, y, z] in metri
 
     # Semi-estensioni della griglia (metà del range totale):
-    #   body_scan_ext_y: ±Y intorno al centro (lungo asse corpo paziente)
-    #   body_scan_ext_z: ±Z intorno al centro (laterale)
-    # Esempio: ext_y=0.20 → sweep da center_y-0.20 a center_y+0.20
-    body_scan_ext_y: 0.20   # [m]  sweep lungo Y (spalla→fianco)
-    body_scan_ext_z: 0.00   # [m]  sweep laterale (0.0 = scan 1D solo in Y)
+    #   body_scan_ext_y: ±Y intorno al centro (sinistra/destra del paziente)
+    #   body_scan_ext_z: ±Z intorno al centro (su/giù)
+    # Esempio: ext_y=0.20, nz=2, ext_z=0.10
+    #   → sweep Y: [center_y-0.20, center_y, center_y+0.20]
+    #   → sweep Z: [center_z-0.10, center_z+0.10]  (2 livelli di altezza)
+    body_scan_ext_y: 0.20   # [m]  sweep sinistra/destra
+    body_scan_ext_z: 0.10   # [m]  sweep su/giù (0.0 = scan 1D solo in Y)
 
     # Numero di punti lungo Y e Z della griglia:
-    body_scan_ny: 3          # es. 3 = [centro-ext, centro, centro+ext]
-    body_scan_nz: 1          # 1 = nessun sweep laterale
+    body_scan_ny: 3          # colonne: [sin, centro, des]
+    body_scan_nz: 2          # righe:   [basso, alto]  — 1 = nessuno sweep Z
+
+    # ── Orientamento look-at ────────────────────────────────────────
+    # Distanza (in metri) dal punto home al look-at target, lungo l'asse X_ee
+    # dell'EE in home. Questo definisce il punto fisso verso cui tutti i nodi
+    # della griglia punteranno la camera.
+    # Regola: ~distanza stimata tra braccio e torso paziente.
+    body_scan_lookat_distance: 1.0   # [m]
 
     # ── Parametri temporali per punto ──────────────────────────────
     # Timeout per punto: se entro questo tempo non si raccolgono
@@ -45,7 +61,7 @@ z1_FSM:
 
     # Numero minimo di frame validi per considerare un punto "pronto"
     # (trigger per calcolare score e avanzare, prima del timeout).
-    body_scan_min_frames: 8
+    body_scan_min_frames: 10
 
     # Score oltre il quale si interrompe la scansione anticipatamente
     # (early stop: il punto corrente è già abbastanza buono).
@@ -58,4 +74,4 @@ z1_yolo_torso_tracker:
 
     # Numero di frame validi consecutivi per dichiarare SCAN_POINT_LOCKED
     # (stato interno del tracker in scan mode).
-    scan_min_frames: 8
+    scan_min_frames: 10
