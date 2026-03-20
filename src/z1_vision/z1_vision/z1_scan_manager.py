@@ -156,6 +156,7 @@ class ScanManager:
         False → ancora in attesa
         """
         if not self._prelift_sent:
+            # extra_clearance = altezza extra +Z (salita sopra standoff normale)
             target = fsm._make_approach_pose(extra_clearance=self.clearance)
             if target is None:
                 return False
@@ -170,7 +171,7 @@ class ScanManager:
             off = self.current_offset
             fsm.get_logger().info(
                 f"🔼 SCAN_PRELIFT pt{self.idx}: "
-                f"clearance={self.clearance:.3f}m "
+                f"+Z={self.clearance:.3f}m "
                 f"off=({off[0]:.2f},{off[1]:.2f},{off[2]:.2f})"
             )
             return False
