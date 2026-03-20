@@ -175,22 +175,25 @@ class ScanManager:
             # ma con X del centro → stessa formula standoff, solo X sostituita
             target = fsm._make_approach_pose()   # Y, Z del punto corrente
             if target is None:
+                fsm.get_logger().warn('⚠️  SCAN_PRELIFT: _make_approach_pose() = None, attendo...')
                 return False
             if self._center_approach_pose is not None:
                 # Sostituisce la X con quella del centro (stessa distanza dal torso)
                 target.pose.position.x = self._center_approach_pose.pose.position.x
 
-            fsm.ik_done = False
-            fsm.pub_ik_goal.publish(target)
+            fsm.ik_done = False          # reset esplicito prima di ogni goal
             fsm.pub_ik_enable.publish(Bool(data=True))
+            fsm.pub_ik_goal.publish(target)
             self._prelift_sent  = True
             self._prelift_step  = 0
             self._prelift_start = fsm.get_clock().now().nanoseconds * 1e-9
             self._publish_marker(fsm, target)
             off = self.current_offset
             fsm.get_logger().info(
-                f"🔼 SCAN_PRELIFT passo0: intermedio pt{self.idx} "
-                f"(x_centro, y={target.pose.position.y:.3f}, z={target.pose.position.z:.3f})"
+                f"🔼 SCAN_PRELIFT passo0 pt{self.idx}: intermedio "
+                f"x={target.pose.position.x:.3f} "
+                f"y={target.pose.position.y:.3f} "
+                f"z={target.pose.position.z:.3f}"
             )
             return False
 
@@ -212,20 +215,22 @@ class ScanManager:
         if self._prelift_step == 0:
             if self._center_approach_pose is None:
                 # Centro non salvato: salta direttamente ad advance
+                fsm.get_logger().warn('⚠️  SCAN_PRELIFT: center_approach_pose non salvata, skip passo1')
                 fsm.pub_ik_enable.publish(Bool(data=False))
                 self.advance()
                 return True
 
-            fsm.ik_done = False
-            fsm.pub_ik_goal.publish(self._center_approach_pose)
-            # ik_enable già True
+            c = self._center_approach_pose
+            fsm.ik_done = False          # reset prima del secondo goal
+            fsm.pub_ik_enable.publish(Bool(data=True))
+            fsm.pub_ik_goal.publish(c)
             self._prelift_step  = 1
             self._prelift_start = fsm.get_clock().now().nanoseconds * 1e-9
             fsm.get_logger().info(
-                f"🔼 SCAN_PRELIFT passo1: ritorno al centro "
-                f"(x={self._center_approach_pose.pose.position.x:.3f}, "
-                f"y={self._center_approach_pose.pose.position.y:.3f}, "
-                f"z={self._center_approach_pose.pose.position.z:.3f})"
+                f"🔼 SCAN_PRELIFT passo1: ritorno centro "
+                f"x={c.pose.position.x:.3f} "
+                f"y={c.pose.position.y:.3f} "
+                f"z={c.pose.position.z:.3f}"
             )
             return False
 

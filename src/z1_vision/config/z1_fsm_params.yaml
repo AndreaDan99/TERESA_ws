@@ -39,7 +39,7 @@ z1_FSM:
     #                                    torso.y + dy, p_surf.z + dz]
     #                             (X_ee = [1,0,0], x_ee verso il torso = +X world)
     surface_frame_topic:  "/torso_surface_frame"
-    ik_approach_standoff: 0.120   # [m] distanza di standoff dalla superficie
+    ik_approach_standoff: 0.250   # [m] distanza di standoff dalla superficie (= desired_normal_offset)
     approach_mode:        "vertical"   # "normal" | "vertical"
 
     # ── Modalità scansione ─────────────────────────────────────────

@@ -608,8 +608,13 @@ class Z1FSM(Node):
                 if self._scan_mgr.idx == 0:
                     self._scan_mgr.save_center_approach(target)
 
-                self.pub_ik_goal.publish(target)
+                p = target.pose.position
+                self.get_logger().info(
+                    f"🎯 APPROACHING pt{self._scan_mgr.idx}: goal "
+                    f"x={p.x:.3f} y={p.y:.3f} z={p.z:.3f}"
+                )
                 self.pub_ik_enable.publish(Bool(data=True))
+                self.pub_ik_goal.publish(target)
                 self._approach_command_sent = True
 
                 # Marker blu una-tantum al momento dell'invio del goal

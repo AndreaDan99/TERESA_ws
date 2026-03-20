@@ -56,8 +56,8 @@ impedance_controller_realsense:
     #         max_approach_distance  = standoff + contact_depth (es. 0.200 + 0.005)
     approach_mode:          "vertical"   # "normal" | "vertical"
     use_surface_frame:      true
-    desired_normal_offset:  0.120   # [m] = standoff JTC → zero errore al latch
-    max_approach_distance:  0.250   # [m] discesa massima dal punto di latch
+    desired_normal_offset:  0.250   # [m] = standoff JTC → zero errore al latch
+    max_approach_distance:  0.400   # [m] discesa massima dal punto di latch
     # Velocità approccio: il target avanza verso il torso a questa velocità.
     # Il braccio deve riuscire a seguire il target → se troppo veloce, il braccio
     # rimane indietro e fa uno scatto quando APPROACH finisce.
