@@ -170,8 +170,8 @@ class ScanManager:
 
             off = self.current_offset
             fsm.get_logger().info(
-                f"🔼 SCAN_PRELIFT pt{self.idx}: "
-                f"+Z={self.clearance:.3f}m "
+                f"🔼 SCAN_PRELIFT: sale da pt{self.idx} "
+                f"+Z_clearance={self.clearance:.3f}m "
                 f"off=({off[0]:.2f},{off[1]:.2f},{off[2]:.2f})"
             )
             return False
@@ -187,11 +187,14 @@ class ScanManager:
                 fsm.set_state(fsm.WAITING)
                 return False
 
-        # Done
+        # Done: avanza al prossimo punto PRIMA di APPROACHING
         if fsm.ik_done:
             fsm.pub_ik_enable.publish(Bool(data=False))
+            self.advance()
+            off = self.current_offset
             fsm.get_logger().info(
-                f"✅ SCAN_PRELIFT completato → APPROACHING pt{self.idx}"
+                f"✅ SCAN_PRELIFT completato → APPROACHING pt{self.idx} "
+                f"off=({off[0]:.2f},{off[1]:.2f},{off[2]:.2f})"
             )
             return True
 
@@ -210,11 +213,12 @@ class ScanManager:
         "HOMING"       → scansione completata, si torna a home
         """
         if self.mode != self.MODE_SINGLE and not self.is_complete:
-            self.advance()
+            # NON avanzare qui: SCAN_PRELIFT deve prima salire dal punto CORRENTE
+            # (stesso Y/Z), poi advance() viene chiamato al termine del PRELIFT.
             off = self.current_offset
             fsm.get_logger().info(
-                f"✅ Switch → JTC | Fast US: punto {self.idx}/{len(self.offsets) - 1} "
-                f"off=({off[0]:.2f},{off[1]:.2f},{off[2]:.2f}) → SCAN_PRELIFT"
+                f"✅ Switch → JTC | Fast US: pt{self.idx} completato → SCAN_PRELIFT "
+                f"(sale da off=({off[0]:.2f},{off[1]:.2f},{off[2]:.2f}))"
             )
             return "SCAN_PRELIFT"
         else:
