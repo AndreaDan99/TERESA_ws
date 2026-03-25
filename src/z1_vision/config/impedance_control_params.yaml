@@ -53,7 +53,7 @@ impedance_controller_realsense:
     #                             (deve corrispondere ad approach_mode in z1_fsm_params.yaml)
     # Regola: desired_normal_offset = ik_approach_standoff (in z1_fsm_params.yaml)
     #         max_approach_distance  = standoff + contact_depth (es. 0.200 + 0.005)
-    approach_mode:          "vertical"   # "normal" | "vertical"
+    approach_mode:          "normal"     # "normal" | "vertical"
     use_surface_frame:      true
     desired_normal_offset:  0.250   # [m] = standoff JTC → zero errore al latch
     max_approach_distance:  0.400   # [m] discesa massima dal punto di latch

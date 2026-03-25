@@ -39,7 +39,7 @@ z1_FSM:
     #                             X_ee = [0,0,-1]; impedance avanza in +X (normal=[-1,0,0])
     surface_frame_topic:  "/torso_surface_frame"
     ik_approach_standoff: 0.250   # [m] distanza di standoff dalla superficie (= desired_normal_offset)
-    approach_mode:        "vertical"   # "normal" | "vertical"
+    approach_mode:        "normal"     # "normal" | "vertical"
 
     # ── Modalità scansione ─────────────────────────────────────────
     # "single"          → singolo punto al centro (default)
@@ -55,7 +55,7 @@ z1_FSM:
     # scan_delta_lateral:   non usato in modalità linea (ignorato, dz=0)
     #
     # Layout 5 punti: pt0=centro, pt1=+1 passo, pt2=-1 passo, pt3=+2 passi, pt4=-2 passi
-    scan_mode:              "fast_ultrasound"
+    scan_mode:              "single"          # fast_ultrasound non adattato per normal mode
     scan_delta_lateral:     0.00   # [m] non usato (linea, dz=0)
     scan_delta_axial:       0.05   # [m] passo tra punti lungo Y (spalla→fianco)
     scan_center_y_offset:   0.05   # [m] shift +Y centro (spalla → torso)
@@ -68,7 +68,7 @@ z1_FSM:
     # Se true: dopo WAIT_IK_DONE torna in WAITING senza avviare impedance.
     # Usare per verificare che il JTC allinei correttamente l'EE alla normale
     # prima di abilitare il torque controller.
-    skip_impedance: false   # ← mettere false per il ciclo completo
+    skip_impedance: true    # ← test normal mode: verifica solo posizionamento IK
 
     # ── Home position ──────────────────────────────────────────────
     # Posa cartesiana in cui il braccio va all'avvio (HOMING) e quando
