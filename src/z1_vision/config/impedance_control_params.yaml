@@ -67,6 +67,15 @@ impedance_controller_realsense:
     # ── Hold al contatto ───────────────────────────────────────────
     hold_time: 7.0             # [s] tempo fermo prima del retract
 
+    # ── Rilevamento contatto via forza stimata ──────────────────────
+    # 0.0 = disabilitato (usa solo max_approach_distance come prima).
+    # Quando abilitato, l'APPROACH si ferma non appena la forza stimata
+    # supera questa soglia (variazione rispetto al baseline al latch).
+    # Il max_approach_distance rimane attivo come safety fallback.
+    # Valori tipici: 5–10 N per contatto leggero su torso umano.
+    # Abbassare se il robot si ferma tardi, alzare se si ferma per rumore.
+    contact_force_threshold: 5.0   # [N]
+
     # ── Robustezza: singolarità e limiti articolari ─────────────────
     # manip = sqrt(det(J_pos·J_pos^T)) → 0 vicino a singolarità
     # Se manip < manip_threshold: F *= (manip/threshold)^2 (rolloff quadratico)

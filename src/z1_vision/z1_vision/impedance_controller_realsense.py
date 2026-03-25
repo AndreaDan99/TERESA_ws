@@ -70,6 +70,13 @@ class ImpedanceController(Node):
                 # Tempo di hold al contatto
                 ('hold_time', 10.0),              # [s]
 
+                # Soglia forza di contatto per terminare APPROACH.
+                # 0.0 = disabilitato (usa solo max_approach_distance).
+                # Valore tipico: 5.0–10.0 N per contatto leggero su torso.
+                # La forza è misurata come variazione rispetto al baseline
+                # registrato al latch superficie (offset attrito rimosso).
+                ('contact_force_threshold', 0.0),  # [N]
+
                 # Topic interface FSM
                 ('impedance_enable_topic', '/impedance_enable'),
                 ('impedance_done_topic',   '/impedance_done'),
@@ -89,7 +96,8 @@ class ImpedanceController(Node):
         self.torque_limit     = self.get_parameter('torque_limit').value
         self.safe_startup_duration = self.get_parameter('safe_startup_duration').value
         self.max_step_distance = self.get_parameter('max_step_distance').value
-        self.gravity_scale_j2 = self.get_parameter('gravity_scale_factor_j2').value
+        self.gravity_scale_j2          = self.get_parameter('gravity_scale_factor_j2').value
+        self.contact_force_threshold   = float(self.get_parameter('contact_force_threshold').value)
 
         self.approach_mode          = self.get_parameter('approach_mode').value
         self.desired_normal_offset  = self.get_parameter('desired_normal_offset').value
@@ -159,6 +167,18 @@ class ImpedanceController(Node):
         self._dx_filtered   = np.zeros(6)
         self._dx_filter_alpha = 0.15   # coefficiente filtro IIR primo ordine
 
+        # ── Stima forza di contatto (model-based, senza F/T sensor) ──
+        # tau_ext = tau_measured - (tau_gravity + tau_coriolis)
+        # F_contact = pinv(J^T) @ tau_ext
+        # α piccolo (fc≈2Hz) per sopprimere il rumore dei current sensor.
+        self.tau_measured          = np.zeros(self.n_joints)
+        self._tau_ext_filtered     = np.zeros(self.n_joints)
+        self._tau_ext_filter_alpha = 0.05   # IIR molto lento: ~2 Hz a 500 Hz
+        self._F_contact_est        = np.zeros(6)  # per stats/log
+        # Baseline forza al momento del latch superficie: rimuove offset
+        # statico da attrito ingranaggi, così il threshold è relativo.
+        self._F_contact_baseline   = np.zeros(6)
+
         # Safe startup
         self.safe_startup_mode    = True
         self.safe_startup_counter = 0
@@ -171,6 +191,7 @@ class ImpedanceController(Node):
         self._accum_init             = 0.0    # accum al latch (= desired_normal_offset - proj)
         self._accum_max              = self.max_approach_distance  # = _accum_init + max_approach_distance
         self._hold_start_time        = None     # rclpy.Time quando inizia HOLD
+        self._hold_accum             = self.max_approach_distance  # accum al momento dell'entrata in HOLD
         self._done_published         = False
         self._R_latched              = None   # rotazione EE latched alla transizione APPROACH→HOLD
 
@@ -217,11 +238,12 @@ class ImpedanceController(Node):
         )
 
         # ── Publishers ────────────────────────────────────────────
-        self.torque_pub       = self.create_publisher(Float64MultiArray, '/torque_controller/commands',  10)
-        self.current_pose_pub = self.create_publisher(PoseStamped,       '/current_ee_pose',             10)
-        self.wrench_pub       = self.create_publisher(WrenchStamped,     '/cartesian_wrench',            10)
-        self.pub_done         = self.create_publisher(Bool,              impedance_done_topic,           10)
-        self.target_marker_pub = self.create_publisher(Marker,           '/impedance_target_marker',     10)
+        self.torque_pub         = self.create_publisher(Float64MultiArray, '/torque_controller/commands',  10)
+        self.current_pose_pub   = self.create_publisher(PoseStamped,       '/current_ee_pose',             10)
+        self.wrench_pub         = self.create_publisher(WrenchStamped,     '/cartesian_wrench',            10)
+        self.contact_force_pub  = self.create_publisher(WrenchStamped,     '/contact_force_estimate',      10)
+        self.pub_done           = self.create_publisher(Bool,              impedance_done_topic,           10)
+        self.target_marker_pub  = self.create_publisher(Marker,           '/impedance_target_marker',     10)
 
         # ── Timers ────────────────────────────────────────────────
         self.timer     = self.create_timer(self.control_dt,          self.control_loop)
@@ -266,6 +288,8 @@ class ImpedanceController(Node):
             if len(msg.velocity) >= self.n_joints
             else np.zeros(self.n_joints)
         )
+        if len(msg.effort) >= self.n_joints:
+            self.tau_measured[:] = np.array(msg.effort[:self.n_joints])
         self.state_received = True
 
     def enable_callback(self, msg: Bool):
@@ -283,6 +307,7 @@ class ImpedanceController(Node):
             self._accum_init             = 0.0
             self._accum_max              = self.max_approach_distance
             self._hold_start_time        = None
+            self._hold_accum             = self.max_approach_distance
             self._done_published         = False
             self._R_latched              = None
             self._surface_latched        = False
@@ -290,6 +315,7 @@ class ImpedanceController(Node):
             self._normal_latched         = None
             self._ee_xy_latched          = None
             self._approach_dir           = None
+            self._F_contact_baseline     = np.zeros(6)
             self.get_logger().info('🛑 Impedance disabled — reset')
 
         if self.impedance_enabled and not prev:
@@ -298,6 +324,7 @@ class ImpedanceController(Node):
             self._accum_init             = 0.0
             self._accum_max              = self.max_approach_distance
             self._hold_start_time        = None
+            self._hold_accum             = self.max_approach_distance
             self._done_published         = False
             self._R_latched              = None   # verrà latched alla transizione APPROACH→HOLD
             self._surface_latched        = False   # verrà latched al primo tick valido
@@ -492,11 +519,21 @@ class ImpedanceController(Node):
             # è cambiato tra il calcolo JTC e l'attivazione dell'impedance.
             if self.approach_mode == 'vertical':
                 self._ee_xy_latched = ee_pos[:2].copy()
+            # Baseline forza al latch: campiono F_contact_est attuale come
+            # riferimento zero → il threshold sarà relativo a questo valore,
+            # eliminando l'offset statico da attrito ingranaggi.
+            self._F_contact_baseline = self._F_contact_est.copy()
             self.get_logger().info(
                 f'  p=[{p_surf[0]:.3f},{p_surf[1]:.3f},{p_surf[2]:.3f}] '
                 f'proj={proj*100:.1f}cm accum_init={self._accum_init*100:.1f}cm '
                 f'accum_max={self._accum_max*100:.1f}cm (discesa={self.max_approach_distance*100:.1f}cm)'
             )
+            if self.contact_force_threshold > 0.0:
+                baseline_norm = float(np.linalg.norm(self._F_contact_baseline[:3]))
+                self.get_logger().info(
+                    f'  Forza baseline: {baseline_norm:.2f} N | '
+                    f'soglia contatto: {self.contact_force_threshold:.1f} N'
+                )
 
         # Usa valori latched se disponibili, altrimenti quelli correnti
         if self._surface_latched:
@@ -505,35 +542,60 @@ class ImpedanceController(Node):
 
         step = self.approach_speed * self.control_dt
 
-        # ── Fase APPROACH: avanza di max_approach_distance dalla posizione di partenza ──
+        # ── Fase APPROACH: avanza finché forza di contatto >= soglia OPPURE ──
+        # ──              distanza massima raggiunta (safety fallback)      ──
         if self._phase == 'APPROACH':
             self.approach_distance_accum = min(
                 self.approach_distance_accum + step,
                 self._accum_max
             )
-            if self.approach_distance_accum >= self._accum_max:
+
+            # Verifica forza di contatto (se abilitata)
+            contact_detected = False
+            if self.contact_force_threshold > 0.0:
+                f_delta = self._F_contact_est - self._F_contact_baseline
+                f_contact_norm = float(np.linalg.norm(f_delta[:3]))
+                if f_contact_norm >= self.contact_force_threshold:
+                    contact_detected = True
+
+            if contact_detected or self.approach_distance_accum >= self._accum_max:
                 self._phase           = 'HOLD'
                 self._hold_start_time = self.get_clock().now()
-                # Latch orientamento EE al termine dell'APPROACH:
-                # si mantiene la rotazione reale raggiunta (non quella iniziale)
-                # così il controllo orientamento non deve "combattere" la traiettoria.
+                # Snap accum a _accum_max se terminato per distanza, altrimenti
+                # teniamo la posizione reale raggiunta (contatto rilevato prima).
+                if not contact_detected:
+                    self.approach_distance_accum = self._accum_max
+                # Salva la posizione di contatto: il RETRACT ripartirà da qui,
+                # non da _accum_max (evita di spingere il robot in avanti se il
+                # contatto era stato rilevato prima della distanza massima).
+                self._hold_accum = self.approach_distance_accum
                 self._R_latched = x_current.rotation.copy()
-                self.get_logger().info(
-                    f'📍 APPROACH completato ({self.max_approach_distance*100:.0f} cm) → HOLD {self.hold_time:.0f}s'
-                    f' | Rot latched: X=[{x_current.rotation[0,0]:.2f},{x_current.rotation[1,0]:.2f},{x_current.rotation[2,0]:.2f}]'
-                )
+                dist_cm = (self.approach_distance_accum - self._accum_init) * 100.0
+                if contact_detected:
+                    f_delta = self._F_contact_est - self._F_contact_baseline
+                    self.get_logger().info(
+                        f'📍 CONTATTO RILEVATO F={np.linalg.norm(f_delta[:3]):.1f}N '
+                        f'(soglia={self.contact_force_threshold:.1f}N) '
+                        f'dist={dist_cm:.1f}cm → HOLD {self.hold_time:.0f}s'
+                    )
+                else:
+                    self.get_logger().info(
+                        f'📍 APPROACH completato ({self.max_approach_distance*100:.0f} cm) → HOLD {self.hold_time:.0f}s'
+                        f' | Rot latched: X=[{x_current.rotation[0,0]:.2f},{x_current.rotation[1,0]:.2f},{x_current.rotation[2,0]:.2f}]'
+                    )
 
         # ── Fase HOLD: rimani fermo per hold_time secondi ─────────────
         elif self._phase == 'HOLD':
             elapsed = (self.get_clock().now() - self._hold_start_time).nanoseconds * 1e-9
             if elapsed >= self.hold_time:
-                # Snap accum a _accum_max: il RETRACT riparte dal punto di contatto
-                # (non da dove si è fermato il robot, che potrebbe aver slittato).
-                self.approach_distance_accum = self._accum_max
+                # Snap accum al punto di contatto reale (_hold_accum): il RETRACT
+                # riparte da lì, non da _accum_max (che potrebbe essere più avanti
+                # se il contatto era stato rilevato prima della distanza massima).
+                self.approach_distance_accum = self._hold_accum
                 self._phase = 'RETRACT'
                 self.get_logger().info(
                     f'↩️  HOLD completato ({elapsed:.1f}s) → RETRACT '
-                    f'(accum snap → {self._accum_max*100:.1f}cm)'
+                    f'(accum snap → {self._hold_accum*100:.1f}cm)'
                 )
 
         # ── Fase RETRACT: torna alla posizione di partenza (accum_init) ──
@@ -676,11 +738,13 @@ class ImpedanceController(Node):
             )
         tau_impedance += tau_jl
 
-        tau_total = tau_impedance + self.compute_compensation()
+        tau_comp  = self.compute_compensation()
+        tau_total = tau_impedance + tau_comp
         tau_total = np.clip(tau_total, -self.torque_limit, self.torque_limit)
 
         self.publish_torque(tau_total)
         self.publish_wrench(F_cartesian)
+        self._estimate_contact_force(J, tau_comp)
 
         # Statistiche
         self.iteration_count += 1
@@ -711,6 +775,51 @@ class ImpedanceController(Node):
         tau_comp[1]            = tau_gravity[1] * self.scale_j2_filtered + tau_coriolis[1]
 
         return tau_comp[:self.n_joints]
+
+    # ──────────────────────────────────────────────────────────────
+    def _estimate_contact_force(self, J, tau_comp):
+        """Stima model-based della forza di contatto esterna.
+
+        tau_ext = tau_measured − (tau_gravity + tau_coriolis)
+        F_contact = (J^T)^{+} @ tau_ext   [pseudo-inversa smorzata]
+
+        Limitazioni: include attrito ingranaggi (non modellato) → offset
+        costante in condizioni statiche. Utile per rilevare variazioni
+        relative durante HOLD e per stimare l'ordine di grandezza della
+        forza applicata al torso.
+        """
+        if not np.any(self.tau_measured != 0.0):
+            return
+
+        # Torque residuo: rimuove dinamica nota (gravity + Coriolis)
+        tau_ext = self.tau_measured - tau_comp
+
+        # Filtro IIR lento (fc ≈ 2 Hz): sopprime rumore current-sensor
+        self._tau_ext_filtered = (
+            self._tau_ext_filter_alpha * tau_ext
+            + (1.0 - self._tau_ext_filter_alpha) * self._tau_ext_filtered
+        )
+
+        # Mappa joint-space → Cartesian: F = (J^T)^+ @ tau_ext
+        # Pseudo-inversa smorzata: J (JJ^T + λ²I)^{-1}
+        # λ piccolo evita amplificazione vicino a singolarità senza distorcere il risultato
+        lambda_sq = 1e-4
+        JJT = J @ J.T   # 6×6
+        self._F_contact_est = J @ np.linalg.solve(
+            JJT + lambda_sq * np.eye(6), self._tau_ext_filtered
+        )
+
+        # Pubblica su topic dedicato
+        msg = WrenchStamped()
+        msg.header.stamp    = self.get_clock().now().to_msg()
+        msg.header.frame_id = self.ee_frame_name
+        msg.wrench.force.x  = float(self._F_contact_est[0])
+        msg.wrench.force.y  = float(self._F_contact_est[1])
+        msg.wrench.force.z  = float(self._F_contact_est[2])
+        msg.wrench.torque.x = float(self._F_contact_est[3])
+        msg.wrench.torque.y = float(self._F_contact_est[4])
+        msg.wrench.torque.z = float(self._F_contact_est[5])
+        self.contact_force_pub.publish(msg)
 
     # ──────────────────────────────────────────────────────────────
     def publish_torque(self, tau):
@@ -779,12 +888,16 @@ class ImpedanceController(Node):
             return
         avg_pos = self.sum_error_pos / self.iteration_count
         phase_str = self._phase if self.impedance_enabled else 'off'
+        f_contact_norm = float(np.linalg.norm(
+            (self._F_contact_est - self._F_contact_baseline)[:3]
+        ))
         log_msg = (
             f'[{phase_str:8s}] '
             f'Iter: {self.iteration_count:6d} | '
             f'Err_pos: {self.error_norm_pos*1000:6.2f}mm (avg: {avg_pos*1000:6.2f}mm) | '
             f'dist: {self.approach_distance_accum*100:5.1f}/{self.max_approach_distance*100:.0f}cm | '
-            f'Vel: {self.vel_norm:5.3f} | F: {self.force_norm:6.1f}N | τ: {self.max_torque:5.2f}Nm | '
+            f'Vel: {self.vel_norm:5.3f} | F_cmd: {self.force_norm:6.1f}N | '
+            f'F_contact: {f_contact_norm:5.1f}N | τ: {self.max_torque:5.2f}Nm | '
             f'manip: {self.manipulability:.4f}'
         )
         if self._R_latched is not None:
