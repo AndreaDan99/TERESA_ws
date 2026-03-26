@@ -131,29 +131,34 @@ class Z1FSM(Node):
         )
 
         # ── Body scan params ─────────────────────────────────────────────
-        self.declare_parameter("body_scan_on_start",        True)
-        self.declare_parameter("body_scan_center",          [-0.09, 0.00, 0.44])
-        self.declare_parameter("body_scan_ext_y",           0.20)
-        self.declare_parameter("body_scan_ext_z",           0.00)
-        self.declare_parameter("body_scan_ny",              3)
-        self.declare_parameter("body_scan_nz",              1)
-        self.declare_parameter("body_scan_point_timeout",   4.0)
-        self.declare_parameter("body_scan_min_frames",      8)
-        self.declare_parameter("body_scan_early_stop",      0.85)
-        # Distanza dal punto home al look-at target (lungo l'asse X_ee home).
-        # Tutti i punti griglia punteranno verso quel target fisso.
-        self.declare_parameter("body_scan_lookat_distance", 1.0)
+        self.declare_parameter("body_scan_on_start",           True)
+        self.declare_parameter("body_scan_center",             [-0.09, 0.00, 0.44])
+        self.declare_parameter("body_scan_ext_y",              0.20)
+        self.declare_parameter("body_scan_ext_z",              0.15)
+        self.declare_parameter("body_scan_ny",                 2)
+        self.declare_parameter("body_scan_nz",                 2)
+        self.declare_parameter("body_scan_point_timeout",      4.0)
+        self.declare_parameter("body_scan_min_frames",         8)
+        self.declare_parameter("body_scan_early_stop",         0.95)
+        # Fase 2: sweep del polso attorno all'asse look-at
+        self.declare_parameter("body_scan_wrist_steps",        6)
+        self.declare_parameter("body_scan_wrist_angle_deg",    25.0)
+        self.declare_parameter("body_scan_wrist_timeout",      1.5)
+        self.declare_parameter("body_scan_wrist_min_frames",   5)
 
-        self._scan_on_start          = bool(self.get_parameter("body_scan_on_start").value)
-        self._body_scan_center       = np.array(self.get_parameter("body_scan_center").value, dtype=float)
-        self._body_scan_ext_y        = float(self.get_parameter("body_scan_ext_y").value)
-        self._body_scan_ext_z        = float(self.get_parameter("body_scan_ext_z").value)
-        self._body_scan_ny           = int(self.get_parameter("body_scan_ny").value)
-        self._body_scan_nz           = int(self.get_parameter("body_scan_nz").value)
-        self._body_scan_timeout      = float(self.get_parameter("body_scan_point_timeout").value)
-        self._body_scan_min_fr       = int(self.get_parameter("body_scan_min_frames").value)
-        self._body_scan_early        = float(self.get_parameter("body_scan_early_stop").value)
-        self._body_scan_lookat_dist  = float(self.get_parameter("body_scan_lookat_distance").value)
+        self._scan_on_start            = bool(self.get_parameter("body_scan_on_start").value)
+        self._body_scan_center         = np.array(self.get_parameter("body_scan_center").value, dtype=float)
+        self._body_scan_ext_y          = float(self.get_parameter("body_scan_ext_y").value)
+        self._body_scan_ext_z          = float(self.get_parameter("body_scan_ext_z").value)
+        self._body_scan_ny             = int(self.get_parameter("body_scan_ny").value)
+        self._body_scan_nz             = int(self.get_parameter("body_scan_nz").value)
+        self._body_scan_timeout        = float(self.get_parameter("body_scan_point_timeout").value)
+        self._body_scan_min_fr         = int(self.get_parameter("body_scan_min_frames").value)
+        self._body_scan_early          = float(self.get_parameter("body_scan_early_stop").value)
+        self._body_scan_wrist_steps    = int(self.get_parameter("body_scan_wrist_steps").value)
+        self._body_scan_wrist_angle    = float(self.get_parameter("body_scan_wrist_angle_deg").value)
+        self._body_scan_wrist_timeout  = float(self.get_parameter("body_scan_wrist_timeout").value)
+        self._body_scan_wrist_min_fr   = int(self.get_parameter("body_scan_wrist_min_frames").value)
 
         # ── WorkspaceChecker (Pinocchio, bloccante → thread) ────────────
         try:
@@ -196,6 +201,7 @@ class Z1FSM(Node):
         self._body_scan_done: bool                         = False
         self._body_scanner:   BodySearchScanner | None     = None
         self._scan_torso_estimate: np.ndarray | None       = None
+        self._scan_phase: int                              = 1  # 1=home, 2=arc+wrist
         # _tracker_ready: True dopo aver ricevuto almeno un messaggio su
         # /torso_tracker_state. Garantisce che il nodo tracker sia avviato
         # e il modello YOLO sia caricato prima di iniziare la body scan.
@@ -341,10 +347,11 @@ class Z1FSM(Node):
 
         if s == self.BODY_SCANNING:
             self.ik_done               = False
-            self._scan_torso_estimate  = None   # reset stima torso per nuovo ciclo scan
-            poses                      = self._generate_scan_poses()
+            self._scan_torso_estimate  = None
+            self._scan_phase           = 1
+            # Fase 1: solo home pose — raccoglie stima iniziale torso
             self._body_scanner = BodySearchScanner(
-                scan_poses         = poses,
+                scan_poses         = [self._make_home_pose()],
                 scan_point_timeout = self._body_scan_timeout,
                 scan_min_frames    = self._body_scan_min_fr,
                 early_stop_score   = self._body_scan_early,
@@ -562,69 +569,91 @@ class Z1FSM(Node):
         return goal
 
     # ──────────────────────────────────────────────────────────────
-    def _generate_scan_poses(self) -> list:
-        """
-        Genera la lista di PoseStamped per la body search scan.
-        Griglia ny × nz nel piano YZ in world frame, X fisso = body_scan_center[0].
+    def _finish_body_scan(self):
+        """Pubblica seed fuso, disattiva scan mode, passa a WAITING."""
+        fused = (self._body_scanner.fused_torso_xyz()
+                 if self._body_scanner is not None else None)
+        if fused is not None:
+            seed_msg = PointStamped()
+            seed_msg.header.stamp    = self.get_clock().now().to_msg()
+            seed_msg.header.frame_id = 'world'
+            seed_msg.point.x         = float(fused[0])
+            seed_msg.point.y         = float(fused[1])
+            seed_msg.point.z         = float(fused[2])
+            self.pub_torso_scan_seed.publish(seed_msg)
+            self.get_logger().info(
+                f'📍 Seed torso fuso: [{fused[0]:.3f}, {fused[1]:.3f}, {fused[2]:.3f}]'
+            )
+        self.pub_ik_enable.publish(Bool(data=False))
+        self.pub_tracker_scan_mode.publish(Bool(data=False))
+        self.get_logger().info('✅ Body scan completato → WAITING')
+        self._body_scan_done = True
+        self.set_state(self.WAITING)
 
-        Orientamento look-at: per ogni punto della griglia l'EE viene ruotato
-        in modo che il suo asse X punti verso un target fisso (lookat), calcolato
-        come home_position + body_scan_lookat_distance * home_X_axis.
-        Così in home l'orientamento è identico a quello di home; spostandosi in
-        alto/basso/laterale il polso compensa automaticamente per mantenere la
-        camera sempre puntata sullo stesso punto (centro torso paziente).
+    def _gen_arc_wrist_poses(self, torso_estimate: np.ndarray) -> list:
+        """
+        Genera pose fase 2: arco YZ (ny × nz) × sweep polso (wrist_steps).
+        Per ogni posizione dell'arco:
+          - look-at orientation verso torso_estimate
+          - N rotazioni del polso attorno all'asse X_ee (±wrist_angle_deg)
+        Ritorna lista flat di PoseStamped (ny*nz*wrist_steps pose totali).
         """
         center = self._body_scan_center
         ny     = self._body_scan_ny
         nz     = self._body_scan_nz
         ext_y  = self._body_scan_ext_y
         ext_z  = self._body_scan_ext_z
+        n_wr   = self._body_scan_wrist_steps
+        max_a  = self._body_scan_wrist_angle * np.pi / 180.0
 
         ys = (np.linspace(center[1] - ext_y, center[1] + ext_y, ny)
               if ny > 1 else np.array([center[1]]))
         zs = (np.linspace(center[2] - ext_z, center[2] + ext_z, nz)
               if nz > 1 else np.array([center[2]]))
+        wrist_angles = np.linspace(-max_a, max_a, n_wr)
 
         now   = self.get_clock().now().to_msg()
         poses = []
-
-        # ── Home pose come primo punto ────────────────────────────────────
-        # Il robot è già lì → nessun movimento iniziale. Raccoglie subito
-        # dati con l'orientamento di home (che punta verso il torso) e
-        # popola _scan_torso_estimate per il look-at dinamico dei punti
-        # successivi.
-        home_pose = self._make_home_pose()
-        home_pose.header.stamp = now
-        poses.append(home_pose)
-
-        # ── Griglia ny × nz con orientamento fisso = home ─────────────────
-        # Tutti i punti della griglia usano l'orientamento di home come
-        # default: il torso è lontano rispetto allo spostamento laterale
-        # (pochi cm), quindi home_orientation punta verso il torso anche
-        # dai punti adiacenti. Il look-at dinamico (SEND_IK handler) sovrascrive
-        # questo orientamento non appena _scan_torso_estimate è disponibile.
-        q = self._home_orientation
         for z in zs:
             for y in ys:
-                p = PoseStamped()
-                p.header.frame_id    = 'world'
-                p.header.stamp       = now
-                p.pose.position.x    = float(center[0])
-                p.pose.position.y    = float(y)
-                p.pose.position.z    = float(z)
-                p.pose.orientation.x = float(q[0])
-                p.pose.orientation.y = float(q[1])
-                p.pose.orientation.z = float(q[2])
-                p.pose.orientation.w = float(q[3])
-                poses.append(p)
+                pos = np.array([float(center[0]), float(y), float(z)])
 
-        self.get_logger().info(
-            f'🗺️  Scan grid: {len(poses)} pose '
-            f'(home + ny={ny} × nz={nz}), '
-            f'center=[{center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f}], '
-            f'ext_y=±{ext_y:.2f} ext_z=±{ext_z:.2f}'
-        )
+                # Look-at verso torso_estimate
+                direction = torso_estimate - pos
+                norm      = np.linalg.norm(direction)
+                if norm < 1e-6:
+                    q_base = self._home_orientation
+                else:
+                    direction /= norm
+                    q_base = self._orientation_for_xee(direction)
+
+                # Sweep polso: N rotazioni attorno all'asse X_ee (Rodrigues)
+                R_base = quaternion_matrix(q_base)[:3, :3]
+                x_ee   = R_base[:, 0]
+                K = np.array([[     0,  -x_ee[2],  x_ee[1]],
+                              [ x_ee[2],      0,  -x_ee[0]],
+                              [-x_ee[1],  x_ee[0],      0]])
+
+                for theta in wrist_angles:
+                    R_wr  = np.eye(3) + np.sin(theta) * K + (1 - np.cos(theta)) * (K @ K)
+                    R_new = R_wr @ R_base
+                    T     = np.eye(4)
+                    T[:3, :3] = R_new
+                    q     = quaternion_from_matrix(T)
+
+                    p = PoseStamped()
+                    p.header.frame_id    = 'world'
+                    p.header.stamp       = now
+                    p.pose.position.x    = float(pos[0])
+                    p.pose.position.y    = float(pos[1])
+                    p.pose.position.z    = float(pos[2])
+                    p.pose.orientation.x = float(q[0])
+                    p.pose.orientation.y = float(q[1])
+                    p.pose.orientation.z = float(q[2])
+                    p.pose.orientation.w = float(q[3])
+                    poses.append(p)
         return poses
+
 
     def _on_tracker_state(self, msg: String):
         """Primo messaggio da /torso_tracker_state → tracker avviato e YOLO caricato."""
@@ -958,41 +987,15 @@ class Z1FSM(Node):
             st  = self._body_scanner.tick(ik_done=self.ik_done, now=now)
 
             if st.action == ScanAction.SEND_IK:
-                # Invia il prossimo goal IK (posa della griglia o best pose finale).
-                #
-                # Look-at dinamico: se _scan_torso_estimate è disponibile (popolato
-                # dopo che home ha raccolto dati), l'orientamento viene ricalcolato
-                # per puntare verso il torso rilevato. Il punto 0 (home) usa sempre
-                # home_orientation perché _scan_torso_estimate è None all'inizio.
-                goal = st.goal
-                if self._scan_torso_estimate is not None:
-                    ee_pos    = np.array([goal.pose.position.x,
-                                          goal.pose.position.y,
-                                          goal.pose.position.z])
-                    direction = self._scan_torso_estimate - ee_pos
-                    norm      = np.linalg.norm(direction)
-                    if norm > 1e-6:
-                        direction /= norm
-                        q         = self._orientation_for_xee(direction)
-                        goal      = PoseStamped()
-                        goal.header                = st.goal.header
-                        goal.pose.position         = st.goal.pose.position
-                        goal.pose.orientation.x    = float(q[0])
-                        goal.pose.orientation.y    = float(q[1])
-                        goal.pose.orientation.z    = float(q[2])
-                        goal.pose.orientation.w    = float(q[3])
-                        self.get_logger().info(
-                            f'🎯 Look-at → torso '
-                            f'[{self._scan_torso_estimate[0]:.3f}, '
-                            f'{self._scan_torso_estimate[1]:.3f}, '
-                            f'{self._scan_torso_estimate[2]:.3f}]'
-                        )
+                # Fase 1: usa home_orientation (già nella pose).
+                # Fase 2: orientamento look-at + wrist già baked-in in _gen_arc_wrist_poses.
                 self.ik_done = False
                 self.pub_ik_enable.publish(Bool(data=True))
-                self.pub_ik_goal.publish(goal)
-                p = goal.pose.position
+                self.pub_ik_goal.publish(st.goal)
+                p = st.goal.pose.position
                 self.get_logger().info(
-                    f'🔍 Body scan IK goal: [{p.x:.3f}, {p.y:.3f}, {p.z:.3f}]'
+                    f'🔍 Body scan P{self._scan_phase} IK: '
+                    f'[{p.x:.3f}, {p.y:.3f}, {p.z:.3f}]'
                 )
 
             elif st.action == ScanAction.RESET_TRACKER:
@@ -1000,30 +1003,34 @@ class Z1FSM(Node):
                 self.pub_tracker_scan_next.publish(Bool(data=True))
 
             elif st.action == ScanAction.EXIT_SCAN_MODE:
-                # Scansione completata, braccio nella best pose.
-                # Pubblica la stima fusa multi-vista come seed per il tracker:
-                # il tracker si inizializzerà direttamente in LOCKED invece di
-                # ricominciare da IDLE → ESTIMATING → LOCKED.
-                fused = (self._body_scanner.fused_torso_xyz()
-                         if self._body_scanner is not None else None)
-                if fused is not None:
-                    seed_msg = PointStamped()
-                    seed_msg.header.stamp    = self.get_clock().now().to_msg()
-                    seed_msg.header.frame_id = 'world'
-                    seed_msg.point.x         = float(fused[0])
-                    seed_msg.point.y         = float(fused[1])
-                    seed_msg.point.z         = float(fused[2])
-                    self.pub_torso_scan_seed.publish(seed_msg)
-                    self.get_logger().info(
-                        f'📍 Seed torso fuso: [{fused[0]:.3f}, {fused[1]:.3f}, {fused[2]:.3f}]'
-                    )
-                self.pub_ik_enable.publish(Bool(data=False))
-                self.pub_tracker_scan_mode.publish(Bool(data=False))
-                self.get_logger().info(
-                    '✅ Body scan completato → WAITING (tracker seedato da stima fusa)'
-                )
-                self._body_scan_done = True
-                self.set_state(self.WAITING)
+                if self._scan_phase == 1:
+                    # Fase 1 completata: se abbiamo la stima torso, avvia fase 2
+                    if self._scan_torso_estimate is not None:
+                        poses_p2 = self._gen_arc_wrist_poses(self._scan_torso_estimate)
+                        self._body_scanner = BodySearchScanner(
+                            scan_poses         = poses_p2,
+                            scan_point_timeout = self._body_scan_wrist_timeout,
+                            scan_min_frames    = self._body_scan_wrist_min_fr,
+                            early_stop_score   = self._body_scan_early,
+                            logger             = self.get_logger(),
+                        )
+                        self._body_scanner.reset()
+                        self._scan_phase = 2
+                        self.get_logger().info(
+                            f'🔍 Fase 2 avviata: {len(poses_p2)} pose '
+                            f'({self._body_scan_ny * self._body_scan_nz} arco '
+                            f'× {self._body_scan_wrist_steps} wrist '
+                            f'±{self._body_scan_wrist_angle:.0f}°)'
+                        )
+                    else:
+                        # Nessuna detection in fase 1: esci senza fase 2
+                        self.get_logger().warn(
+                            '⚠️  Fase 1 senza detection torso → skip fase 2'
+                        )
+                        self._finish_body_scan()
+                else:
+                    # Fase 2 completata: pubblica seed fuso e termina
+                    self._finish_body_scan()
 
             elif st.action == ScanAction.FAILED:
                 # Nessun punto valido trovato: disattiva scan mode, vai in WAITING

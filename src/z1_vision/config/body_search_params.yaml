@@ -41,22 +41,26 @@ z1_FSM:
     body_scan_ext_y: 0.20   # [m]  offset spalla/fianco
     body_scan_ext_z: 0.15   # [m]  offset laterale
 
-    # Numero di punti lungo Y e Z:
-    # ny=2, nz=2 → 4 posizioni ad arco + home = 5 osservazioni totali
-    body_scan_ny: 2          # [sin, des]  — no centro, home lo copre
-    body_scan_nz: 2          # [basso, alto]
+    # Numero di punti lungo Y e Z dell'arco (fase 2):
+    # ny=2, nz=2 → 4 posizioni arco × 6 wrist = 24 pose fase 2
+    body_scan_ny: 2
+    body_scan_nz: 2
 
-    # ── Parametri temporali per punto ──────────────────────────────
-    # Timeout per punto: se entro questo tempo non si raccolgono
-    # scan_min_frames validi, il punto viene marcato score=0 e si avanza.
+    # ── Fase 1: home ────────────────────────────────────────────
+    # Timeout e frame minimi per il punto home (dà più tempo per la
+    # stima iniziale del torso).
     body_scan_point_timeout: 4.0   # [s]
+    body_scan_min_frames:    8
 
-    # Numero minimo di frame validi per considerare un punto "pronto"
-    # (trigger per calcolare score e avanzare, prima del timeout).
-    body_scan_min_frames: 10
+    # ── Fase 2: wrist sweep ─────────────────────────────────────
+    # Numero di orientamenti polso per ogni posizione arco.
+    # Rotazione attorno all'asse X_ee (look-at) da -angle a +angle.
+    body_scan_wrist_steps:      6      # orientamenti polso per posizione
+    body_scan_wrist_angle_deg:  25.0   # [°] range sweep polso (±25°)
+    body_scan_wrist_timeout:    1.5    # [s] timeout per singola wrist pose
+    body_scan_wrist_min_frames: 5      # frame minimi per wrist pose
 
-    # Score oltre il quale si interrompe la scansione anticipatamente
-    # (early stop: il punto corrente è già abbastanza buono).
+    # Score oltre il quale si interrompe la scansione anticipatamente.
     body_scan_early_stop: 0.95
 
 
