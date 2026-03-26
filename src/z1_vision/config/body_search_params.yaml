@@ -1,23 +1,22 @@
 # body_search_params.yaml
-# Parametri per la scansione a griglia (BodySearchScanner)
+# Parametri per la scansione ad arco adattiva (BodySearchScanner)
 #
-# La scansione muove il braccio attraverso una griglia di pose in world frame
-# per trovare la posizione dalla quale il tracker YOLO vede meglio il torso.
+# La scansione muove il braccio attraverso N pose in world frame per trovare
+# la posizione dalla quale il tracker YOLO vede meglio il torso.
 #
 # World frame (TERESA):
 #   X → verso il basso (discesa braccio verso torso)
 #   Y → da faccia del paziente verso gambe (asse corpo)
 #   Z → laterale (da fianco dx a fianco sx)
 #
-# Il centro della griglia dovrebbe essere vicino alla home position del braccio.
+# Struttura della scansione:
+#   Punto 0  : home position, orientamento fisso (raccoglie stima iniziale torso)
+#   Punti 1..N: arco attorno a home (ny × nz), orientamento look-at dinamico
+#               verso il torso rilevato al punto 0.
 #
-# Orientamento look-at:
-#   Per ogni punto della griglia l'EE viene orientato in modo che il suo asse X
-#   punti sempre verso lo stesso target fisso (look-at point).
-#   Il look-at viene calcolato automaticamente come:
-#       lookat = home_position + body_scan_lookat_distance * X_ee_home
-#   → In home l'orientamento è identico a quello di home.
-#   → Spostandosi in alto/basso/laterale il polso compensa automaticamente.
+# L'arco è definito da 4 posizioni ±Y e ±Z senza il centro (home lo copre già).
+# Da angolazioni diverse si ottiene una stima 3D più accurata del centro torso
+# (triangolazione multi-vista).
 
 z1_FSM:
   ros__parameters:
@@ -28,31 +27,24 @@ z1_FSM:
     # Se false: comportamento precedente (aspetta lock direttamente in WAITING).
     body_scan_on_start: true
 
-    # ── Griglia di scansione (pose del braccio in world frame) ─────
+    # ── Arco di scansione (pose del braccio in world frame) ────────
     #
-    # Centro della griglia: posizione EE intorno alla quale si genera la griglia.
-    # Di default uguale alla home position del braccio.
+    # Centro dell'arco: coincide con la home position del braccio.
     body_scan_center: [-0.09, 0.00, 0.44]    # [x, y, z] in metri
 
-    # Semi-estensioni della griglia (metà del range totale):
-    #   body_scan_ext_y: ±Y intorno al centro (sinistra/destra del paziente)
-    #   body_scan_ext_z: ±Z intorno al centro (su/giù)
-    # Esempio: ext_y=0.20, nz=2, ext_z=0.10
-    #   → sweep Y: [center_y-0.20, center_y, center_y+0.20]
-    #   → sweep Z: [center_z-0.10, center_z+0.10]  (2 livelli di altezza)
-    body_scan_ext_y: 0.20   # [m]  sweep sinistra/destra
-    body_scan_ext_z: 0.10   # [m]  sweep su/giù (0.0 = scan 1D solo in Y)
+    # Semi-estensioni dell'arco:
+    #   body_scan_ext_y: ±Y (spalla→fianco del paziente)
+    #   body_scan_ext_z: ±Z (laterale sinistra/destra)
+    # Con ny=2 e nz=2 si ottengono 4 posizioni sull'arco:
+    #   (center_y ± ext_y) × (center_z ± ext_z)
+    # Il centro è omesso (home lo copre come punto 0).
+    body_scan_ext_y: 0.20   # [m]  offset spalla/fianco
+    body_scan_ext_z: 0.15   # [m]  offset laterale
 
-    # Numero di punti lungo Y e Z della griglia:
-    body_scan_ny: 3          # colonne: [sin, centro, des]
-    body_scan_nz: 2          # righe:   [basso, alto]  — 1 = nessuno sweep Z
-
-    # ── Orientamento look-at ────────────────────────────────────────
-    # Distanza (in metri) dal punto home al look-at target, lungo l'asse X_ee
-    # dell'EE in home. Questo definisce il punto fisso verso cui tutti i nodi
-    # della griglia punteranno la camera.
-    # Regola: ~distanza stimata tra braccio e torso paziente.
-    body_scan_lookat_distance: 1.0   # [m]
+    # Numero di punti lungo Y e Z:
+    # ny=2, nz=2 → 4 posizioni ad arco + home = 5 osservazioni totali
+    body_scan_ny: 2          # [sin, des]  — no centro, home lo copre
+    body_scan_nz: 2          # [basso, alto]
 
     # ── Parametri temporali per punto ──────────────────────────────
     # Timeout per punto: se entro questo tempo non si raccolgono

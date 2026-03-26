@@ -958,13 +958,38 @@ class Z1FSM(Node):
 
             if st.action == ScanAction.SEND_IK:
                 # Invia il prossimo goal IK (posa della griglia o best pose finale).
-                # L'orientamento è fisso (home_orientation) per tutti i punti:
-                # il robot trasla senza ruotare joint 6, mantenendo la camera
-                # sempre puntata nella stessa direzione.
+                #
+                # Look-at dinamico: se _scan_torso_estimate è disponibile (popolato
+                # dopo che home ha raccolto dati), l'orientamento viene ricalcolato
+                # per puntare verso il torso rilevato. Il punto 0 (home) usa sempre
+                # home_orientation perché _scan_torso_estimate è None all'inizio.
+                goal = st.goal
+                if self._scan_torso_estimate is not None:
+                    ee_pos    = np.array([goal.pose.position.x,
+                                          goal.pose.position.y,
+                                          goal.pose.position.z])
+                    direction = self._scan_torso_estimate - ee_pos
+                    norm      = np.linalg.norm(direction)
+                    if norm > 1e-6:
+                        direction /= norm
+                        q         = self._orientation_for_xee(direction)
+                        goal      = PoseStamped()
+                        goal.header                = st.goal.header
+                        goal.pose.position         = st.goal.pose.position
+                        goal.pose.orientation.x    = float(q[0])
+                        goal.pose.orientation.y    = float(q[1])
+                        goal.pose.orientation.z    = float(q[2])
+                        goal.pose.orientation.w    = float(q[3])
+                        self.get_logger().info(
+                            f'🎯 Look-at → torso '
+                            f'[{self._scan_torso_estimate[0]:.3f}, '
+                            f'{self._scan_torso_estimate[1]:.3f}, '
+                            f'{self._scan_torso_estimate[2]:.3f}]'
+                        )
                 self.ik_done = False
                 self.pub_ik_enable.publish(Bool(data=True))
-                self.pub_ik_goal.publish(st.goal)
-                p = st.goal.pose.position
+                self.pub_ik_goal.publish(goal)
+                p = goal.pose.position
                 self.get_logger().info(
                     f'🔍 Body scan IK goal: [{p.x:.3f}, {p.y:.3f}, {p.z:.3f}]'
                 )
