@@ -801,12 +801,15 @@ class ImpedanceController(Node):
         )
 
         # Mappa joint-space → Cartesian: F = (J^T)^+ @ tau_ext
-        # Pseudo-inversa smorzata: J (JJ^T + λ²I)^{-1}
-        # λ piccolo evita amplificazione vicino a singolarità senza distorcere il risultato
+        # Formula corretta (damped least-squares):
+        #   J^T @ F = tau_ext  →  F = (J·J^T + λ²I)^{-1} · J · tau_ext
+        # Nota: J è (6 × model.nv) con nv ≥ n_joints (include gripper),
+        #       quindi si usano solo le prime n_joints colonne (braccio).
         lambda_sq = 1e-4
-        JJT = J @ J.T   # 6×6
-        self._F_contact_est = J @ np.linalg.solve(
-            JJT + lambda_sq * np.eye(6), self._tau_ext_filtered
+        J_arm = J[:, :self.n_joints]          # (6 × n_joints)
+        JJT   = J_arm @ J_arm.T               # (6 × 6)
+        self._F_contact_est = np.linalg.solve(
+            JJT + lambda_sq * np.eye(6), J_arm @ self._tau_ext_filtered
         )
 
         # Pubblica su topic dedicato
