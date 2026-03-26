@@ -584,50 +584,33 @@ class Z1FSM(Node):
         zs = (np.linspace(center[2] - ext_z, center[2] + ext_z, nz)
               if nz > 1 else np.array([center[2]]))
 
-        # ── Calcola il look-at target (fisso in world frame) ──────────────
-        # È il punto che l'EE guarda quando è in home; lo stesso punto viene
-        # usato per tutti i nodi della griglia.
-        R_home   = quaternion_matrix(self._home_orientation)[:3, :3]
-        home_xax = R_home[:, 0]                                    # asse X EE in home
-        lookat   = self._home_position + self._body_scan_lookat_dist * home_xax
-
-        self.get_logger().info(
-            f'🎯 Scan look-at: [{lookat[0]:.3f}, {lookat[1]:.3f}, {lookat[2]:.3f}] '
-            f'(home + {self._body_scan_lookat_dist:.2f}m × X_ee_home)'
-        )
-
         now   = self.get_clock().now().to_msg()
         poses = []
 
         # ── Home pose come primo punto ────────────────────────────────────
-        # Il robot è già lì → nessun movimento, raccoglie subito dati con
-        # l'orientamento di home (che punta verso il torso). Questo popola
-        # _scan_torso_estimate prima ancora di spostarsi sulla griglia,
-        # così i punti successivi beneficiano già del look-at dinamico.
+        # Il robot è già lì → nessun movimento iniziale. Raccoglie subito
+        # dati con l'orientamento di home (che punta verso il torso) e
+        # popola _scan_torso_estimate per il look-at dinamico dei punti
+        # successivi.
         home_pose = self._make_home_pose()
         home_pose.header.stamp = now
         poses.append(home_pose)
 
+        # ── Griglia ny × nz con orientamento fisso = home ─────────────────
+        # Tutti i punti della griglia usano l'orientamento di home come
+        # default: il torso è lontano rispetto allo spostamento laterale
+        # (pochi cm), quindi home_orientation punta verso il torso anche
+        # dai punti adiacenti. Il look-at dinamico (SEND_IK handler) sovrascrive
+        # questo orientamento non appena _scan_torso_estimate è disponibile.
+        q = self._home_orientation
         for z in zs:
             for y in ys:
-                pos = np.array([float(center[0]), float(y), float(z)])
-
-                # direzione da questo punto verso il lookat target
-                direction = lookat - pos
-                norm      = np.linalg.norm(direction)
-                if norm < 1e-6:
-                    # coincide col target: usa orientamento home invariato
-                    q = self._home_orientation
-                else:
-                    direction /= norm
-                    q = self._orientation_for_xee(direction)
-
                 p = PoseStamped()
                 p.header.frame_id    = 'world'
                 p.header.stamp       = now
-                p.pose.position.x    = float(pos[0])
-                p.pose.position.y    = float(pos[1])
-                p.pose.position.z    = float(pos[2])
+                p.pose.position.x    = float(center[0])
+                p.pose.position.y    = float(y)
+                p.pose.position.z    = float(z)
                 p.pose.orientation.x = float(q[0])
                 p.pose.orientation.y = float(q[1])
                 p.pose.orientation.z = float(q[2])
