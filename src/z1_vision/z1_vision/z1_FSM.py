@@ -189,8 +189,18 @@ class Z1FSM(Node):
         # _body_scan_done: True dopo che la scan è stata eseguita in questo ciclo
         #   (reset a False quando si torna in HOMING, così ogni ciclo ri-scansiona)
         # _body_scanner: istanza BodySearchScanner, creata in set_state(BODY_SCANNING)
+        # _scan_torso_estimate: ultima posizione 3D valida del torso vista durante
+        #   la scan (da /torso_scan_point). Usata per look-at dinamico: quando
+        #   il tracker inizia a vedere il torso, i goal IK successivi vengono
+        #   riorientati verso la posizione reale invece del look-at fisso pre-calcolato.
         self._body_scan_done: bool                         = False
         self._body_scanner:   BodySearchScanner | None     = None
+        self._scan_torso_estimate: np.ndarray | None       = None
+        # _tracker_ready: True dopo aver ricevuto almeno un messaggio su
+        # /torso_tracker_state. Garantisce che il nodo tracker sia avviato
+        # e il modello YOLO sia caricato prima di iniziare la body scan.
+        self._tracker_ready: bool                          = False
+        self._tracker_wait_logged: float                   = 0.0   # timestamp ultimo warn
 
         self.create_subscription(
             PoseStamped, self.torso_locked_topic, self.on_torso_locked, 10
@@ -202,6 +212,7 @@ class Z1FSM(Node):
         self.create_subscription(Bool,              self.impedance_done_topic, self.on_impedance_done, 10)
         self.create_subscription(String,            self.keyboard_cmd_topic,   self._on_keyboard_cmd,  10)
         self.create_subscription(Float32MultiArray, '/torso_scan_point',       self._on_scan_point,    10)
+        self.create_subscription(String,            '/torso_tracker_state',    self._on_tracker_state, 10)
 
         # ── Publishers ──────────────────────────────────────────────────
         self.pub_ik_enable        = self.create_publisher(Bool,        self.ik_enable_topic,              10)
@@ -328,8 +339,9 @@ class Z1FSM(Node):
             self._wrist_align_start = self.get_clock().now().nanoseconds * 1e-9
 
         if s == self.BODY_SCANNING:
-            self.ik_done      = False
-            poses             = self._generate_scan_poses()
+            self.ik_done               = False
+            self._scan_torso_estimate  = None   # reset stima torso per nuovo ciclo scan
+            poses                      = self._generate_scan_poses()
             self._body_scanner = BodySearchScanner(
                 scan_poses         = poses,
                 scan_point_timeout = self._body_scan_timeout,
@@ -621,6 +633,12 @@ class Z1FSM(Node):
         )
         return poses
 
+    def _on_tracker_state(self, msg: String):
+        """Primo messaggio da /torso_tracker_state → tracker avviato e YOLO caricato."""
+        if not self._tracker_ready:
+            self._tracker_ready = True
+            self.get_logger().info('✅ Torso tracker pronto → body scan abilitata')
+
     def _on_scan_point(self, msg: Float32MultiArray):
         """
         Callback /torso_scan_point: riceve dati per-frame dal tracker
@@ -629,6 +647,12 @@ class Z1FSM(Node):
         """
         if self.state == self.BODY_SCANNING and self._body_scanner is not None:
             self._body_scanner.feed_scan_data(list(msg.data))
+        # Aggiorna stima posizione torso per look-at dinamico.
+        # Salva l'ultima rilevazione 3D valida (score > 0) indipendentemente
+        # dallo stato: se il tracker vede il torso, teniamo la posizione.
+        data = list(msg.data)
+        if len(data) >= 6 and float(data[0]) > 0.0:
+            self._scan_torso_estimate = np.array(data[3:6], dtype=float)
 
     def _make_home_pose(self) -> PoseStamped:
         """Costruisce un PoseStamped con la posizione home definita dai parametri YAML."""
@@ -719,8 +743,19 @@ class Z1FSM(Node):
                     self.get_logger().info("🔓 Lock perso → post_impedance hold rilasciato")
                 else:
                     return
-            # Body scan: se abilitato e non ancora eseguito in questo ciclo
+            # Body scan: se abilitato e non ancora eseguito in questo ciclo.
+            # Aspetta che il tracker sia pronto (YOLO caricato) prima di iniziare:
+            # senza tracker la scan raccoglierebbe solo timeout senza dati.
             if self._scan_on_start and not self._body_scan_done:
+                if not self._tracker_ready:
+                    now = self.get_clock().now().nanoseconds * 1e-9
+                    if now - self._tracker_wait_logged > 5.0:
+                        self._tracker_wait_logged = now
+                        self.get_logger().warn(
+                            '⏳ In attesa che il torso tracker si avvii '
+                            '(nessun messaggio su /torso_tracker_state)...'
+                        )
+                    return
                 self.set_state(self.BODY_SCANNING)
                 return
             if self.torso_target_fresh():
@@ -930,11 +965,38 @@ class Z1FSM(Node):
             st  = self._body_scanner.tick(ik_done=self.ik_done, now=now)
 
             if st.action == ScanAction.SEND_IK:
-                # Invia il prossimo goal IK (posa della griglia o best pose finale)
+                # Invia il prossimo goal IK (posa della griglia o best pose finale).
+                # Se il tracker ha già una stima 3D del torso, ricalcola l'orientamento
+                # del goal per puntare verso quella posizione (look-at dinamico).
+                # Questo migliora la qualità della detection nei punti successivi
+                # rispetto al look-at fisso pre-calcolato.
+                goal = st.goal
+                if self._scan_torso_estimate is not None:
+                    ee_pos    = np.array([goal.pose.position.x,
+                                          goal.pose.position.y,
+                                          goal.pose.position.z])
+                    direction = self._scan_torso_estimate - ee_pos
+                    norm      = np.linalg.norm(direction)
+                    if norm > 1e-6:
+                        direction /= norm
+                        q         = self._orientation_for_xee(direction)
+                        goal      = PoseStamped()
+                        goal.header                = st.goal.header
+                        goal.pose.position         = st.goal.pose.position
+                        goal.pose.orientation.x    = float(q[0])
+                        goal.pose.orientation.y    = float(q[1])
+                        goal.pose.orientation.z    = float(q[2])
+                        goal.pose.orientation.w    = float(q[3])
+                        self.get_logger().info(
+                            f'🎯 Look-at dinamico → torso '
+                            f'[{self._scan_torso_estimate[0]:.3f}, '
+                            f'{self._scan_torso_estimate[1]:.3f}, '
+                            f'{self._scan_torso_estimate[2]:.3f}]'
+                        )
                 self.ik_done = False
                 self.pub_ik_enable.publish(Bool(data=True))
-                self.pub_ik_goal.publish(st.goal)
-                p = st.goal.pose.position
+                self.pub_ik_goal.publish(goal)
+                p = goal.pose.position
                 self.get_logger().info(
                     f'🔍 Body scan IK goal: [{p.x:.3f}, {p.y:.3f}, {p.z:.3f}]'
                 )
