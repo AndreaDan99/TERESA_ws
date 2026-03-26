@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from std_msgs.msg import Bool, Float32MultiArray, String
 from std_srvs.srv import Trigger
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, PointStamped
 from visualization_msgs.msg import Marker
 
 from tf_transformations import quaternion_matrix, quaternion_from_matrix
@@ -223,8 +223,9 @@ class Z1FSM(Node):
         self.pub_ik_goal_marker      = self.create_publisher(Marker, '/ik_goal_marker',       10)
         self.pub_tracker_reset       = self.create_publisher(Bool,  '/tracker_reset',        10)
         # Body scan: comandi al tracker
-        self.pub_tracker_scan_mode   = self.create_publisher(Bool,  '/tracker_scan_mode',    10)
-        self.pub_tracker_scan_next   = self.create_publisher(Bool,  '/tracker_scan_next',    10)
+        self.pub_tracker_scan_mode   = self.create_publisher(Bool,         '/tracker_scan_mode',  10)
+        self.pub_tracker_scan_next   = self.create_publisher(Bool,         '/tracker_scan_next',  10)
+        self.pub_torso_scan_seed     = self.create_publisher(PointStamped, '/torso_scan_seed',    10)
 
         # ── Service clients: switch controller ──────────────────────────
         self.switch_to_torque_client = self.create_client(Trigger, '/safe_switch/to_torque')
@@ -999,12 +1000,27 @@ class Z1FSM(Node):
                 self.pub_tracker_scan_next.publish(Bool(data=True))
 
             elif st.action == ScanAction.EXIT_SCAN_MODE:
-                # Scansione completata, braccio nella best pose:
-                # disattiva scan mode → tracker torna IDLE e lockerà normalmente
+                # Scansione completata, braccio nella best pose.
+                # Pubblica la stima fusa multi-vista come seed per il tracker:
+                # il tracker si inizializzerà direttamente in LOCKED invece di
+                # ricominciare da IDLE → ESTIMATING → LOCKED.
+                fused = (self._body_scanner.fused_torso_xyz()
+                         if self._body_scanner is not None else None)
+                if fused is not None:
+                    seed_msg = PointStamped()
+                    seed_msg.header.stamp    = self.get_clock().now().to_msg()
+                    seed_msg.header.frame_id = 'world'
+                    seed_msg.point.x         = float(fused[0])
+                    seed_msg.point.y         = float(fused[1])
+                    seed_msg.point.z         = float(fused[2])
+                    self.pub_torso_scan_seed.publish(seed_msg)
+                    self.get_logger().info(
+                        f'📍 Seed torso fuso: [{fused[0]:.3f}, {fused[1]:.3f}, {fused[2]:.3f}]'
+                    )
                 self.pub_ik_enable.publish(Bool(data=False))
                 self.pub_tracker_scan_mode.publish(Bool(data=False))
                 self.get_logger().info(
-                    '✅ Body scan completato → WAITING (tracker lockerà da best pose)'
+                    '✅ Body scan completato → WAITING (tracker seedato da stima fusa)'
                 )
                 self._body_scan_done = True
                 self.set_state(self.WAITING)

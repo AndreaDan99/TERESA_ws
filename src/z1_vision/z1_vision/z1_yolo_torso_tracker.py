@@ -166,6 +166,12 @@ class Z1YoloTorsoTracker(Node):
         self.sub_scan_next = self.create_subscription(
             Bool, '/tracker_scan_next', self._cb_scan_next, 10)
 
+        # /torso_scan_seed: stima fusa multi-vista dalla body scan.
+        # Quando ricevuto, il tracker salta direttamente a LOCKED con quella
+        # posizione invece di ricominciare da IDLE → ESTIMATING → LOCKED.
+        self.sub_scan_seed = self.create_subscription(
+            PointStamped, '/torso_scan_seed', self._cb_scan_seed, 10)
+
         # ── Publishers (NUOVA FSM) ─────────────────────────────────
         self.pub_torso_ee          = self.create_publisher(PoseStamped,  '/torso_target_ee',        10)
         self.pub_torso_ee_locked   = self.create_publisher(PoseStamped,  '/torso_target_ee_locked', 10)
@@ -267,6 +273,25 @@ class Z1YoloTorsoTracker(Node):
         self._scan_state = 'IDLE'
         self._scan_valid = 0
         self.get_logger().info('🔄 Scan next: reset punto corrente')
+
+    def _cb_scan_seed(self, msg: PointStamped):
+        """
+        /torso_scan_seed: stima fusa multi-vista dal body scan.
+        Inizializza direttamente LOCKED con la posizione ricevuta, evitando
+        il ciclo IDLE → ESTIMATING → LOCKED. Il tracker verificherà la
+        posizione con le prime detections reali e si adatterà se necessario.
+        """
+        if self._scan_mode:
+            return  # ignora se ancora in scan mode
+        seed = np.array([msg.point.x, msg.point.y, msg.point.z], dtype=float)
+        self.locked_target        = seed
+        self.state                = 'LOCKED'
+        self.drift_counter        = 0
+        self.tracking_current_pos = None
+        self.get_logger().info(
+            f'🎯 Seed scan ricevuto → LOCKED diretto '
+            f'[{seed[0]:.3f}, {seed[1]:.3f}, {seed[2]:.3f}]'
+        )
 
     # ──────────────────────────────────────────────────────────────
     def _camera_to_world(self, point_camera):

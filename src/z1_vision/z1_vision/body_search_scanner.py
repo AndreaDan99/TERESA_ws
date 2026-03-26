@@ -302,6 +302,21 @@ class BodySearchScanner:
         valid = [r for r in self._results if r.score > 0.0]
         return max(valid, key=lambda r: r.score) if valid else None
 
+    def fused_torso_xyz(self) -> Optional[np.ndarray]:
+        """
+        Stima fusa del centro torso: weighted average delle torso_xyz di tutti
+        i punti validi, pesata per score. Più accurata della stima del singolo
+        punto migliore perché combina osservazioni da angolazioni diverse.
+        Ritorna None se nessun punto valido è disponibile.
+        """
+        valid = [r for r in self._results if r.score > 0.0]
+        if not valid:
+            return None
+        total_score = sum(r.score for r in valid)
+        if total_score < 1e-9:
+            return None
+        return sum(r.torso_xyz * r.score for r in valid) / total_score
+
     def _clear_point(self):
         """Azzera i contatori del punto corrente."""
         self._frames_total = 0
