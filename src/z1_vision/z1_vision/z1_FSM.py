@@ -599,6 +599,15 @@ class Z1FSM(Node):
         now   = self.get_clock().now().to_msg()
         poses = []
 
+        # ── Home pose come primo punto ────────────────────────────────────
+        # Il robot è già lì → nessun movimento, raccoglie subito dati con
+        # l'orientamento di home (che punta verso il torso). Questo popola
+        # _scan_torso_estimate prima ancora di spostarsi sulla griglia,
+        # così i punti successivi beneficiano già del look-at dinamico.
+        home_pose = self._make_home_pose()
+        home_pose.header.stamp = now
+        poses.append(home_pose)
+
         for z in zs:
             for y in ys:
                 pos = np.array([float(center[0]), float(y), float(z)])
@@ -627,7 +636,7 @@ class Z1FSM(Node):
 
         self.get_logger().info(
             f'🗺️  Scan grid: {len(poses)} pose '
-            f'(ny={ny} × nz={nz}), '
+            f'(home + ny={ny} × nz={nz}), '
             f'center=[{center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f}], '
             f'ext_y=±{ext_y:.2f} ext_z=±{ext_z:.2f}'
         )

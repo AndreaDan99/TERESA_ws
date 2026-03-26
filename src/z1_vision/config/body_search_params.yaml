@@ -65,7 +65,7 @@ z1_FSM:
 
     # Score oltre il quale si interrompe la scansione anticipatamente
     # (early stop: il punto corrente è già abbastanza buono).
-    body_scan_early_stop: 0.85
+    body_scan_early_stop: 0.95
 
 
 # ── Parametri scan mode nel tracker ────────────────────────────────────────
