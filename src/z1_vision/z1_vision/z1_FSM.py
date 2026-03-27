@@ -776,17 +776,18 @@ class Z1FSM(Node):
         return poses, transit_indices
 
 
-    def _gen_phase3_poses(self) -> tuple[list, set]:
+    def _gen_phase3_poses(self, torso_estimate: np.ndarray) -> tuple[list, set]:
         """
-        Fase 3: un solo punto offset da home, con orientamento home (no look-at).
+        Fase 3: un solo punto offset da home, look-at verso il torso di fase 2.
 
         Posizione: home + [offset_x, offset_y, offset_z]
           +Y = verso i fianchi (asse corpo)
           +Z = verso l'alto
           +X = laterale
 
-        L'orientamento è quello di home → la camera è nello stesso assetto
-        della posizione iniziale, NON puntata verso il torso.
+        Orientamento: look-at verso torso_estimate (fase 2 anchor)
+        → la camera punta verso il centro del torso da questa angolazione
+          laterale/alta, permettendo di vedere spalle e raffinare il centro.
 
         Preceduto da una home transit per garantire convergenza JTC.
         Ritorna (poses, transit_indices).
@@ -796,7 +797,13 @@ class Z1FSM(Node):
             float(self._home_position[1]) + self._body_scan_p3_offset_y,
             float(self._home_position[2]) + self._body_scan_p3_offset_z,
         ])
-        R_home = quaternion_matrix(self._home_orientation)[:3, :3]
+        d    = torso_estimate - pos
+        norm = np.linalg.norm(d)
+        if norm < 1e-6:
+            R_base = quaternion_matrix(self._home_orientation)[:3, :3]
+        else:
+            q_base = self._orientation_for_xee(d / norm)
+            R_base = quaternion_matrix(q_base)[:3, :3]
 
         poses:           list = []
         transit_indices: set  = set()
@@ -806,14 +813,15 @@ class Z1FSM(Node):
         poses.append(self._make_home_pose())
 
         # posa fase 3
-        poses.extend(self._wrist_poses_at(pos, R_home,
+        poses.extend(self._wrist_poses_at(pos, R_base,
                                           ny=self._body_scan_arc_wrist_ny,
                                           nz=self._body_scan_arc_wrist_nz))
         self.get_logger().info(
             f'🗺️  Fase 3: pos=[{pos[0]:.3f},{pos[1]:.3f},{pos[2]:.3f}] '
             f'(home +X={self._body_scan_p3_offset_x:.2f}m '
             f'+Y={self._body_scan_p3_offset_y:.2f}m '
-            f'+Z={self._body_scan_p3_offset_z:.2f}m, orientamento home)'
+            f'+Z={self._body_scan_p3_offset_z:.2f}m, '
+            f'look-at torso [{torso_estimate[0]:.3f},{torso_estimate[1]:.3f},{torso_estimate[2]:.3f}])'
         )
         return poses, transit_indices
 
@@ -1211,7 +1219,10 @@ class Z1FSM(Node):
                     )
                     self._scan_phase2_anchor = (fused_p2 if fused_p2 is not None
                                                 else self._scan_phase1_anchor)
-                    poses_p3, transit_p3 = self._gen_phase3_poses()
+                    a2 = self._scan_phase2_anchor
+                    poses_p3, transit_p3 = self._gen_phase3_poses(
+                        torso_estimate=a2 if a2 is not None else self._scan_phase1_anchor
+                    )
                     self._body_scanner = BodySearchScanner(
                         scan_poses         = poses_p3,
                         scan_point_timeout = self._body_scan_wrist_timeout,
@@ -1227,7 +1238,7 @@ class Z1FSM(Node):
                         f'▶ FASE 3 — Posizione laterale '
                         f'(home +X={self._body_scan_p3_offset_x:.2f}m '
                         f'+Y={self._body_scan_p3_offset_y:.2f}m '
-                        f'+Z={self._body_scan_p3_offset_z:.2f}m, orientamento home)'
+                        f'+Z={self._body_scan_p3_offset_z:.2f}m, look-at torso)'
                     )
 
                 else:
