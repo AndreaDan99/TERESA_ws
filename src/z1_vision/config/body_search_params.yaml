@@ -32,20 +32,19 @@ z1_FSM:
     # Centro dell'arco: coincide con la home position del braccio.
     body_scan_center: [-0.09, 0.00, 0.44]    # [x, y, z] in metri
 
-    # Semi-estensioni dell'arco:
-    #   body_scan_ext_y: ±Y (spalla→fianco del paziente)
-    #   body_scan_ext_z: ±Z (laterale sinistra/destra)
-    # Con ny=2 e nz=2 si ottengono 4 posizioni sull'arco:
-    #   (center_y ± ext_y) × (center_z ± ext_z)
-    # Il centro è omesso (home lo copre come punto 0).
-    body_scan_ext_y: 0.06   # [m]  offset spalla/fianco (piccolo: arco vicino a home)
-    body_scan_ext_z: 0.04   # [m]  offset laterale
+    # Arco fase 2: griglia X×Y, altezza Z fissa = center[2] (uguale a home).
+    #   body_scan_ext_y: ±Y simmetrico (testa→fianchi, entrambe direzioni)
+    #   body_scan_ext_x: solo +X (laterale, una direzione)
+    # Con ny=2 e nx=2 si ottengono 4 posizioni arco:
+    #   xs = [center_x,  center_x + ext_x]
+    #   ys = [center_y - ext_y,  center_y + ext_y]
+    body_scan_ext_y: 0.06   # [m]  offset ±Y (asse corpo, sinistra/destra)
+    body_scan_ext_x: 0.06   # [m]  offset +X (laterale, solo direzione positiva)
 
-    # Numero di punti lungo Y e Z dell'arco (fase 1):
-    # ny=2, nz=2 → 4 posizioni arco + home = 5 posizioni totali
-    # Fase 2: 5 posizioni × 3Y × 3Z = 45 pose polso
+    # Numero di punti lungo Y e X dell'arco (fase 2):
+    # ny=2, nx=2 → 4 posizioni arco (+ 4 home transit = 8 pose totali)
     body_scan_ny: 2
-    body_scan_nz: 2
+    body_scan_nx: 2
 
     # ── Fase 1: home ────────────────────────────────────────────
     # Timeout e frame minimi per il punto home (dà più tempo per la

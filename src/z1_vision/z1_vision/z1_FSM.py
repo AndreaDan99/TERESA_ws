@@ -133,10 +133,10 @@ class Z1FSM(Node):
         # ── Body scan params ─────────────────────────────────────────────
         self.declare_parameter("body_scan_on_start",           True)
         self.declare_parameter("body_scan_center",             [-0.09, 0.00, 0.44])
-        self.declare_parameter("body_scan_ext_y",              0.20)
-        self.declare_parameter("body_scan_ext_z",              0.15)
+        self.declare_parameter("body_scan_ext_y",              0.06)
+        self.declare_parameter("body_scan_ext_x",              0.06)   # solo +X
         self.declare_parameter("body_scan_ny",                 2)
-        self.declare_parameter("body_scan_nz",                 2)
+        self.declare_parameter("body_scan_nx",                 2)
         self.declare_parameter("body_scan_point_timeout",      4.0)
         self.declare_parameter("body_scan_min_frames",         8)
         self.declare_parameter("body_scan_early_stop",         0.95)
@@ -159,9 +159,9 @@ class Z1FSM(Node):
         self._scan_on_start            = bool(self.get_parameter("body_scan_on_start").value)
         self._body_scan_center         = np.array(self.get_parameter("body_scan_center").value, dtype=float)
         self._body_scan_ext_y          = float(self.get_parameter("body_scan_ext_y").value)
-        self._body_scan_ext_z          = float(self.get_parameter("body_scan_ext_z").value)
+        self._body_scan_ext_x          = float(self.get_parameter("body_scan_ext_x").value)
         self._body_scan_ny             = int(self.get_parameter("body_scan_ny").value)
-        self._body_scan_nz             = int(self.get_parameter("body_scan_nz").value)
+        self._body_scan_nx             = int(self.get_parameter("body_scan_nx").value)
         self._body_scan_timeout        = float(self.get_parameter("body_scan_point_timeout").value)
         self._body_scan_min_fr         = int(self.get_parameter("body_scan_min_frames").value)
         self._body_scan_early          = float(self.get_parameter("body_scan_early_stop").value)
@@ -740,26 +740,28 @@ class Z1FSM(Node):
         """
         center = self._body_scan_center
         ny     = self._body_scan_ny
-        nz     = self._body_scan_nz
+        nx     = self._body_scan_nx
         ext_y  = self._body_scan_ext_y
-        ext_z  = self._body_scan_ext_z
+        ext_x  = self._body_scan_ext_x
 
+        # Y: simmetrico ±ext_y (sinistra/destra del corpo)
         ys = (np.linspace(center[1] - ext_y, center[1] + ext_y, ny)
               if ny > 1 else np.array([center[1]]))
-        zs = (np.linspace(center[2] - ext_z, center[2] + ext_z, nz)
-              if nz > 1 else np.array([center[2]]))
+        # X: solo +ext_x (laterale positivo), Z fisso = altezza home
+        xs = (np.linspace(center[0], center[0] + ext_x, nx)
+              if nx > 1 else np.array([center[0]]))
 
         poses: list          = []
         transit_indices: set = set()
 
-        for z in zs:
+        for x in xs:
             for y in ys:
                 # ── home intermedia (transit) ──
                 transit_indices.add(len(poses))
                 poses.append(self._make_home_pose())
 
-                # ── posa arco ──
-                pos = np.array([float(center[0]), float(y), float(z)])
+                # ── posa arco: Z fisso = altezza home ──
+                pos = np.array([float(x), float(y), float(center[2])])
                 d   = torso_estimate - pos
                 norm = np.linalg.norm(d)
                 if norm < 1e-6:
@@ -775,12 +777,12 @@ class Z1FSM(Node):
 
         arc_ny  = self._body_scan_arc_wrist_ny
         arc_nz  = self._body_scan_arc_wrist_nz
-        n_arc   = ny * nz
+        n_arc   = ny * nx
         n_wr    = arc_ny * arc_nz
         self.get_logger().info(
             f'🗺️  Fase 2: {len(poses)} pose totali '
-            f'({n_arc} pos arco × {n_wr} wrist + {n_arc} home transito, '
-            f'look-at verso torso_estimate)'
+            f'({n_arc} pos arco [{ny}Y×{nx}X] × {n_wr} wrist + {n_arc} home transito, '
+            f'Z fisso={center[2]:.3f}m, look-at verso torso_estimate)'
         )
         return poses, transit_indices
 
@@ -1201,7 +1203,7 @@ class Z1FSM(Node):
                         )
                         self._body_scanner.reset()
                         self._scan_phase = 2
-                        n_pos   = self._body_scan_ny * self._body_scan_nz
+                        n_pos   = self._body_scan_ny * self._body_scan_nx
                         ang_y_d = np.degrees(self._body_scan_wrist_ang_y)
                         ang_z_d = np.degrees(self._body_scan_wrist_ang_z)
                         self.get_logger().info('━'*60)
