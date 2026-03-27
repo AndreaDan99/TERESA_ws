@@ -1247,14 +1247,22 @@ class Z1FSM(Node):
                     self._finish_body_scan()
 
             elif st.action == ScanAction.FAILED:
-                # Nessun punto valido trovato: disattiva scan mode, vai in WAITING
-                self.pub_ik_enable.publish(Bool(data=False))
-                self.pub_tracker_scan_mode.publish(Bool(data=False))
-                self.get_logger().warn(
-                    '⚠️  Body scan FAILED (nessun punto valido) → WAITING'
-                )
-                self._body_scan_done = True   # evita loop infinito
-                self.set_state(self.WAITING)
+                if self._scan_phase == 3:
+                    # Fase 3 fallita (es. IK non converge): non è un errore fatale.
+                    # Usiamo la stima di fase 2 già disponibile e completiamo il scan.
+                    self.get_logger().warn(
+                        '⚠️  Fase 3 FAILED (IK/JTC) → uso stima fase 2 come risultato finale'
+                    )
+                    self._finish_body_scan()
+                else:
+                    # Fase 1 o 2 fallita: nessuna stima disponibile → WAITING
+                    self.pub_ik_enable.publish(Bool(data=False))
+                    self.pub_tracker_scan_mode.publish(Bool(data=False))
+                    self.get_logger().warn(
+                        f'⚠️  Body scan FAILED (fase {self._scan_phase}, nessun punto valido) → WAITING'
+                    )
+                    self._body_scan_done = True   # evita loop infinito
+                    self.set_state(self.WAITING)
             # ScanAction.WAIT: nessuna azione
 
         # ── SWITCHING_TO_TORQUE ───────────────────────────────────────────
