@@ -142,6 +142,7 @@ class Z1FSM(Node):
         self.declare_parameter("body_scan_early_stop",         0.95)
         self.declare_parameter("body_scan_fusion_max_dist",    0.15)  # [m] soglia outlier rejection arco/hips
         self.declare_parameter("body_scan_p3_offset_y",        0.20)  # [m] offset verso fianchi (+Y) per fase 3
+        self.declare_parameter("body_scan_p3_offset_z",        0.45)  # [m] offset verso l'alto (+Z) per fase 3
         # Griglia polso: sweep angolare nel frame EE (±angle_y_deg attorno a Y_ee, ±angle_z_deg attorno a Z_ee)
         self.declare_parameter("body_scan_wrist_ny",           3)
         self.declare_parameter("body_scan_wrist_nz",           3)
@@ -161,6 +162,7 @@ class Z1FSM(Node):
         self._body_scan_early          = float(self.get_parameter("body_scan_early_stop").value)
         self._body_scan_fusion_dist    = float(self.get_parameter("body_scan_fusion_max_dist").value)
         self._body_scan_p3_offset_y    = float(self.get_parameter("body_scan_p3_offset_y").value)
+        self._body_scan_p3_offset_z    = float(self.get_parameter("body_scan_p3_offset_z").value)
         self._body_scan_wrist_ny       = int(self.get_parameter("body_scan_wrist_ny").value)
         self._body_scan_wrist_nz       = int(self.get_parameter("body_scan_wrist_nz").value)
         self._body_scan_wrist_ang_y    = float(self.get_parameter("body_scan_wrist_angle_y_deg").value) * np.pi / 180.0
@@ -749,27 +751,31 @@ class Z1FSM(Node):
 
     def _gen_phase3_poses(self, torso_estimate: np.ndarray) -> list:
         """
-        Fase 3: posizione verso i fianchi (+Y), look-at verso torso_estimate.
+        Fase 3: posizione verso i fianchi (+Y) e più in alto (+Z), look-at verso torso_estimate.
+
+        Frame TERESA (home position):
+          X = laterale (sinistra/destra)
+          Y = asse corpo (testa → fianchi)
+          Z = verticale (su)
 
         Il braccio si posiziona a:
-            pos = [x_home, torso_y + p3_offset_y, torso_z]
+            pos = [torso_x,  torso_y + p3_offset_y,  torso_z + p3_offset_z]
 
-        Da questa posizione la camera guarda verso il torso (look-at dinamico)
-        e vede, nella stessa inquadratura:
-          - testa e collo (in alto nel frame)
-          - spalle (al centro)
-          - petto (in basso)
-        Consente di raffinare la stima Y (distanza collo-spalle) e Z (centramento
+        Da questa posizione (lato fianchi, più in alto) la camera guarda verso
+        il torso con look-at dinamico e vede nella stessa inquadratura:
+          - testa e collo
+          - spalle
+          - petto / torso già trovato
+        Consente di raffinare la stima Y (distanza collo-spalle) e X (centramento
         laterale spalla-spalla) rispetto alle fasi precedenti.
 
         La griglia polso ±angle_y_deg × ±angle_z_deg viene applicata sopra il
         look-at base → nessun flip d'asse.
         """
-        offset_y = self._body_scan_p3_offset_y
         pos = np.array([
-            float(self._home_position[0]),
-            float(torso_estimate[1]) + offset_y,
-            float(torso_estimate[2]),
+            float(torso_estimate[0]),
+            float(torso_estimate[1]) + self._body_scan_p3_offset_y,
+            float(torso_estimate[2]) + self._body_scan_p3_offset_z,
         ])
         d    = torso_estimate - pos
         norm = np.linalg.norm(d)
@@ -784,7 +790,9 @@ class Z1FSM(Node):
         ang_z_d = np.degrees(self._body_scan_wrist_ang_z)
         self.get_logger().info(
             f'🗺️  Fase 3: {len(poses)} pose '
-            f'(pos hips: [{pos[0]:.3f},{pos[1]:.3f},{pos[2]:.3f}], '
+            f'(pos: [{pos[0]:.3f},{pos[1]:.3f},{pos[2]:.3f}] '
+            f'+Y={self._body_scan_p3_offset_y:.2f}m fianchi '
+            f'+Z={self._body_scan_p3_offset_z:.2f}m alto, '
             f'±{ang_y_d:.1f}°Y ±{ang_z_d:.1f}°Z, look-at torso)'
         )
         return poses

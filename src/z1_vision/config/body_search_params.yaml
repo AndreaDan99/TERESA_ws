@@ -88,7 +88,9 @@ z1_FSM:
     # verso il torso con look-at dinamico. Da questa angolazione la camera vede
     # testa, collo, spalle e petto nella stessa inquadratura, consentendo di
     # raffinare la stima Y (distanza collo-spalle) e Z (centramento laterale).
-    body_scan_p3_offset_y: 0.20   # [m] offset verso fianchi (+Y)
+    # Frame TERESA (home): X=laterale, Y=testa→fianchi, Z=verticale(su)
+    body_scan_p3_offset_y: 0.20   # [m] offset verso fianchi (+Y, asse corpo)
+    body_scan_p3_offset_z: 0.45   # [m] offset verso l'alto (+Z, verticale)
 
 
 # ── Parametri scan mode nel tracker ────────────────────────────────────────
