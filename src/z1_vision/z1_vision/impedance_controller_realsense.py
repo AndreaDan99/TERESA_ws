@@ -887,6 +887,8 @@ class ImpedanceController(Node):
         self.wrench_pub.publish(msg)
 
     def print_status(self):
+        if not self.impedance_enabled:
+            return   # silenzioso quando il controller è spento
         if self.iteration_count == 0:
             return
         avg_pos = self.sum_error_pos / self.iteration_count

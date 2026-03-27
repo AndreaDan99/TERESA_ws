@@ -362,8 +362,15 @@ class Z1FSM(Node):
             self._scan_phase1_anchor   = None
             self._scan_phase2_anchor   = None
             self._scan_phase           = 1
-            # Fase 1: griglia 2D polso nella HOME position.
-            # Usa wrist_timeout e wrist_min_frames (stesso formato della fase 2).
+            self.get_logger().info('━'*60)
+            self.get_logger().info('🔎 BODY SCAN AVVIATA')
+            self.get_logger().info('━'*60)
+            self.get_logger().info(
+                f'▶ FASE 1 — Home wrist sweep '
+                f'({self._body_scan_wrist_ny}×{self._body_scan_wrist_nz} pose, '
+                f'±{np.degrees(self._body_scan_wrist_ang_y):.0f}°Y '
+                f'±{np.degrees(self._body_scan_wrist_ang_z):.0f}°Z)'
+            )
             self._body_scanner = BodySearchScanner(
                 scan_poses         = self._gen_home_arc_poses(),
                 scan_point_timeout = self._body_scan_wrist_timeout,
@@ -613,9 +620,14 @@ class Z1FSM(Node):
         self.pub_ik_enable.publish(Bool(data=False))
         self.pub_tracker_scan_mode.publish(Bool(data=False))
         self._body_scan_done = True
-        # Torna in HOME prima di WAITING: garantisce configurazione articolare
-        # pulita per il successivo IK dell'approach (evita flip da pose arco).
-        self.get_logger().info('✅ Body scan completato → HOMING → WAITING')
+        self.get_logger().info('━'*60)
+        self.get_logger().info('🏁 BODY SCAN COMPLETATA → HOMING → WAITING')
+        if fused is not None:
+            self.get_logger().info(
+                f'   Stima finale torso: '
+                f'[{fused[0]:.3f}, {fused[1]:.3f}, {fused[2]:.3f}]'
+            )
+        self.get_logger().info('━'*60)
         self._homing_next_state = self.WAITING
         self.set_state(self.HOMING)
 
@@ -1128,9 +1140,11 @@ class Z1FSM(Node):
 
             elif st.action == ScanAction.EXIT_SCAN_MODE:
                 if self._scan_phase == 1:
-                    # ── Fase 1 → Fase 2 ─────────────────────────────────────
+                    # ── Fase 1 completata → Fase 2 ──────────────────────────
+                    self.get_logger().info('✅ FASE 1 completata')
                     if self._scan_torso_estimate is not None:
                         self._scan_phase1_anchor = self._scan_torso_estimate.copy()
+                        a1 = self._scan_phase1_anchor
                         poses_p2 = self._gen_all_wrist_poses(self._scan_torso_estimate)
                         self._body_scanner = BodySearchScanner(
                             scan_poses         = poses_p2,
@@ -1144,22 +1158,24 @@ class Z1FSM(Node):
                         n_pos   = self._body_scan_ny * self._body_scan_nz
                         ang_y_d = np.degrees(self._body_scan_wrist_ang_y)
                         ang_z_d = np.degrees(self._body_scan_wrist_ang_z)
+                        self.get_logger().info('━'*60)
                         self.get_logger().info(
-                            f'🔍 Fase 2: {len(poses_p2)} pose '
-                            f'({n_pos} pos arco × '
-                            f'{self._body_scan_wrist_ny}Y×{self._body_scan_wrist_nz}Z, '
-                            f'±{ang_y_d:.1f}°Y ±{ang_z_d:.1f}°Z), '
-                            f'torso → [{self._scan_torso_estimate[0]:.3f},'
-                            f'{self._scan_torso_estimate[1]:.3f},'
-                            f'{self._scan_torso_estimate[2]:.3f}]'
+                            f'▶ FASE 2 — Arco wrist sweep '
+                            f'({len(poses_p2)} pose, {n_pos} pos × '
+                            f'{self._body_scan_wrist_ny}×{self._body_scan_wrist_nz}, '
+                            f'±{ang_y_d:.0f}°Y ±{ang_z_d:.0f}°Z)'
+                        )
+                        self.get_logger().info(
+                            f'   anchor fase 1: '
+                            f'[{a1[0]:.3f}, {a1[1]:.3f}, {a1[2]:.3f}]'
                         )
                     else:
                         self.get_logger().warn('⚠️  Fase 1 senza detection → skip fase 2+3')
                         self._finish_body_scan()
 
                 elif self._scan_phase == 2:
-                    # ── Fase 2 → Fase 3 ─────────────────────────────────────
-                    # Fonde le misure fase 2 con l'anchor fase 1 → nuovo anchor
+                    # ── Fase 2 completata → Fase 3 ──────────────────────────
+                    self.get_logger().info('✅ FASE 2 completata')
                     fused_p2 = self._body_scanner.fused_torso_xyz(
                         anchor   = self._scan_phase1_anchor,
                         max_dist = self._body_scan_fusion_dist,
@@ -1167,7 +1183,8 @@ class Z1FSM(Node):
                     self._scan_phase2_anchor = (fused_p2 if fused_p2 is not None
                                                 else self._scan_phase1_anchor)
                     if self._scan_phase2_anchor is not None:
-                        poses_p3 = self._gen_phase3_poses(self._scan_phase2_anchor)
+                        a2 = self._scan_phase2_anchor
+                        poses_p3 = self._gen_phase3_poses(a2)
                         self._body_scanner = BodySearchScanner(
                             scan_poses         = poses_p3,
                             scan_point_timeout = self._body_scan_wrist_timeout,
@@ -1177,10 +1194,14 @@ class Z1FSM(Node):
                         )
                         self._body_scanner.reset()
                         self._scan_phase = 3
-                        a = self._scan_phase2_anchor
+                        self.get_logger().info('━'*60)
                         self.get_logger().info(
-                            f'🔍 Fase 3: posizione hips, torso anchor → '
-                            f'[{a[0]:.3f},{a[1]:.3f},{a[2]:.3f}]'
+                            f'▶ FASE 3 — Posizione hips '
+                            f'({len(poses_p3)} pose, offset +Y={self._body_scan_p3_offset_y:.2f}m)'
+                        )
+                        self.get_logger().info(
+                            f'   anchor fase 2: '
+                            f'[{a2[0]:.3f}, {a2[1]:.3f}, {a2[2]:.3f}]'
                         )
                     else:
                         self.get_logger().warn('⚠️  Fase 2 senza anchor → skip fase 3')
@@ -1188,7 +1209,7 @@ class Z1FSM(Node):
 
                 else:
                     # ── Fase 3 completata → fine scan ───────────────────────
-                    self._finish_body_scan()
+                    self.get_logger().info('✅ FASE 3 completata')
 
             elif st.action == ScanAction.FAILED:
                 # Nessun punto valido trovato: disattiva scan mode, vai in WAITING
