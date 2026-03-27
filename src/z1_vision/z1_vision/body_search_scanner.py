@@ -118,6 +118,7 @@ class BodySearchScanner:
         self._idx:       int               = 0        # indice pose corrente
         self._results:   list[_PointResult] = []
         self._point_t0:  float             = 0.0      # timestamp inizio raccolta
+        self._move_start: float            = -1.0     # timestamp inizio attesa IK (-1=non avviato)
         self._best_sent: bool              = False    # goal BEST_MOVING già inviato
 
         # Dati accumulati per il punto corrente
@@ -136,9 +137,10 @@ class BodySearchScanner:
         self._state     = _St.INIT
         self._idx       = 0
         self._results   = []
-        self._point_t0  = 0.0
-        self._best_sent = False
-        self._pending   = []
+        self._point_t0   = 0.0
+        self._move_start = -1.0
+        self._best_sent  = False
+        self._pending    = []
         self._clear_point()
 
     def feed_scan_data(self, data: list[float]):
@@ -184,8 +186,33 @@ class BodySearchScanner:
 
     def _t_moving(self, ik_done: bool, now: float) -> ScanTick:
         if not ik_done:
+            # Inizializza timer al primo tick di MOVING
+            if self._move_start < 0.0:
+                self._move_start = now
+            # Timeout: IK/JTC non ha risposto → skip posa con score=0
+            if now - self._move_start > self._timeout:
+                self._log_w(
+                    f"⏱️ IK timeout (>{self._timeout:.1f}s) posa "
+                    f"{self._idx + 1}/{len(self._poses)} → skip score=0"
+                )
+                self._results.append(_PointResult(
+                    arm_pose  = self._poses[self._idx],
+                    score     = 0.0,
+                    torso_xyz = np.zeros(3),
+                ))
+                self._idx += 1
+                if self._idx >= len(self._poses):
+                    best = self._best()
+                    if best is None:
+                        self._state = _St.FAILED
+                        return ScanTick(ScanAction.FAILED)
+                    self._state = _St.BEST_MOVING
+                    return ScanTick(ScanAction.SEND_IK, goal=best.arm_pose)
+                self._move_start = -1.0
+                return ScanTick(ScanAction.SEND_IK, goal=self._poses[self._idx])
             return ScanTick(ScanAction.WAIT)
-        # Arrivati alla posa: resetta tracker per raccogliere dati puliti
+        # Arrivati alla posa: resetta timer e raccoglie dati puliti
+        self._move_start = -1.0
         self._clear_point()
         self._pending.clear()
         self._point_t0 = now

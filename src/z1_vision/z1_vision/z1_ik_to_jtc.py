@@ -319,10 +319,25 @@ class Z1IKToJTC(Node):
         result_future.add_done_callback(self.result_callback)
 
     def result_callback(self, future):
-        self.get_logger().info("🏁 Trajectory completed -> publishing /ik_done=True")
+        try:
+            result = future.result().result
+            # error_code == 0 → SUCCESSFUL
+            if hasattr(result, 'error_code') and result.error_code != 0:
+                self.get_logger().warn(
+                    f"⚠️  JTC non convergente (error_code={result.error_code}: "
+                    f"{getattr(result, 'error_string', '')}) "
+                    f"→ ik_done=True per skip posa"
+                )
+            else:
+                self.get_logger().info("🏁 Trajectory completed")
+        except Exception as e:
+            self.get_logger().warn(f"⚠️  result_callback exception: {e}")
+
+        # Pubblica sempre ik_done=True (successo o fallimento) così
+        # il scanner può avanzare alla posa successiva senza bloccarsi.
         self.pub_done.publish(Bool(data=True))
 
-        # reset interno: attendo nuovo ciclo FSM (nuovo goal + enable)
+        # reset interno
         self.busy = False
         self.last_goal = None
         self.ik_enabled = False

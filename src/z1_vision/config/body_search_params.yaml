@@ -38,8 +38,8 @@ z1_FSM:
     # Con ny=2 e nz=2 si ottengono 4 posizioni sull'arco:
     #   (center_y ± ext_y) × (center_z ± ext_z)
     # Il centro è omesso (home lo copre come punto 0).
-    body_scan_ext_y: 0.20   # [m]  offset spalla/fianco
-    body_scan_ext_z: 0.15   # [m]  offset laterale
+    body_scan_ext_y: 0.18   # [m]  offset spalla/fianco
+    body_scan_ext_z: 0.10   # [m]  offset laterale
 
     # Numero di punti lungo Y e Z dell'arco (fase 2):
     # ny=2, nz=2 → 4 posizioni arco × 6 wrist = 24 pose fase 2
@@ -56,8 +56,8 @@ z1_FSM:
     # Numero di orientamenti polso per ogni posizione arco.
     # Rotazione attorno all'asse X_ee (look-at) da -angle a +angle.
     body_scan_wrist_steps:      6      # orientamenti polso per posizione
-    body_scan_wrist_angle_deg:  25.0   # [°] range sweep polso (±25°)
-    body_scan_wrist_timeout:    1.5    # [s] timeout per singola wrist pose
+    body_scan_wrist_angle_deg:  18.0   # [°] range sweep polso (±18°)
+    body_scan_wrist_timeout:    2.0    # [s] timeout per singola wrist pose (include IK timeout)
     body_scan_wrist_min_frames: 5      # frame minimi per wrist pose
 
     # Score oltre il quale si interrompe la scansione anticipatamente.
