@@ -159,7 +159,7 @@ class BodySearchScanner:
         elif self._state == _St.MOVING:      return self._t_moving(ik_done, now)
         elif self._state == _St.RESETTING:   return self._t_resetting(now)
         elif self._state == _St.COLLECTING:  return self._t_collecting(now)
-        elif self._state == _St.BEST_MOVING: return self._t_best_moving(ik_done)
+        elif self._state == _St.BEST_MOVING: return self._t_best_moving(ik_done, now)
         elif self._state == _St.EXITING:
             self._state = _St.DONE
             return ScanTick(ScanAction.EXIT_SCAN_MODE)
@@ -288,13 +288,14 @@ class BodySearchScanner:
         self._state = _St.MOVING
         return ScanTick(ScanAction.SEND_IK, goal=self._poses[self._idx])
 
-    def _t_best_moving(self, ik_done: bool) -> ScanTick:
+    def _t_best_moving(self, ik_done: bool, now: float) -> ScanTick:
         if not self._best_sent:
             best = self._best()
             if best is None:
                 self._state = _St.FAILED
                 return ScanTick(ScanAction.FAILED)
-            self._best_sent = True
+            self._best_sent  = True
+            self._move_start = now   # avvia timer timeout
             self._log_i(
                 f"🏆 Verso best pose (score={best.score:.3f}) "
                 f"torso=[{best.torso_xyz[0]:.3f}, "
@@ -304,6 +305,13 @@ class BodySearchScanner:
             return ScanTick(ScanAction.SEND_IK, goal=best.arm_pose)
 
         if not ik_done:
+            # Timeout: se IK non risponde entro il timeout, procedi comunque
+            if self._move_start >= 0.0 and now - self._move_start > self._timeout:
+                self._log_w(
+                    f"⏱️ Best-pose IK timeout (>{self._timeout:.1f}s) → EXITING comunque"
+                )
+                self._state = _St.EXITING
+                return ScanTick(ScanAction.WAIT)
             return ScanTick(ScanAction.WAIT)
 
         # Arrivati alla best pose → disattiva scan mode
