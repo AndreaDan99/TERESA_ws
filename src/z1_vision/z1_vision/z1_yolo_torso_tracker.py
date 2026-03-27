@@ -42,6 +42,7 @@ STATE_COLORS = {
     'IDLE':       ColorRGBA(r=0.5, g=0.5, b=0.5, a=0.5),  # grigio
     'ESTIMATING': ColorRGBA(r=1.0, g=0.5, b=0.0, a=0.9),  # arancione
     'LOCKED':     ColorRGBA(r=0.0, g=1.0, b=0.0, a=0.9),  # verde
+    'SCANNING':   ColorRGBA(r=0.0, g=1.0, b=1.0, a=0.9),  # ciano (scan mode)
 }
 
 
@@ -197,9 +198,10 @@ class Z1YoloTorsoTracker(Node):
         # _scan_mode:  True quando la FSM ha attivato la modalità scan
         # _scan_state: stato interno della scan  (IDLE / COLLECTING / POINT_LOCKED)
         # _scan_valid: contatore frame validi accumulati nel punto corrente
-        self._scan_mode  = False
-        self._scan_state = 'IDLE'       # IDLE | COLLECTING | POINT_LOCKED
-        self._scan_valid = 0
+        self._scan_mode        = False
+        self._scan_state       = 'IDLE'   # IDLE | COLLECTING | POINT_LOCKED
+        self._scan_valid       = 0
+        self._scan_torso_world = None     # ultima posizione torso rilevata in scan mode
 
         # ── Interpolazione tracking (invariata) ────────────────────
         self.tracking_current_pos = None  # world frame
@@ -376,9 +378,14 @@ class Z1YoloTorsoTracker(Node):
             self._update_state(torso_raw, n_valid, avg_conf, rgb_msg.header)
 
         # ── Markers ───────────────────────────────────────────────
-        target = self.locked_target if self.locked_target is not None \
-                 else (self._camera_to_world(self.kf.get_position())
-                       if self.kf.initialized else None)
+        if self._scan_mode:
+            # Scan mode: usa ultima posizione torso rilevata (ciano)
+            target = self._scan_torso_world
+        else:
+            # Normale: usa locked_target o stima Kalman (colore per stato)
+            target = self.locked_target if self.locked_target is not None \
+                     else (self._camera_to_world(self.kf.get_position())
+                           if self.kf.initialized else None)
         if target is not None:
             self._publish_markers(target, kp_3d, rgb_msg.header)
 
@@ -474,6 +481,10 @@ class Z1YoloTorsoTracker(Node):
         else:
             per_frame_score = 0.0
             torso_world     = None
+
+        # Aggiorna ultima posizione nota in scan mode (usata dai marker)
+        if torso_world is not None:
+            self._scan_torso_world = torso_world
 
         # ── Pubblica dato per-frame ──
         if torso_world is not None:
@@ -668,7 +679,8 @@ class Z1YoloTorsoTracker(Node):
         frame   = 'world'
         stamp   = self.get_clock().now().to_msg()
         markers = MarkerArray()
-        color   = STATE_COLORS.get(self.state, STATE_COLORS['IDLE'])
+        color   = (STATE_COLORS['SCANNING'] if self._scan_mode
+                   else STATE_COLORS.get(self.state, STATE_COLORS['IDLE']))
 
         # 1. Pallino centrale
         cm = Marker()
