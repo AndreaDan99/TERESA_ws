@@ -140,6 +140,7 @@ class Z1FSM(Node):
         self.declare_parameter("body_scan_point_timeout",      4.0)
         self.declare_parameter("body_scan_min_frames",         8)
         self.declare_parameter("body_scan_early_stop",         0.95)
+        self.declare_parameter("body_scan_fusion_max_dist",    0.15)  # [m] soglia outlier rejection arco
         # Griglia polso: sweep angolare nel frame EE (±angle_y_deg attorno a Y_ee, ±angle_z_deg attorno a Z_ee)
         self.declare_parameter("body_scan_wrist_ny",           3)
         self.declare_parameter("body_scan_wrist_nz",           3)
@@ -157,6 +158,7 @@ class Z1FSM(Node):
         self._body_scan_timeout        = float(self.get_parameter("body_scan_point_timeout").value)
         self._body_scan_min_fr         = int(self.get_parameter("body_scan_min_frames").value)
         self._body_scan_early          = float(self.get_parameter("body_scan_early_stop").value)
+        self._body_scan_fusion_dist    = float(self.get_parameter("body_scan_fusion_max_dist").value)
         self._body_scan_wrist_ny       = int(self.get_parameter("body_scan_wrist_ny").value)
         self._body_scan_wrist_nz       = int(self.get_parameter("body_scan_wrist_nz").value)
         self._body_scan_wrist_ang_y    = float(self.get_parameter("body_scan_wrist_angle_y_deg").value) * np.pi / 180.0
@@ -205,6 +207,7 @@ class Z1FSM(Node):
         self._body_scan_done: bool                         = False
         self._body_scanner:   BodySearchScanner | None     = None
         self._scan_torso_estimate: np.ndarray | None       = None
+        self._scan_phase1_anchor:  np.ndarray | None       = None  # stima torso fine fase 1 (anchor per outlier rejection)
         self._scan_phase: int                              = 1  # 1=home, 2=arc+wrist
         # _tracker_ready: True dopo aver ricevuto almeno un messaggio su
         # /torso_tracker_state. Garantisce che il nodo tracker sia avviato
@@ -369,7 +372,8 @@ class Z1FSM(Node):
         if s == self.HOMING:
             self.ik_done              = False
             self._homing_command_sent = False
-            self._body_scan_done      = False   # ri-scansiona al prossimo ciclo
+            # NON resettare _body_scan_done qui: il reset va fatto solo su
+            # comando esplicito 'home' / 'reset', non dopo il body scan.
 
         if s == self.EMERGENCY_SWITCHING:
             self._switch_future = None
@@ -580,7 +584,10 @@ class Z1FSM(Node):
     # ──────────────────────────────────────────────────────────────
     def _finish_body_scan(self):
         """Pubblica seed fuso, disattiva scan mode, torna in HOME poi WAITING."""
-        fused = (self._body_scanner.fused_torso_xyz()
+        fused = (self._body_scanner.fused_torso_xyz(
+                     anchor   = self._scan_phase1_anchor,
+                     max_dist = self._body_scan_fusion_dist,
+                 )
                  if self._body_scanner is not None else None)
         if fused is not None:
             seed_msg = PointStamped()
@@ -784,6 +791,7 @@ class Z1FSM(Node):
             self.pub_ik_enable.publish(Bool(data=False))
             self.pub_impedance_enable.publish(Bool(data=False))
             self._homing_next_state = self.WAITING
+            self._body_scan_done = False   # ri-scansiona al prossimo ciclo
             if self.state in self._TORQUE_STATES:
                 self.set_state(self.EMERGENCY_SWITCHING)
             else:
@@ -798,6 +806,7 @@ class Z1FSM(Node):
                 return
             self.get_logger().info("🔄 RESET → HOMING → WAITING")
             self._homing_next_state = self.WAITING
+            self._body_scan_done = False   # ri-scansiona al prossimo ciclo
             self.set_state(self.HOMING)
 
     # =================================================================== #
@@ -1067,8 +1076,10 @@ class Z1FSM(Node):
 
             elif st.action == ScanAction.EXIT_SCAN_MODE:
                 if self._scan_phase == 1:
-                    # Fase 1 completata: avvia wrist sweep su TUTTE le posizioni
+                    # Fase 1 completata: salva anchor (stima home, alta fiducia)
+                    # poi avvia wrist sweep su TUTTE le posizioni
                     if self._scan_torso_estimate is not None:
+                        self._scan_phase1_anchor = self._scan_torso_estimate.copy()
                         poses_p2 = self._gen_all_wrist_poses(
                             self._scan_torso_estimate
                         )

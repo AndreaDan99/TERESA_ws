@@ -342,16 +342,47 @@ class BodySearchScanner:
         valid = [r for r in self._results if r.score > 0.0]
         return max(valid, key=lambda r: r.score) if valid else None
 
-    def fused_torso_xyz(self) -> Optional[np.ndarray]:
+    def fused_torso_xyz(
+        self,
+        anchor:   Optional[np.ndarray] = None,
+        max_dist: Optional[float]      = None,
+    ) -> Optional[np.ndarray]:
         """
-        Stima fusa del centro torso: weighted average delle torso_xyz di tutti
-        i punti validi, pesata per score. Più accurata della stima del singolo
-        punto migliore perché combina osservazioni da angolazioni diverse.
+        Stima fusa del centro torso: weighted average delle torso_xyz valide,
+        pesata per score.
+
+        Se `anchor` e `max_dist` sono forniti, applica outlier rejection:
+          - Include solo le misure con |torso_xyz - anchor| <= max_dist
+          - Se nessuna misura supera il filtro, ritorna l'anchor stesso
+            (massima fiducia nella stima home)
+
         Ritorna None se nessun punto valido è disponibile.
         """
         valid = [r for r in self._results if r.score > 0.0]
         if not valid:
             return None
+
+        if anchor is not None and max_dist is not None:
+            consistent = [r for r in valid
+                          if np.linalg.norm(r.torso_xyz - anchor) <= max_dist]
+            if consistent:
+                if len(consistent) < len(valid):
+                    n_rej = len(valid) - len(consistent)
+                    if self._log:
+                        self._log.info(
+                            f'🔍 Fusion: {n_rej} misure arco scartate '
+                            f'(dist > {max_dist:.2f}m dall\'anchor home)'
+                        )
+                valid = consistent
+            else:
+                # Nessuna misura arco coerente → usa solo l'anchor
+                if self._log:
+                    self._log.warn(
+                        f'⚠️  Fusion: tutte le misure arco lontane dall\'anchor '
+                        f'(>{max_dist:.2f}m) → uso stima home'
+                    )
+                return anchor.copy()
+
         total_score = sum(r.score for r in valid)
         if total_score < 1e-9:
             return None
