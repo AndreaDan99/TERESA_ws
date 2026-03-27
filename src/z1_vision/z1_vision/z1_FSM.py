@@ -616,6 +616,15 @@ class Z1FSM(Node):
                      max_dist = self._body_scan_fusion_dist,
                  )
                  if self._body_scanner is not None else None)
+
+        # Se il scanner non ha risultati validi (es. fase 3 con IK fallita),
+        # usa l'anchor della fase precedente come seed di fallback.
+        if fused is None and anchor is not None:
+            fused = anchor.copy()
+            self.get_logger().warn(
+                '⚠️  Scanner senza risultati validi → uso anchor come seed di fallback'
+            )
+
         if fused is not None:
             seed_msg = PointStamped()
             seed_msg.header.stamp    = self.get_clock().now().to_msg()
