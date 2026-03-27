@@ -687,12 +687,8 @@ class ImpedanceController(Node):
             # Rolloff quadratico: forza → 0 man mano che ci si avvicina alla singolarità
             manip_scale = (manip / self.manip_threshold) ** 2
             F_cartesian[:3] *= manip_scale
-            if manip < self.manip_threshold * 0.5:
-                self.get_logger().warn(
-                    f'⚠️  Singolarità vicina! manip={manip:.4f} '
-                    f'(soglia={self.manip_threshold:.3f}) → F scalata a {manip_scale*100:.0f}%',
-                    throttle_duration_sec=1.0,
-                )
+            # (log singolarità disabilitato — visibile in print_status via manip)
+            pass
 
         F_cartesian[:3] = np.clip(F_cartesian[:3], -F_max, F_max)
 
@@ -729,13 +725,7 @@ class ImpedanceController(Node):
         mask_lo = q_cur < (q_lo + margin)
         tau_jl[mask_hi] = -self.jl_k * (q_cur[mask_hi] - (q_hi - margin)[mask_hi])
         tau_jl[mask_lo] =  self.jl_k * ((q_lo + margin)[mask_lo] - q_cur[mask_lo])
-        if np.any(mask_hi | mask_lo):
-            active = np.where(mask_hi | mask_lo)[0]
-            self.get_logger().warn(
-                f'⚠️  Limite giunto attivo: J{active + 1} | '
-                f'τ_jl={np.round(tau_jl[active], 2)}',
-                throttle_duration_sec=1.0,
-            )
+        # (log limite giunto disabilitato — l'azione repulsiva è attiva silenziosamente)
         tau_impedance += tau_jl
 
         tau_comp  = self.compute_compensation()
