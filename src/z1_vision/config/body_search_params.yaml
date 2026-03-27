@@ -65,12 +65,18 @@ z1_FSM:
     # Vantaggi rispetto agli offset spaziali:
     #   - Movimenti simmetrici e predicibili
     #   - Nessun flip d'asse (perturbazione locale nel frame EE)
-    body_scan_wrist_ny:          3      # passi griglia lungo Y_ee (tilt su/giù)
-    body_scan_wrist_nz:          3      # passi griglia lungo Z_ee (pan sx/dx)
+    body_scan_wrist_ny:          3      # passi griglia lungo Y_ee (tilt su/giù) — FASE 1 (home)
+    body_scan_wrist_nz:          3      # passi griglia lungo Z_ee (pan sx/dx)  — FASE 1 (home)
     body_scan_wrist_angle_y_deg: 12.0   # [deg] semi-range rotazione attorno a Y_ee
     body_scan_wrist_angle_z_deg: 12.0   # [deg] semi-range rotazione attorno a Z_ee
     body_scan_wrist_timeout:     2.0    # [s] timeout per singola pose
     body_scan_wrist_min_frames:  5      # frame minimi per pose
+
+    # Griglia polso per le posizioni ARCO (fase 2).
+    # Con 1×1 ogni posizione arco usa solo il look-at centrale (nessun sweep angolare),
+    # evitando pose estreme che causano non-convergenza del JTC.
+    body_scan_arc_wrist_ny:      1      # passi griglia polso arco lungo Y_ee
+    body_scan_arc_wrist_nz:      1      # passi griglia polso arco lungo Z_ee
 
     # Score oltre il quale si interrompe la scansione anticipatamente.
     body_scan_early_stop: 0.95

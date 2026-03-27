@@ -106,12 +106,14 @@ class BodySearchScanner:
         scan_min_frames:    int   = 8,
         early_stop_score:   float = 0.85,
         logger: Any = None,
+        transit_indices:    set[int] | None = None,
     ):
-        self._poses      = scan_poses
-        self._timeout    = scan_point_timeout
-        self._min_frames = scan_min_frames
-        self._early_stop = early_stop_score
-        self._log        = logger
+        self._poses          = scan_poses
+        self._timeout        = scan_point_timeout
+        self._min_frames     = scan_min_frames
+        self._early_stop     = early_stop_score
+        self._log            = logger
+        self._transit        = transit_indices or set()
 
         # Stato della macchina a stati interna
         self._state:     _St               = _St.INIT
@@ -189,17 +191,19 @@ class BodySearchScanner:
             # Inizializza timer al primo tick di MOVING
             if self._move_start < 0.0:
                 self._move_start = now
-            # Timeout: IK/JTC non ha risposto → skip posa con score=0
+            # Timeout: IK/JTC non ha risposto → skip posa
             if now - self._move_start > self._timeout:
                 self._log_w(
                     f"⏱️ IK timeout (>{self._timeout:.1f}s) posa "
-                    f"{self._idx + 1}/{len(self._poses)} → skip score=0"
+                    f"{self._idx + 1}/{len(self._poses)} → skip"
                 )
-                self._results.append(_PointResult(
-                    arm_pose  = self._poses[self._idx],
-                    score     = 0.0,
-                    torso_xyz = np.zeros(3),
-                ))
+                # Le pose di transito non generano un risultato
+                if self._idx not in self._transit:
+                    self._results.append(_PointResult(
+                        arm_pose  = self._poses[self._idx],
+                        score     = 0.0,
+                        torso_xyz = np.zeros(3),
+                    ))
                 self._idx += 1
                 if self._idx >= len(self._poses):
                     best = self._best()
@@ -211,10 +215,25 @@ class BodySearchScanner:
                 self._move_start = -1.0
                 return ScanTick(ScanAction.SEND_IK, goal=self._poses[self._idx])
             return ScanTick(ScanAction.WAIT)
-        # Arrivati alla posa: resetta timer e raccoglie dati puliti
+        # Arrivati alla posa
         self._move_start = -1.0
-        self._clear_point()
         self._pending.clear()
+
+        # Posa di transito: nessuna raccolta dati, avanza subito alla successiva
+        if self._idx in self._transit:
+            self._log_i(f"🔀 Transito {self._idx + 1}/{len(self._poses)}: home intermedia → posa successiva")
+            self._idx += 1
+            if self._idx >= len(self._poses):
+                best = self._best()
+                if best is None:
+                    self._state = _St.FAILED
+                    return ScanTick(ScanAction.FAILED)
+                self._state = _St.BEST_MOVING
+                return ScanTick(ScanAction.SEND_IK, goal=best.arm_pose)
+            self._move_start = -1.0
+            return ScanTick(ScanAction.SEND_IK, goal=self._poses[self._idx])
+
+        self._clear_point()
         self._point_t0 = now
         self._state    = _St.RESETTING
         self._log_i(f"📍 Punto {self._idx + 1}/{len(self._poses)}: arrivato → reset tracker")

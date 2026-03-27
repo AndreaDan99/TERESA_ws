@@ -143,13 +143,17 @@ class Z1FSM(Node):
         self.declare_parameter("body_scan_fusion_max_dist",    0.15)  # [m] soglia outlier rejection arco/hips
         self.declare_parameter("body_scan_p3_offset_y",        0.20)  # [m] offset verso fianchi (+Y) per fase 3
         self.declare_parameter("body_scan_p3_offset_z",        0.45)  # [m] offset verso l'alto (+Z) per fase 3
-        # Griglia polso: sweep angolare nel frame EE (±angle_y_deg attorno a Y_ee, ±angle_z_deg attorno a Z_ee)
+        # Griglia polso fase 1 e 3: sweep angolare nel frame EE
         self.declare_parameter("body_scan_wrist_ny",           3)
         self.declare_parameter("body_scan_wrist_nz",           3)
-        self.declare_parameter("body_scan_wrist_angle_y_deg",  12.0)   # [deg] semi-range rotazione Y_ee
-        self.declare_parameter("body_scan_wrist_angle_z_deg",  12.0)   # [deg] semi-range rotazione Z_ee
+        self.declare_parameter("body_scan_wrist_angle_y_deg",  12.0)
+        self.declare_parameter("body_scan_wrist_angle_z_deg",  12.0)
         self.declare_parameter("body_scan_wrist_timeout",      1.5)
         self.declare_parameter("body_scan_wrist_min_frames",   5)
+        # Griglia polso fase 2 (arco): default 1×1 = solo look-at centrale
+        # Evita combinazioni arco+wrist che portano fuori workspace/JTC.
+        self.declare_parameter("body_scan_arc_wrist_ny",       1)
+        self.declare_parameter("body_scan_arc_wrist_nz",       1)
 
         self._scan_on_start            = bool(self.get_parameter("body_scan_on_start").value)
         self._body_scan_center         = np.array(self.get_parameter("body_scan_center").value, dtype=float)
@@ -169,6 +173,8 @@ class Z1FSM(Node):
         self._body_scan_wrist_ang_z    = float(self.get_parameter("body_scan_wrist_angle_z_deg").value) * np.pi / 180.0
         self._body_scan_wrist_timeout  = float(self.get_parameter("body_scan_wrist_timeout").value)
         self._body_scan_wrist_min_fr   = int(self.get_parameter("body_scan_wrist_min_frames").value)
+        self._body_scan_arc_wrist_ny   = int(self.get_parameter("body_scan_arc_wrist_ny").value)
+        self._body_scan_arc_wrist_nz   = int(self.get_parameter("body_scan_arc_wrist_nz").value)
 
         # ── WorkspaceChecker (Pinocchio, bloccante → thread) ────────────
         try:
@@ -633,18 +639,20 @@ class Z1FSM(Node):
         self._homing_next_state = self.WAITING
         self.set_state(self.HOMING)
 
-    def _wrist_poses_at(self, pos: np.ndarray, R_base: np.ndarray) -> list:
+    def _wrist_poses_at(self, pos: np.ndarray, R_base: np.ndarray,
+                        ny: int | None = None, nz: int | None = None) -> list:
         """
-        Genera una griglia wrist_ny × wrist_nz di PoseStamped nella posizione `pos`.
+        Genera una griglia ny × nz di PoseStamped nella posizione `pos`.
 
         Ogni orientamento è:   R_base @ Ry(alpha) @ Rz(beta)
         dove alpha ∈ [-ang_y, ..., +ang_y] e beta ∈ [-ang_z, ..., +ang_z].
 
         R_base viene perturbato nel suo proprio frame EE → nessun flip d'asse,
         movimenti piccoli e simmetrici attorno alla direzione base.
+        Se ny/nz non specificati, usa i valori di default (fase 1: home sweep).
         """
-        n_y   = self._body_scan_wrist_ny
-        n_z   = self._body_scan_wrist_nz
+        n_y   = ny if ny is not None else self._body_scan_wrist_ny
+        n_z   = nz if nz is not None else self._body_scan_wrist_nz
         ang_y = self._body_scan_wrist_ang_y
         ang_z = self._body_scan_wrist_ang_z
         now   = self.get_clock().now().to_msg()
@@ -701,17 +709,23 @@ class Z1FSM(Node):
         )
         return poses
 
-    def _gen_all_wrist_poses(self, torso_estimate: np.ndarray) -> list:
+    def _gen_all_wrist_poses(self, torso_estimate: np.ndarray) -> tuple[list, set]:
         """
         Fase 2: posizioni ARCO × griglia angolare EE.
         (Home già visitata in fase 1.)
 
-        Per ogni posizione arco `pos`:
-          - Base = look-at verso torso_estimate (solo centro, no offset spaziali)
-          - Griglia wrist_ny × wrist_nz: R_base @ Ry(alpha) @ Rz(beta)
+        Per ogni posizione arco viene inserita prima una posa home intermedia
+        (transit, solo movimento, nessuna raccolta dati) in modo da spezzare
+        il percorso e facilitare la convergenza del JTC.
 
-        La camera punta sempre verso il torso rilevato + piccole perturbazioni
-        nel frame EE → nessun flip d'asse.
+        Struttura lista risultante (arc_wrist_ny=arc_wrist_nz=1):
+          idx 0: home (transit)
+          idx 1: arco pos 1
+          idx 2: home (transit)
+          idx 3: arco pos 2
+          ...
+
+        Ritorna (poses, transit_indices).
         """
         center = self._body_scan_center
         ny     = self._body_scan_ny
@@ -724,9 +738,16 @@ class Z1FSM(Node):
         zs = (np.linspace(center[2] - ext_z, center[2] + ext_z, nz)
               if nz > 1 else np.array([center[2]]))
 
-        poses = []
+        poses: list          = []
+        transit_indices: set = set()
+
         for z in zs:
             for y in ys:
+                # ── home intermedia (transit) ──
+                transit_indices.add(len(poses))
+                poses.append(self._make_home_pose())
+
+                # ── posa arco ──
                 pos = np.array([float(center[0]), float(y), float(z)])
                 d   = torso_estimate - pos
                 norm = np.linalg.norm(d)
@@ -735,18 +756,22 @@ class Z1FSM(Node):
                 else:
                     q_base = self._orientation_for_xee(d / norm)
                     R_base = quaternion_matrix(q_base)[:3, :3]
-                poses.extend(self._wrist_poses_at(pos, R_base))
+                poses.extend(self._wrist_poses_at(
+                    pos, R_base,
+                    ny=self._body_scan_arc_wrist_ny,
+                    nz=self._body_scan_arc_wrist_nz,
+                ))
 
-        ang_y_d = np.degrees(self._body_scan_wrist_ang_y)
-        ang_z_d = np.degrees(self._body_scan_wrist_ang_z)
-        n_wr    = self._body_scan_wrist_ny * self._body_scan_wrist_nz
+        arc_ny  = self._body_scan_arc_wrist_ny
+        arc_nz  = self._body_scan_arc_wrist_nz
+        n_arc   = ny * nz
+        n_wr    = arc_ny * arc_nz
         self.get_logger().info(
-            f'🗺️  Fase 2: {len(poses)} pose '
-            f'({ny*nz} pos arco × {n_wr} wrist, '
-            f'±{ang_y_d:.1f}°Y ±{ang_z_d:.1f}°Z nel frame EE, '
+            f'🗺️  Fase 2: {len(poses)} pose totali '
+            f'({n_arc} pos arco × {n_wr} wrist + {n_arc} home transito, '
             f'look-at verso torso_estimate)'
         )
-        return poses
+        return poses, transit_indices
 
 
     def _gen_phase3_poses(self, torso_estimate: np.ndarray) -> list:
@@ -1153,13 +1178,14 @@ class Z1FSM(Node):
                     if self._scan_torso_estimate is not None:
                         self._scan_phase1_anchor = self._scan_torso_estimate.copy()
                         a1 = self._scan_phase1_anchor
-                        poses_p2 = self._gen_all_wrist_poses(self._scan_torso_estimate)
+                        poses_p2, transit_p2 = self._gen_all_wrist_poses(self._scan_torso_estimate)
                         self._body_scanner = BodySearchScanner(
                             scan_poses         = poses_p2,
                             scan_point_timeout = self._body_scan_wrist_timeout,
                             scan_min_frames    = self._body_scan_wrist_min_fr,
                             early_stop_score   = self._body_scan_early,
                             logger             = self.get_logger(),
+                            transit_indices    = transit_p2,
                         )
                         self._body_scanner.reset()
                         self._scan_phase = 2
@@ -1170,7 +1196,7 @@ class Z1FSM(Node):
                         self.get_logger().info(
                             f'▶ FASE 2 — Arco wrist sweep '
                             f'({len(poses_p2)} pose, {n_pos} pos × '
-                            f'{self._body_scan_wrist_ny}×{self._body_scan_wrist_nz}, '
+                            f'{self._body_scan_arc_wrist_ny}×{self._body_scan_arc_wrist_nz}, '
                             f'±{ang_y_d:.0f}°Y ±{ang_z_d:.0f}°Z)'
                         )
                         self.get_logger().info(
