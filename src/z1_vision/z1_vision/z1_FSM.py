@@ -579,7 +579,7 @@ class Z1FSM(Node):
 
     # ──────────────────────────────────────────────────────────────
     def _finish_body_scan(self):
-        """Pubblica seed fuso, disattiva scan mode, passa a WAITING."""
+        """Pubblica seed fuso, disattiva scan mode, torna in HOME poi WAITING."""
         fused = (self._body_scanner.fused_torso_xyz()
                  if self._body_scanner is not None else None)
         if fused is not None:
@@ -595,9 +595,12 @@ class Z1FSM(Node):
             )
         self.pub_ik_enable.publish(Bool(data=False))
         self.pub_tracker_scan_mode.publish(Bool(data=False))
-        self.get_logger().info('✅ Body scan completato → WAITING')
         self._body_scan_done = True
-        self.set_state(self.WAITING)
+        # Torna in HOME prima di WAITING: garantisce configurazione articolare
+        # pulita per il successivo IK dell'approach (evita flip da pose arco).
+        self.get_logger().info('✅ Body scan completato → HOMING → WAITING')
+        self._homing_next_state = self.WAITING
+        self.set_state(self.HOMING)
 
     def _wrist_poses_at(self, pos: np.ndarray, R_base: np.ndarray) -> list:
         """
