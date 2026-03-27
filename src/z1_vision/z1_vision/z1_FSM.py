@@ -493,36 +493,40 @@ class Z1FSM(Node):
 
     def _orientation_for_xee(self, x_ee: np.ndarray) -> np.ndarray:
         """
-        Rotazione minima (Rodrigues) da R_home per allineare X_home → x_ee.
-        Y e Z ruotano solidali — nessun roll aggiuntivo attorno all'asse X.
+        Calcola l'orientamento EE con X_ee = x_ee, mantenendo Y_ee il più vicino
+        possibile a Y_home (Gram-Schmidt).
+
+        Metodo:
+          1. X_ee = x_ee normalizzato
+          2. Y_ee = Y_home proiettato ⊥ a X_ee, normalizzato
+             (fallback: Z_home se Y_home è quasi parallelo a X_ee)
+          3. Z_ee = X_ee × Y_ee
+
+        Vantaggi rispetto a Rodrigues:
+          - Nessun flip d'asse quando l'angolo tra x_home e x_ee è grande
+          - Y_ee rimane sempre vicino al riferimento home → continuità
         Ritorna quaternione [x, y, z, w].
         """
         R_home = quaternion_matrix(self._home_orientation)[:3, :3]
-        x_home = R_home[:, 0]
+        x_ee   = x_ee / np.linalg.norm(x_ee)
 
-        cos_a = float(np.clip(np.dot(x_home, x_ee), -1.0, 1.0))
-        axis  = np.cross(x_home, x_ee)
-        sin_a = np.linalg.norm(axis)
+        # Y_ee: Y_home proiettato ⊥ a X_ee
+        y_ref  = R_home[:, 1]
+        y_ee   = y_ref - np.dot(y_ref, x_ee) * x_ee
+        y_norm = np.linalg.norm(y_ee)
+        if y_norm < 1e-3:
+            # Y_home quasi parallelo a X_ee → usa Z_home come riferimento
+            y_ref  = R_home[:, 2]
+            y_ee   = y_ref - np.dot(y_ref, x_ee) * x_ee
+            y_norm = np.linalg.norm(y_ee)
+        y_ee /= y_norm
 
-        if sin_a < 1e-6:
-            if cos_a > 0:
-                R_approach = R_home
-            else:
-                perp = np.array([0.0, 0.0, 1.0])
-                if abs(np.dot(perp, x_home)) > 0.9:
-                    perp = np.array([0.0, 1.0, 0.0])
-                perp -= np.dot(perp, x_home) * x_home
-                perp /= np.linalg.norm(perp)
-                R_approach = (2.0 * np.outer(perp, perp) - np.eye(3)) @ R_home
-        else:
-            axis  /= sin_a
-            K      = np.array([[    0, -axis[2],  axis[1]],
-                               [ axis[2],     0, -axis[0]],
-                               [-axis[1],  axis[0],     0]])
-            R_approach = (np.eye(3) + sin_a * K + (1.0 - cos_a) * (K @ K)) @ R_home
+        z_ee = np.cross(x_ee, y_ee)
 
         T = np.eye(4)
-        T[:3, :3] = R_approach
+        T[:3, 0] = x_ee
+        T[:3, 1] = y_ee
+        T[:3, 2] = z_ee
         return quaternion_from_matrix(T)
 
     def _make_wrist_align_pose(self) -> PoseStamped | None:
