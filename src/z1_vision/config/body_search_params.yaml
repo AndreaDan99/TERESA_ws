@@ -95,8 +95,12 @@ z1_FSM:
     # testa, collo, spalle e petto nella stessa inquadratura, consentendo di
     # raffinare la stima Y (distanza collo-spalle) e Z (centramento laterale).
     # Frame TERESA (home): X=laterale, Y=testa→fianchi, Z=verticale(su)
-    body_scan_p3_offset_y: 0.20   # [m] offset verso fianchi (+Y, asse corpo)
-    body_scan_p3_offset_z: 0.45   # [m] offset verso l'alto (+Z, verticale)
+    body_scan_p3_offset_y: 0.20   # [m] offset massimo verso fianchi (+Y, asse corpo)
+    body_scan_p3_offset_z: 0.45   # [m] offset massimo verso l'alto (+Z, verticale)
+    # Numero di tentativi con offset decrescenti (100% → 25% in N passi).
+    # Se la posa più lontana non è raggiungibile (IK timeout), il braccio
+    # ritorna in home e riprova con un offset più piccolo.
+    body_scan_p3_steps:    4      # es. 4 → scale [1.0, 0.75, 0.50, 0.25]
 
 
 # ── Parametri scan mode nel tracker ────────────────────────────────────────
