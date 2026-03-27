@@ -41,8 +41,9 @@ z1_FSM:
     body_scan_ext_y: 0.18   # [m]  offset spalla/fianco
     body_scan_ext_z: 0.10   # [m]  offset laterale
 
-    # Numero di punti lungo Y e Z dell'arco (fase 2):
-    # ny=2, nz=2 → 4 posizioni arco × 6 wrist = 24 pose fase 2
+    # Numero di punti lungo Y e Z dell'arco (fase 1):
+    # ny=2, nz=2 → 4 posizioni arco + home = 5 posizioni totali
+    # Fase 2: 5 posizioni × 3Y × 3Z = 45 pose polso
     body_scan_ny: 2
     body_scan_nz: 2
 
@@ -52,13 +53,16 @@ z1_FSM:
     body_scan_point_timeout: 4.0   # [s]
     body_scan_min_frames:    8
 
-    # ── Fase 2: wrist sweep ─────────────────────────────────────
-    # Numero di orientamenti polso per ogni posizione arco.
-    # Rotazione attorno all'asse X_ee (look-at) da -angle a +angle.
-    body_scan_wrist_steps:      6      # orientamenti polso per posizione
-    body_scan_wrist_angle_deg:  18.0   # [°] range sweep polso (±18°)
-    body_scan_wrist_timeout:    2.0    # [s] timeout per singola wrist pose (include IK timeout)
-    body_scan_wrist_min_frames: 5      # frame minimi per wrist pose
+    # ── Fase 2: griglia 2D polso ─────────────────────────────────
+    # Per ogni posizione (home + arco) si genera una griglia ny×nz
+    # di orientamenti ruotando il polso attorno a Y_ee e Z_ee.
+    # Total pose fase 2 = (1 + ny*nz) * wrist_ny * wrist_nz
+    body_scan_wrist_ny:           3      # passi polso lungo Y_ee (pan)
+    body_scan_wrist_nz:           3      # passi polso lungo Z_ee (tilt)
+    body_scan_wrist_angle_y_deg:  18.0   # [°] semi-range sweep Y_ee (±18°)
+    body_scan_wrist_angle_z_deg:  18.0   # [°] semi-range sweep Z_ee (±18°)
+    body_scan_wrist_timeout:      2.0    # [s] timeout per singola wrist pose
+    body_scan_wrist_min_frames:   5      # frame minimi per wrist pose
 
     # Score oltre il quale si interrompe la scansione anticipatamente.
     body_scan_early_stop: 0.95
