@@ -88,19 +88,13 @@ z1_FSM:
     # Se tutte le misure arco sono outlier → usa direttamente l'anchor home.
     body_scan_fusion_max_dist: 0.15
 
-    # ── Fase 3: posizione verso i fianchi ──────────────────────────
-    # Offset in +Y (verso fianchi) rispetto al centro torso trovato in fase 2.
-    # Il braccio si posiziona a [x_home, torso_y + offset, torso_z] e guarda
-    # verso il torso con look-at dinamico. Da questa angolazione la camera vede
-    # testa, collo, spalle e petto nella stessa inquadratura, consentendo di
-    # raffinare la stima Y (distanza collo-spalle) e Z (centramento laterale).
-    # Frame TERESA (home): X=laterale, Y=testa→fianchi, Z=verticale(su)
-    body_scan_p3_offset_y: 0.20   # [m] offset massimo verso fianchi (+Y, asse corpo)
-    body_scan_p3_offset_z: 0.45   # [m] offset massimo verso l'alto (+Z, verticale)
-    # Numero di tentativi con offset decrescenti (100% → 25% in N passi).
-    # Se la posa più lontana non è raggiungibile (IK timeout), il braccio
-    # ritorna in home e riprova con un offset più piccolo.
-    body_scan_p3_steps:    4      # es. 4 → scale [1.0, 0.75, 0.50, 0.25]
+    # ── Fase 3: posizione laterale offset da home ──────────────────
+    # Il braccio si sposta dalla home di [offset_x, offset_y, offset_z]
+    # mantenendo l'orientamento di home (NO look-at verso il torso).
+    # Frame TERESA: X=laterale, Y=testa→fianchi (verso hips), Z=verticale(su)
+    body_scan_p3_offset_x: 0.00   # [m] offset laterale (+X)
+    body_scan_p3_offset_y: 0.20   # [m] offset verso fianchi (+Y, asse corpo)
+    body_scan_p3_offset_z: 0.20   # [m] offset verso l'alto (+Z, verticale)
 
 
 # ── Parametri scan mode nel tracker ────────────────────────────────────────

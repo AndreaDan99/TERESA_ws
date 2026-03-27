@@ -141,9 +141,9 @@ class Z1FSM(Node):
         self.declare_parameter("body_scan_min_frames",         8)
         self.declare_parameter("body_scan_early_stop",         0.95)
         self.declare_parameter("body_scan_fusion_max_dist",    0.15)  # [m] soglia outlier rejection arco/hips
+        self.declare_parameter("body_scan_p3_offset_x",        0.00)  # [m] offset laterale (+X) per fase 3
         self.declare_parameter("body_scan_p3_offset_y",        0.20)  # [m] offset verso fianchi (+Y) per fase 3
-        self.declare_parameter("body_scan_p3_offset_z",        0.45)  # [m] offset verso l'alto (+Z) per fase 3
-        self.declare_parameter("body_scan_p3_steps",           4)     # N tentativi con offset decrescenti
+        self.declare_parameter("body_scan_p3_offset_z",        0.20)  # [m] offset verso l'alto (+Z) per fase 3
         # Griglia polso fase 1 e 3: sweep angolare nel frame EE
         self.declare_parameter("body_scan_wrist_ny",           3)
         self.declare_parameter("body_scan_wrist_nz",           3)
@@ -166,9 +166,9 @@ class Z1FSM(Node):
         self._body_scan_min_fr         = int(self.get_parameter("body_scan_min_frames").value)
         self._body_scan_early          = float(self.get_parameter("body_scan_early_stop").value)
         self._body_scan_fusion_dist    = float(self.get_parameter("body_scan_fusion_max_dist").value)
+        self._body_scan_p3_offset_x    = float(self.get_parameter("body_scan_p3_offset_x").value)
         self._body_scan_p3_offset_y    = float(self.get_parameter("body_scan_p3_offset_y").value)
         self._body_scan_p3_offset_z    = float(self.get_parameter("body_scan_p3_offset_z").value)
-        self._body_scan_p3_steps       = max(1, int(self.get_parameter("body_scan_p3_steps").value))
         self._body_scan_wrist_ny       = int(self.get_parameter("body_scan_wrist_ny").value)
         self._body_scan_wrist_nz       = int(self.get_parameter("body_scan_wrist_nz").value)
         self._body_scan_wrist_ang_y    = float(self.get_parameter("body_scan_wrist_angle_y_deg").value) * np.pi / 180.0
@@ -776,61 +776,45 @@ class Z1FSM(Node):
         return poses, transit_indices
 
 
-    def _gen_phase3_poses(self, torso_estimate: np.ndarray) -> tuple[list, set]:
+    def _gen_phase3_poses(self) -> tuple[list, set]:
         """
-        Fase 3: N tentativi con offset decrescenti verso i fianchi (+Y) e in alto (+Z).
+        Fase 3: un solo punto offset da home, con orientamento home (no look-at).
 
-        Se la posa più lontana non è raggiungibile (IK timeout), il scanner avanza
-        automaticamente alla successiva più vicina.
+        Posizione: home + [offset_x, offset_y, offset_z]
+          +Y = verso i fianchi (asse corpo)
+          +Z = verso l'alto
+          +X = laterale
 
-        Struttura lista (body_scan_p3_steps=4):
-          idx 0: home (transit)
-          idx 1: pos con scale=1.00 (offset massimo)
-          idx 2: home (transit)
-          idx 3: pos con scale=0.75
-          idx 4: home (transit)
-          idx 5: pos con scale=0.50
-          idx 6: home (transit)
-          idx 7: pos con scale=0.25
+        L'orientamento è quello di home → la camera è nello stesso assetto
+        della posizione iniziale, NON puntata verso il torso.
 
+        Preceduto da una home transit per garantire convergenza JTC.
         Ritorna (poses, transit_indices).
         """
-        n_steps = self._body_scan_p3_steps
-        scales  = np.linspace(1.0, 1.0 / n_steps, n_steps)  # es. [1.0, 0.75, 0.50, 0.25]
+        pos = np.array([
+            float(self._home_position[0]) + self._body_scan_p3_offset_x,
+            float(self._home_position[1]) + self._body_scan_p3_offset_y,
+            float(self._home_position[2]) + self._body_scan_p3_offset_z,
+        ])
+        R_home = quaternion_matrix(self._home_orientation)[:3, :3]
 
-        poses:          list = []
-        transit_indices: set = set()
+        poses:           list = []
+        transit_indices: set  = set()
 
-        for scale in scales:
-            off_y = self._body_scan_p3_offset_y * scale
-            off_z = self._body_scan_p3_offset_z * scale
-            pos = np.array([
-                float(torso_estimate[0]),
-                float(torso_estimate[1]) + off_y,
-                float(torso_estimate[2]) + off_z,
-            ])
-            d    = torso_estimate - pos
-            norm = np.linalg.norm(d)
-            if norm < 1e-6:
-                R_base = quaternion_matrix(self._home_orientation)[:3, :3]
-            else:
-                q_base = self._orientation_for_xee(d / norm)
-                R_base = quaternion_matrix(q_base)[:3, :3]
+        # home transit
+        transit_indices.add(0)
+        poses.append(self._make_home_pose())
 
-            # home intermedia (transit)
-            transit_indices.add(len(poses))
-            poses.append(self._make_home_pose())
-
-            # posa fase 3
-            poses.extend(self._wrist_poses_at(pos, R_base,
-                                               ny=self._body_scan_arc_wrist_ny,
-                                               nz=self._body_scan_arc_wrist_nz))
-            self.get_logger().info(
-                f'🗺️  Fase 3 step {len(transit_indices)}/{n_steps}: '
-                f'pos=[{pos[0]:.3f},{pos[1]:.3f},{pos[2]:.3f}] '
-                f'(scale={scale:.2f}, +Y={off_y:.2f}m +Z={off_z:.2f}m)'
-            )
-
+        # posa fase 3
+        poses.extend(self._wrist_poses_at(pos, R_home,
+                                          ny=self._body_scan_arc_wrist_ny,
+                                          nz=self._body_scan_arc_wrist_nz))
+        self.get_logger().info(
+            f'🗺️  Fase 3: pos=[{pos[0]:.3f},{pos[1]:.3f},{pos[2]:.3f}] '
+            f'(home +X={self._body_scan_p3_offset_x:.2f}m '
+            f'+Y={self._body_scan_p3_offset_y:.2f}m '
+            f'+Z={self._body_scan_p3_offset_z:.2f}m, orientamento home)'
+        )
         return poses, transit_indices
 
     def _on_tracker_state(self, msg: String):
@@ -1227,36 +1211,29 @@ class Z1FSM(Node):
                     )
                     self._scan_phase2_anchor = (fused_p2 if fused_p2 is not None
                                                 else self._scan_phase1_anchor)
-                    if self._scan_phase2_anchor is not None:
-                        a2 = self._scan_phase2_anchor
-                        poses_p3, transit_p3 = self._gen_phase3_poses(a2)
-                        self._body_scanner = BodySearchScanner(
-                            scan_poses         = poses_p3,
-                            scan_point_timeout = self._body_scan_wrist_timeout,
-                            scan_min_frames    = self._body_scan_wrist_min_fr,
-                            early_stop_score   = self._body_scan_early,
-                            logger             = self.get_logger(),
-                            transit_indices    = transit_p3,
-                        )
-                        self._body_scanner.reset()
-                        self._scan_phase = 3
-                        self.get_logger().info('━'*60)
-                        self.get_logger().info(
-                            f'▶ FASE 3 — Posizione hips '
-                            f'({self._body_scan_p3_steps} step, '
-                            f'offset max +Y={self._body_scan_p3_offset_y:.2f}m +Z={self._body_scan_p3_offset_z:.2f}m)'
-                        )
-                        self.get_logger().info(
-                            f'   anchor fase 2: '
-                            f'[{a2[0]:.3f}, {a2[1]:.3f}, {a2[2]:.3f}]'
-                        )
-                    else:
-                        self.get_logger().warn('⚠️  Fase 2 senza anchor → skip fase 3')
-                        self._finish_body_scan()
+                    poses_p3, transit_p3 = self._gen_phase3_poses()
+                    self._body_scanner = BodySearchScanner(
+                        scan_poses         = poses_p3,
+                        scan_point_timeout = self._body_scan_wrist_timeout,
+                        scan_min_frames    = self._body_scan_wrist_min_fr,
+                        early_stop_score   = self._body_scan_early,
+                        logger             = self.get_logger(),
+                        transit_indices    = transit_p3,
+                    )
+                    self._body_scanner.reset()
+                    self._scan_phase = 3
+                    self.get_logger().info('━'*60)
+                    self.get_logger().info(
+                        f'▶ FASE 3 — Posizione laterale '
+                        f'(home +X={self._body_scan_p3_offset_x:.2f}m '
+                        f'+Y={self._body_scan_p3_offset_y:.2f}m '
+                        f'+Z={self._body_scan_p3_offset_z:.2f}m, orientamento home)'
+                    )
 
                 else:
                     # ── Fase 3 completata → fine scan ───────────────────────
                     self.get_logger().info('✅ FASE 3 completata')
+                    self._finish_body_scan()
 
             elif st.action == ScanAction.FAILED:
                 # Nessun punto valido trovato: disattiva scan mode, vai in WAITING
