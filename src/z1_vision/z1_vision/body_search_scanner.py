@@ -325,6 +325,11 @@ class BodySearchScanner:
                           if self._frames_valid > 0 else 0.0)
         return detection_rate * avg_score
 
+    def best_arm_pose(self) -> Optional[PoseStamped]:
+        """Ritorna la PoseStamped del punto con score massimo, o None."""
+        best = self._best()
+        return best.arm_pose if best is not None else None
+
     def _best(self) -> Optional[_PointResult]:
         valid = [r for r in self._results if r.score > 0.0]
         return max(valid, key=lambda r: r.score) if valid else None
