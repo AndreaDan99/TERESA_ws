@@ -9,6 +9,7 @@ from std_msgs.msg import Bool, Float32MultiArray, String
 from std_srvs.srv import Trigger
 from geometry_msgs.msg import PoseStamped, PointStamped
 from visualization_msgs.msg import Marker
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 
 from tf_transformations import quaternion_matrix, quaternion_from_matrix
 
@@ -228,7 +229,15 @@ class Z1FSM(Node):
         self.create_subscription(String,            '/torso_tracker_state',    self._on_tracker_state, 10)
 
         # ── Publishers ──────────────────────────────────────────────────
-        self.pub_ik_enable        = self.create_publisher(Bool,        self.ik_enable_topic,              10)
+        # ik_enable usa transient_local: il messaggio viene memorizzato e
+        # consegnato ai subscriber che si connettono in ritardo (evita race
+        # condition all'avvio quando z1_ik_to_jtc parte dopo la FSM).
+        _latch_qos = QoSProfile(
+            depth       = 1,
+            durability  = DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability = ReliabilityPolicy.RELIABLE,
+        )
+        self.pub_ik_enable        = self.create_publisher(Bool,        self.ik_enable_topic,              _latch_qos)
         self.pub_ik_goal          = self.create_publisher(PoseStamped, self.ik_goal_topic,                 10)
         self.pub_state            = self.create_publisher(String,      self.state_topic,                   10)
         self.pub_impedance_enable = self.create_publisher(Bool,        self.impedance_enable_topic,        10)

@@ -13,6 +13,7 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 from rclpy.action import ActionClient
 from rclpy.duration import Duration
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from tf_transformations import quaternion_matrix
 from sensor_msgs.msg import JointState
 
@@ -103,11 +104,18 @@ class Z1IKToJTC(Node):
             10
         )
 
+        # transient_local: riceve l'ultimo messaggio anche se pubblicato prima
+        # che questo nodo fosse avviato (evita race condition all'avvio).
+        _latch_qos = QoSProfile(
+            depth       = 1,
+            durability  = DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability = ReliabilityPolicy.RELIABLE,
+        )
         self.sub_enable = self.create_subscription(
             Bool,
             self.ik_enable_topic,
             self.enable_callback,
-            10
+            _latch_qos,
         )
         self.sub_js = self.create_subscription(
             JointState,
