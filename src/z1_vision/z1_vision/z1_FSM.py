@@ -633,62 +633,68 @@ class Z1FSM(Node):
         )
         return poses
 
-    def _gen_wrist_poses_at(
-        self,
-        arm_pose: PoseStamped,
-        torso_estimate: np.ndarray,
-    ) -> list:
+    def _gen_all_wrist_poses(self, torso_estimate: np.ndarray) -> list:
         """
-        Fase 2: wrist sweep nella miglior posizione trovata in fase 1.
-        Genera wrist_steps pose tutte alla stessa posizione EE, con:
-          - look-at orientation verso torso_estimate
-          - N rotazioni polso attorno all'asse X_ee (Rodrigues, ±wrist_angle_deg)
+        Fase 2: wrist sweep su TUTTE le posizioni (home + arco).
+        Per ogni posizione:
+          - look-at orientation verso torso_estimate (p0 rilevato in fase 1)
+          - wrist_steps rotazioni polso attorno all'asse X_ee (Rodrigues, ±wrist_angle)
+        Ritorna lista flat di (1 + ny*nz) * wrist_steps pose.
         """
-        n_wr  = self._body_scan_wrist_steps
-        max_a = self._body_scan_wrist_angle * np.pi / 180.0
-        now   = self.get_clock().now().to_msg()
+        center = self._body_scan_center
+        ny     = self._body_scan_ny
+        nz     = self._body_scan_nz
+        ext_y  = self._body_scan_ext_y
+        ext_z  = self._body_scan_ext_z
+        n_wr   = self._body_scan_wrist_steps
+        max_a  = self._body_scan_wrist_angle * np.pi / 180.0
+        now    = self.get_clock().now().to_msg()
 
-        pos = np.array([arm_pose.pose.position.x,
-                        arm_pose.pose.position.y,
-                        arm_pose.pose.position.z])
-
-        # Orientamento base: look-at verso torso_estimate
-        direction = torso_estimate - pos
-        norm      = np.linalg.norm(direction)
-        q_base    = (self._home_orientation if norm < 1e-6
-                     else self._orientation_for_xee(direction / norm))
-
-        # Sweep polso attorno all'asse X_ee (Rodrigues)
-        R_base = quaternion_matrix(q_base)[:3, :3]
-        x_ee   = R_base[:, 0]
-        K      = np.array([[     0,  -x_ee[2],  x_ee[1]],
-                           [ x_ee[2],      0,  -x_ee[0]],
-                           [-x_ee[1],  x_ee[0],      0]])
+        # Tutte le posizioni: home + arco
+        home_pos = np.array(self._home_position, dtype=float)
+        positions = [home_pos]
+        ys = (np.linspace(center[1] - ext_y, center[1] + ext_y, ny)
+              if ny > 1 else np.array([center[1]]))
+        zs = (np.linspace(center[2] - ext_z, center[2] + ext_z, nz)
+              if nz > 1 else np.array([center[2]]))
+        for z in zs:
+            for y in ys:
+                positions.append(np.array([float(center[0]), float(y), float(z)]))
 
         poses = []
-        for theta in np.linspace(-max_a, max_a, n_wr):
-            R_wr  = np.eye(3) + np.sin(theta) * K + (1 - np.cos(theta)) * (K @ K)
-            R_new = R_wr @ R_base
-            T     = np.eye(4)
-            T[:3, :3] = R_new
-            q     = quaternion_from_matrix(T)
+        for pos in positions:
+            # Look-at verso torso_estimate (p0 fisso per tutte le posizioni)
+            direction = torso_estimate - pos
+            norm      = np.linalg.norm(direction)
+            q_base    = (self._home_orientation if norm < 1e-6
+                         else self._orientation_for_xee(direction / norm))
 
-            p = PoseStamped()
-            p.header.frame_id    = 'world'
-            p.header.stamp       = now
-            p.pose.position.x    = float(pos[0])
-            p.pose.position.y    = float(pos[1])
-            p.pose.position.z    = float(pos[2])
-            p.pose.orientation.x = float(q[0])
-            p.pose.orientation.y = float(q[1])
-            p.pose.orientation.z = float(q[2])
-            p.pose.orientation.w = float(q[3])
-            poses.append(p)
+            # Sweep polso attorno all'asse X_ee (Rodrigues)
+            R_base = quaternion_matrix(q_base)[:3, :3]
+            x_ee   = R_base[:, 0]
+            K      = np.array([[     0,  -x_ee[2],  x_ee[1]],
+                               [ x_ee[2],      0,  -x_ee[0]],
+                               [-x_ee[1],  x_ee[0],      0]])
 
-        self.get_logger().info(
-            f'🎯 Fase 2: {n_wr} wrist pose ±{self._body_scan_wrist_angle:.0f}° '
-            f'@ [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]'
-        )
+            for theta in np.linspace(-max_a, max_a, n_wr):
+                R_wr  = np.eye(3) + np.sin(theta) * K + (1 - np.cos(theta)) * (K @ K)
+                R_new = R_wr @ R_base
+                T     = np.eye(4)
+                T[:3, :3] = R_new
+                q     = quaternion_from_matrix(T)
+
+                p = PoseStamped()
+                p.header.frame_id    = 'world'
+                p.header.stamp       = now
+                p.pose.position.x    = float(pos[0])
+                p.pose.position.y    = float(pos[1])
+                p.pose.position.z    = float(pos[2])
+                p.pose.orientation.x = float(q[0])
+                p.pose.orientation.y = float(q[1])
+                p.pose.orientation.z = float(q[2])
+                p.pose.orientation.w = float(q[3])
+                poses.append(p)
+
         return poses
 
 
@@ -1041,13 +1047,10 @@ class Z1FSM(Node):
 
             elif st.action == ScanAction.EXIT_SCAN_MODE:
                 if self._scan_phase == 1:
-                    # Fase 1 completata: avvia wrist sweep nella miglior posizione
-                    best_pose = (self._body_scanner.best_arm_pose()
-                                 if self._body_scanner is not None else None)
-                    if (self._scan_torso_estimate is not None
-                            and best_pose is not None):
-                        poses_p2 = self._gen_wrist_poses_at(
-                            best_pose, self._scan_torso_estimate
+                    # Fase 1 completata: avvia wrist sweep su TUTTE le posizioni
+                    if self._scan_torso_estimate is not None:
+                        poses_p2 = self._gen_all_wrist_poses(
+                            self._scan_torso_estimate
                         )
                         self._body_scanner = BodySearchScanner(
                             scan_poses         = poses_p2,
@@ -1058,10 +1061,14 @@ class Z1FSM(Node):
                         )
                         self._body_scanner.reset()
                         self._scan_phase = 2
+                        n_pos = 1 + self._body_scan_ny * self._body_scan_nz
                         self.get_logger().info(
-                            f'🔍 Fase 2: {len(poses_p2)} wrist pose '
-                            f'±{self._body_scan_wrist_angle:.0f}° nella '
-                            f'miglior posizione fase 1'
+                            f'🔍 Fase 2: {len(poses_p2)} pose '
+                            f'({n_pos} posizioni × {self._body_scan_wrist_steps} wrist '
+                            f'±{self._body_scan_wrist_angle:.0f}°), '
+                            f'look-at → [{self._scan_torso_estimate[0]:.3f}, '
+                            f'{self._scan_torso_estimate[1]:.3f}, '
+                            f'{self._scan_torso_estimate[2]:.3f}]'
                         )
                     else:
                         self.get_logger().warn(
