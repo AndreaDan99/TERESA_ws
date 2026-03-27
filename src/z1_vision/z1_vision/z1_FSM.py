@@ -140,7 +140,8 @@ class Z1FSM(Node):
         self.declare_parameter("body_scan_point_timeout",      4.0)
         self.declare_parameter("body_scan_min_frames",         8)
         self.declare_parameter("body_scan_early_stop",         0.95)
-        self.declare_parameter("body_scan_fusion_max_dist",    0.15)  # [m] soglia outlier rejection arco
+        self.declare_parameter("body_scan_fusion_max_dist",    0.15)  # [m] soglia outlier rejection arco/hips
+        self.declare_parameter("body_scan_p3_offset_y",        0.20)  # [m] offset verso fianchi (+Y) per fase 3
         # Griglia polso: sweep angolare nel frame EE (±angle_y_deg attorno a Y_ee, ±angle_z_deg attorno a Z_ee)
         self.declare_parameter("body_scan_wrist_ny",           3)
         self.declare_parameter("body_scan_wrist_nz",           3)
@@ -159,6 +160,7 @@ class Z1FSM(Node):
         self._body_scan_min_fr         = int(self.get_parameter("body_scan_min_frames").value)
         self._body_scan_early          = float(self.get_parameter("body_scan_early_stop").value)
         self._body_scan_fusion_dist    = float(self.get_parameter("body_scan_fusion_max_dist").value)
+        self._body_scan_p3_offset_y    = float(self.get_parameter("body_scan_p3_offset_y").value)
         self._body_scan_wrist_ny       = int(self.get_parameter("body_scan_wrist_ny").value)
         self._body_scan_wrist_nz       = int(self.get_parameter("body_scan_wrist_nz").value)
         self._body_scan_wrist_ang_y    = float(self.get_parameter("body_scan_wrist_angle_y_deg").value) * np.pi / 180.0
@@ -207,8 +209,9 @@ class Z1FSM(Node):
         self._body_scan_done: bool                         = False
         self._body_scanner:   BodySearchScanner | None     = None
         self._scan_torso_estimate: np.ndarray | None       = None
-        self._scan_phase1_anchor:  np.ndarray | None       = None  # stima torso fine fase 1 (anchor per outlier rejection)
-        self._scan_phase: int                              = 1  # 1=home, 2=arc+wrist
+        self._scan_phase1_anchor:  np.ndarray | None       = None  # stima torso fine fase 1
+        self._scan_phase2_anchor:  np.ndarray | None       = None  # stima torso fusa fine fase 2 (anchor per fase 3)
+        self._scan_phase: int                              = 1  # 1=home, 2=arc+wrist, 3=hips
         # _tracker_ready: True dopo aver ricevuto almeno un messaggio su
         # /torso_tracker_state. Garantisce che il nodo tracker sia avviato
         # e il modello YOLO sia caricato prima di iniziare la body scan.
@@ -356,6 +359,8 @@ class Z1FSM(Node):
         if s == self.BODY_SCANNING:
             self.ik_done               = False
             self._scan_torso_estimate  = None
+            self._scan_phase1_anchor   = None
+            self._scan_phase2_anchor   = None
             self._scan_phase           = 1
             # Fase 1: griglia 2D polso nella HOME position.
             # Usa wrist_timeout e wrist_min_frames (stesso formato della fase 2).
@@ -585,8 +590,12 @@ class Z1FSM(Node):
     # ──────────────────────────────────────────────────────────────
     def _finish_body_scan(self):
         """Pubblica seed fuso, disattiva scan mode, torna in HOME poi WAITING."""
+        # Usa l'anchor della fase più recente disponibile:
+        # fase 3 usa anchor fase 2; se fase 3 non è partita usa anchor fase 1.
+        anchor = (self._scan_phase2_anchor if self._scan_phase2_anchor is not None
+                  else self._scan_phase1_anchor)
         fused = (self._body_scanner.fused_torso_xyz(
-                     anchor   = self._scan_phase1_anchor,
+                     anchor   = anchor,
                      max_dist = self._body_scan_fusion_dist,
                  )
                  if self._body_scanner is not None else None)
@@ -725,6 +734,48 @@ class Z1FSM(Node):
         )
         return poses
 
+
+    def _gen_phase3_poses(self, torso_estimate: np.ndarray) -> list:
+        """
+        Fase 3: posizione verso i fianchi (+Y), look-at verso torso_estimate.
+
+        Il braccio si posiziona a:
+            pos = [x_home, torso_y + p3_offset_y, torso_z]
+
+        Da questa posizione la camera guarda verso il torso (look-at dinamico)
+        e vede, nella stessa inquadratura:
+          - testa e collo (in alto nel frame)
+          - spalle (al centro)
+          - petto (in basso)
+        Consente di raffinare la stima Y (distanza collo-spalle) e Z (centramento
+        laterale spalla-spalla) rispetto alle fasi precedenti.
+
+        La griglia polso ±angle_y_deg × ±angle_z_deg viene applicata sopra il
+        look-at base → nessun flip d'asse.
+        """
+        offset_y = self._body_scan_p3_offset_y
+        pos = np.array([
+            float(self._home_position[0]),
+            float(torso_estimate[1]) + offset_y,
+            float(torso_estimate[2]),
+        ])
+        d    = torso_estimate - pos
+        norm = np.linalg.norm(d)
+        if norm < 1e-6:
+            R_base = quaternion_matrix(self._home_orientation)[:3, :3]
+        else:
+            q_base = self._orientation_for_xee(d / norm)
+            R_base = quaternion_matrix(q_base)[:3, :3]
+
+        poses   = self._wrist_poses_at(pos, R_base)
+        ang_y_d = np.degrees(self._body_scan_wrist_ang_y)
+        ang_z_d = np.degrees(self._body_scan_wrist_ang_z)
+        self.get_logger().info(
+            f'🗺️  Fase 3: {len(poses)} pose '
+            f'(pos hips: [{pos[0]:.3f},{pos[1]:.3f},{pos[2]:.3f}], '
+            f'±{ang_y_d:.1f}°Y ±{ang_z_d:.1f}°Z, look-at torso)'
+        )
+        return poses
 
     def _on_tracker_state(self, msg: String):
         """Primo messaggio da /torso_tracker_state → tracker avviato e YOLO caricato."""
@@ -1077,13 +1128,10 @@ class Z1FSM(Node):
 
             elif st.action == ScanAction.EXIT_SCAN_MODE:
                 if self._scan_phase == 1:
-                    # Fase 1 completata: salva anchor (stima home, alta fiducia)
-                    # poi avvia wrist sweep su TUTTE le posizioni
+                    # ── Fase 1 → Fase 2 ─────────────────────────────────────
                     if self._scan_torso_estimate is not None:
                         self._scan_phase1_anchor = self._scan_torso_estimate.copy()
-                        poses_p2 = self._gen_all_wrist_poses(
-                            self._scan_torso_estimate
-                        )
+                        poses_p2 = self._gen_all_wrist_poses(self._scan_torso_estimate)
                         self._body_scanner = BodySearchScanner(
                             scan_poses         = poses_p2,
                             scan_point_timeout = self._body_scan_wrist_timeout,
@@ -1093,24 +1141,53 @@ class Z1FSM(Node):
                         )
                         self._body_scanner.reset()
                         self._scan_phase = 2
-                        n_pos = self._body_scan_ny * self._body_scan_nz
+                        n_pos   = self._body_scan_ny * self._body_scan_nz
                         ang_y_d = np.degrees(self._body_scan_wrist_ang_y)
                         ang_z_d = np.degrees(self._body_scan_wrist_ang_z)
                         self.get_logger().info(
                             f'🔍 Fase 2: {len(poses_p2)} pose '
-                            f'({n_pos} posizioni arco × '
+                            f'({n_pos} pos arco × '
                             f'{self._body_scan_wrist_ny}Y×{self._body_scan_wrist_nz}Z, '
-                            f'±{ang_y_d:.1f}°Y ±{ang_z_d:.1f}°Z EE frame), '
-                            f'torso → [{self._scan_torso_estimate[0]:.3f}, '
-                            f'{self._scan_torso_estimate[1]:.3f}, '
+                            f'±{ang_y_d:.1f}°Y ±{ang_z_d:.1f}°Z), '
+                            f'torso → [{self._scan_torso_estimate[0]:.3f},'
+                            f'{self._scan_torso_estimate[1]:.3f},'
                             f'{self._scan_torso_estimate[2]:.3f}]'
                         )
                     else:
-                        self.get_logger().warn(
-                            '⚠️  Fase 1 senza detection torso → skip fase 2'
-                        )
+                        self.get_logger().warn('⚠️  Fase 1 senza detection → skip fase 2+3')
                         self._finish_body_scan()
+
+                elif self._scan_phase == 2:
+                    # ── Fase 2 → Fase 3 ─────────────────────────────────────
+                    # Fonde le misure fase 2 con l'anchor fase 1 → nuovo anchor
+                    fused_p2 = self._body_scanner.fused_torso_xyz(
+                        anchor   = self._scan_phase1_anchor,
+                        max_dist = self._body_scan_fusion_dist,
+                    )
+                    self._scan_phase2_anchor = (fused_p2 if fused_p2 is not None
+                                                else self._scan_phase1_anchor)
+                    if self._scan_phase2_anchor is not None:
+                        poses_p3 = self._gen_phase3_poses(self._scan_phase2_anchor)
+                        self._body_scanner = BodySearchScanner(
+                            scan_poses         = poses_p3,
+                            scan_point_timeout = self._body_scan_wrist_timeout,
+                            scan_min_frames    = self._body_scan_wrist_min_fr,
+                            early_stop_score   = self._body_scan_early,
+                            logger             = self.get_logger(),
+                        )
+                        self._body_scanner.reset()
+                        self._scan_phase = 3
+                        a = self._scan_phase2_anchor
+                        self.get_logger().info(
+                            f'🔍 Fase 3: posizione hips, torso anchor → '
+                            f'[{a[0]:.3f},{a[1]:.3f},{a[2]:.3f}]'
+                        )
+                    else:
+                        self.get_logger().warn('⚠️  Fase 2 senza anchor → skip fase 3')
+                        self._finish_body_scan()
+
                 else:
+                    # ── Fase 3 completata → fine scan ───────────────────────
                     self._finish_body_scan()
 
             elif st.action == ScanAction.FAILED:

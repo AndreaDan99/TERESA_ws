@@ -82,6 +82,14 @@ z1_FSM:
     # Se tutte le misure arco sono outlier → usa direttamente l'anchor home.
     body_scan_fusion_max_dist: 0.15
 
+    # ── Fase 3: posizione verso i fianchi ──────────────────────────
+    # Offset in +Y (verso fianchi) rispetto al centro torso trovato in fase 2.
+    # Il braccio si posiziona a [x_home, torso_y + offset, torso_z] e guarda
+    # verso il torso con look-at dinamico. Da questa angolazione la camera vede
+    # testa, collo, spalle e petto nella stessa inquadratura, consentendo di
+    # raffinare la stima Y (distanza collo-spalle) e Z (centramento laterale).
+    body_scan_p3_offset_y: 0.20   # [m] offset verso fianchi (+Y)
+
 
 # ── Parametri scan mode nel tracker ────────────────────────────────────────
 z1_yolo_torso_tracker:
