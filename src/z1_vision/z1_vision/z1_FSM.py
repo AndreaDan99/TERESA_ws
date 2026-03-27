@@ -9,7 +9,6 @@ from std_msgs.msg import Bool, Float32MultiArray, String
 from std_srvs.srv import Trigger
 from geometry_msgs.msg import PoseStamped, PointStamped
 from visualization_msgs.msg import Marker
-from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 
 from tf_transformations import quaternion_matrix, quaternion_from_matrix
 
@@ -229,15 +228,7 @@ class Z1FSM(Node):
         self.create_subscription(String,            '/torso_tracker_state',    self._on_tracker_state, 10)
 
         # ── Publishers ──────────────────────────────────────────────────
-        # ik_enable usa transient_local: il messaggio viene memorizzato e
-        # consegnato ai subscriber che si connettono in ritardo (evita race
-        # condition all'avvio quando z1_ik_to_jtc parte dopo la FSM).
-        _latch_qos = QoSProfile(
-            depth       = 1,
-            durability  = DurabilityPolicy.TRANSIENT_LOCAL,
-            reliability = ReliabilityPolicy.RELIABLE,
-        )
-        self.pub_ik_enable        = self.create_publisher(Bool,        self.ik_enable_topic,              _latch_qos)
+        self.pub_ik_enable        = self.create_publisher(Bool,        self.ik_enable_topic,              10)
         self.pub_ik_goal          = self.create_publisher(PoseStamped, self.ik_goal_topic,                 10)
         self.pub_state            = self.create_publisher(String,      self.state_topic,                   10)
         self.pub_impedance_enable = self.create_publisher(Bool,        self.impedance_enable_topic,        10)
@@ -263,6 +254,7 @@ class Z1FSM(Node):
         self._last_approach_pose: PoseStamped | None = None   # saved per WRIST_ALIGN
         self._wrist_align_sent: bool                 = False
         self._wrist_align_start: float | None        = None
+        self._homing_last_send:  float               = 0.0   # timestamp ultimo invio enable+goal in HOMING
 
         # ── Start timer then go immediately to HOMING ───────────────────
         self.timer = self.create_timer(0.05, self.tick)   # 20 Hz
@@ -1212,18 +1204,30 @@ class Z1FSM(Node):
 
         # ── HOMING ────────────────────────────────────────────────────────
         elif self.state == self.HOMING:
-            if not self._homing_command_sent:
+            now_s = self.get_clock().now().nanoseconds * 1e-9
+            # Invia (o ri-invia) enable+goal ogni 1.5s finché ik_done non arriva.
+            # Gestisce il race condition di startup: se z1_ik_to_jtc parte in
+            # ritardo e perde il primo messaggio, lo riceve al retry successivo.
+            if not self.ik_done and (
+                not self._homing_command_sent
+                or now_s - self._homing_last_send > 1.5
+            ):
+                is_retry = self._homing_command_sent   # True se non è il primo invio
                 self.ik_done = False
                 home_pose = self._make_home_pose()
                 self.pub_ik_goal.publish(home_pose)
                 self.pub_ik_enable.publish(Bool(data=True))
                 self._homing_command_sent = True
-                self.get_logger().info(
-                    f"🏠 HOMING: goal inviato → poi {self._homing_next_state} | "
-                    f"pos=[{self._home_position[0]:.3f}, "
-                    f"{self._home_position[1]:.3f}, "
-                    f"{self._home_position[2]:.3f}]"
-                )
+                self._homing_last_send    = now_s
+                if is_retry:
+                    self.get_logger().warn("🔄 HOMING retry: re-invio enable+goal")
+                else:
+                    self.get_logger().info(
+                        f"🏠 HOMING: goal inviato → poi {self._homing_next_state} | "
+                        f"pos=[{self._home_position[0]:.3f}, "
+                        f"{self._home_position[1]:.3f}, "
+                        f"{self._home_position[2]:.3f}]"
+                    )
                 return
 
             if self.ik_done:
