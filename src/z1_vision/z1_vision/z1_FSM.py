@@ -141,9 +141,15 @@ class Z1FSM(Node):
         self.declare_parameter("body_scan_min_frames",         8)
         self.declare_parameter("body_scan_early_stop",         0.95)
         self.declare_parameter("body_scan_fusion_max_dist",    0.15)  # [m] soglia outlier rejection arco/hips
-        self.declare_parameter("body_scan_p3_offset_x",        0.00)  # [m] offset laterale (+X) per fase 3
-        self.declare_parameter("body_scan_p3_offset_y",        0.20)  # [m] offset verso fianchi (+Y) per fase 3
-        self.declare_parameter("body_scan_p3_offset_z",        0.20)  # [m] offset verso l'alto (+Z) per fase 3
+        self.declare_parameter("body_scan_p3_offset_x",        0.00)  # mantenuto per retrocompat, non usato
+        self.declare_parameter("body_scan_p3_offset_y",        0.20)  # mantenuto per retrocompat, non usato
+        self.declare_parameter("body_scan_p3_offset_z",        0.20)  # mantenuto per retrocompat, non usato
+        # Fase 3 adattiva
+        self.declare_parameter("body_scan_p3_skip_threshold",  0.50)  # conf min: skip fase 3 se tutti kp > soglia
+        self.declare_parameter("body_scan_p3_asym_threshold",  0.15)  # diff min tra kp per considerare asimmetria
+        self.declare_parameter("body_scan_p3_ext_x",           0.08)  # [m] offset laterale (±X) per spalle
+        self.declare_parameter("body_scan_p3_ext_y",           0.15)  # [m] offset verso fianchi (+Y)
+        self.declare_parameter("body_scan_p3_far_hip_z",       0.05)  # [m] offset +Z aggiuntivo per fianco lontano
         # Griglia polso fase 1 e 3: sweep angolare nel frame EE
         self.declare_parameter("body_scan_wrist_ny",           3)
         self.declare_parameter("body_scan_wrist_nz",           3)
@@ -156,6 +162,7 @@ class Z1FSM(Node):
         self.declare_parameter("body_scan_arc_wrist_ny",       1)
         self.declare_parameter("body_scan_arc_wrist_nz",       1)
         self.declare_parameter("body_scan_stability_k",        10.0)  # scala penalità varianza 3D
+        self.declare_parameter("body_scan_lookat_update_thr",  0.05)  # [m] soglia aggiornamento look-at dinamico
 
         self._scan_on_start            = bool(self.get_parameter("body_scan_on_start").value)
         self._body_scan_center         = np.array(self.get_parameter("body_scan_center").value, dtype=float)
@@ -170,6 +177,11 @@ class Z1FSM(Node):
         self._body_scan_p3_offset_x    = float(self.get_parameter("body_scan_p3_offset_x").value)
         self._body_scan_p3_offset_y    = float(self.get_parameter("body_scan_p3_offset_y").value)
         self._body_scan_p3_offset_z    = float(self.get_parameter("body_scan_p3_offset_z").value)
+        self._body_scan_p3_skip_thr    = float(self.get_parameter("body_scan_p3_skip_threshold").value)
+        self._body_scan_p3_asym_thr    = float(self.get_parameter("body_scan_p3_asym_threshold").value)
+        self._body_scan_p3_ext_x       = float(self.get_parameter("body_scan_p3_ext_x").value)
+        self._body_scan_p3_ext_y       = float(self.get_parameter("body_scan_p3_ext_y").value)
+        self._body_scan_p3_far_hip_z   = float(self.get_parameter("body_scan_p3_far_hip_z").value)
         self._body_scan_wrist_ny       = int(self.get_parameter("body_scan_wrist_ny").value)
         self._body_scan_wrist_nz       = int(self.get_parameter("body_scan_wrist_nz").value)
         self._body_scan_wrist_ang_y    = float(self.get_parameter("body_scan_wrist_angle_y_deg").value) * np.pi / 180.0
@@ -179,6 +191,7 @@ class Z1FSM(Node):
         self._body_scan_arc_wrist_ny   = int(self.get_parameter("body_scan_arc_wrist_ny").value)
         self._body_scan_arc_wrist_nz   = int(self.get_parameter("body_scan_arc_wrist_nz").value)
         self._body_scan_stability_k    = float(self.get_parameter("body_scan_stability_k").value)
+        self._body_scan_lookat_thr     = float(self.get_parameter("body_scan_lookat_update_thr").value)
 
         # ── WorkspaceChecker (Pinocchio, bloccante → thread) ────────────
         try:
@@ -224,6 +237,7 @@ class Z1FSM(Node):
         self._scan_phase1_anchor:  np.ndarray | None       = None  # stima torso fine fase 1
         self._scan_phase2_anchor:  np.ndarray | None       = None  # stima torso fusa fine fase 2 (anchor per fase 3)
         self._scan_phase: int                              = 1  # 1=home, 2=arc+wrist, 3=hips
+        self._scan_last_lookat: np.ndarray | None          = None  # ultima stima usata per aggiornare look-at pose
         # _tracker_ready: True dopo aver ricevuto almeno un messaggio su
         # /torso_tracker_state. Garantisce che il nodo tracker sia avviato
         # e il modello YOLO sia caricato prima di iniziare la body scan.
@@ -374,6 +388,7 @@ class Z1FSM(Node):
             self._scan_phase1_anchor   = None
             self._scan_phase2_anchor   = None
             self._scan_phase           = 1
+            self._scan_last_lookat     = None   # ultima stima usata per aggiornare look-at
             self.get_logger().info('━'*60)
             self.get_logger().info('🔎 BODY SCAN AVVIATA')
             self.get_logger().info('━'*60)
@@ -788,28 +803,117 @@ class Z1FSM(Node):
         return poses, transit_indices
 
 
-    def _gen_phase3_poses(self, torso_estimate: np.ndarray) -> tuple[list, set]:
+    def _gen_phase3_poses(
+        self,
+        torso_estimate: np.ndarray,
+        kp_stats: dict,
+    ) -> tuple[list | None, set | None]:
         """
-        Fase 3: un solo punto offset da home, look-at verso il torso di fase 2.
+        Fase 3 adattiva: posizione calcolata in base alla visibilità dei
+        keypoint nelle fasi 1+2.
 
-        Posizione: home + [offset_x, offset_y, offset_z]
-          +Y = verso i fianchi (asse corpo)
-          +Z = verso l'alto
-          +X = laterale
+        Frame TERESA:
+          +X = spalla lontana (kp5) / fianco lontano (kp11)
+          -X = spalla vicina  (kp6) / fianco vicino  (kp12)
+          +Y = testa → fianchi (asse corpo)
+          +Z = verticale (su)
 
-        Orientamento: look-at verso torso_estimate (fase 2 anchor)
-        → la camera punta verso il centro del torso da questa angolazione
-          laterale/alta, permettendo di vedere spalle e raffinare il centro.
+        Logica:
+          1. Skip se tutti i kp visibili (sh > skip_thr E hip > skip_thr)
 
-        Preceduto da una home transit per garantire convergenza JTC.
-        Ritorna (poses, transit_indices).
+          2. Fianchi nascosti (hip <= skip_thr):
+               pos = home + [0, +ext_y, offset_z]
+               offset_z = +far_hip_z  se kp11 (fianco lontano +X) < kp12 - asym_thr
+               offset_z = 0           altrimenti (fianchi simmetrici o vicino nascosto)
+               look-at  → hip_estimate = torso_anchor + [0, ext_y, 0]
+               Ragione: spostarsi di +15cm su Y inquadra la regione dei fianchi;
+               il piccolo +Z aiuta a vedere il fianco lontano con angolo migliore.
+
+          3. Solo spalle asimmetriche (hip OK, sh <= skip_thr):
+               pos = home + [offset_x, 0, 0]
+               offset_x = +ext_x se kp5 (spalla lontana) più nascosta
+               offset_x = -ext_x se kp6 (spalla vicina)  più nascosta
+               look-at  → torso_estimate (livello spalle)
+
+        Preceduta da home transit per convergenza JTC.
+        Ritorna (poses, transit_indices) oppure (None, None) se skip.
         """
-        pos = np.array([
-            float(self._home_position[0]) + self._body_scan_p3_offset_x,
-            float(self._home_position[1]) + self._body_scan_p3_offset_y,
-            float(self._home_position[2]) + self._body_scan_p3_offset_z,
-        ])
-        d    = torso_estimate - pos
+        if torso_estimate is None:
+            self.get_logger().warn('⚠️  Fase 3: torso_estimate None → skip')
+            return None, None
+
+        skip_thr   = self._body_scan_p3_skip_thr
+        asym_thr   = self._body_scan_p3_asym_thr
+        ext_x      = self._body_scan_p3_ext_x
+        ext_y      = self._body_scan_p3_ext_y
+        far_hip_z  = self._body_scan_p3_far_hip_z
+
+        shoulders = kp_stats['shoulders']
+        hips      = kp_stats['hips']
+        kp5_avg   = float(kp_stats['per_kp'][0])   # spalla lontana (+X)
+        kp6_avg   = float(kp_stats['per_kp'][1])   # spalla vicina  (-X)
+        kp11_avg  = float(kp_stats['per_kp'][2])   # fianco lontano (+X)
+        kp12_avg  = float(kp_stats['per_kp'][3])   # fianco vicino  (-X)
+
+        self.get_logger().info(
+            f'📊 KP visibility — '
+            f'spalle: kp5={kp5_avg:.2f} kp6={kp6_avg:.2f} (avg={shoulders:.2f}) | '
+            f'fianchi: kp11={kp11_avg:.2f} kp12={kp12_avg:.2f} (avg={hips:.2f})'
+        )
+
+        # ── 1. Skip se tutto visibile ─────────────────────────────────────
+        if shoulders > skip_thr and hips > skip_thr:
+            self.get_logger().info(
+                f'✅ Fase 3 SKIP: tutti i keypoint ben visibili '
+                f'(sh={shoulders:.2f} hip={hips:.2f} > thr={skip_thr:.2f})'
+            )
+            return None, None
+
+        # ── 2. Fianchi nascosti → muoversi verso i fianchi su +Y ─────────
+        if hips <= skip_thr:
+            # Fianco lontano (kp11, +X) più nascosto del vicino → +Z aggiuntivo
+            far_hidden = kp11_avg < kp12_avg - asym_thr
+            offset_z   = far_hip_z if far_hidden else 0.0
+
+            pos = np.array([
+                float(self._home_position[0]),
+                float(self._home_position[1]) + ext_y,
+                float(self._home_position[2]) + offset_z,
+            ])
+
+            # Look-at verso la regione fianchi stimata
+            hip_estimate = torso_estimate + np.array([0.0, ext_y, 0.0])
+
+            z_lbl = f'+Z={offset_z:.3f}m (fianco lontano kp11 nascosto)' if far_hidden \
+                    else 'Z invariato (fianchi simmetrici)'
+            self.get_logger().info(
+                f'🗺️  Fase 3 → fianchi: pos=[{pos[0]:.3f},{pos[1]:.3f},{pos[2]:.3f}] '
+                f'+Y={ext_y:.3f}m | {z_lbl}'
+            )
+            lookat_target = hip_estimate
+
+        # ── 3. Solo spalle asimmetriche → muoversi lateralmente su X ──────
+        else:
+            asym_x   = kp6_avg - kp5_avg   # >0: kp5 più nascosta → +X
+            offset_x = np.sign(asym_x) * ext_x if abs(asym_x) >= asym_thr else 0.0
+            side_lbl = ('+X (kp5 nascosta)' if asym_x > 0
+                        else '-X (kp6 nascosta)' if asym_x < 0
+                        else 'centrato (spalle bilanciate)')
+
+            pos = np.array([
+                float(self._home_position[0]) + offset_x,
+                float(self._home_position[1]),
+                float(self._home_position[2]),
+            ])
+
+            self.get_logger().info(
+                f'🗺️  Fase 3 → spalle: pos=[{pos[0]:.3f},{pos[1]:.3f},{pos[2]:.3f}] '
+                f'X={offset_x:+.3f}m ({side_lbl})'
+            )
+            lookat_target = torso_estimate
+
+        # ── Orientamento: look-at verso il target calcolato ───────────────
+        d    = lookat_target - pos
         norm = np.linalg.norm(d)
         if norm < 1e-6:
             R_base = quaternion_matrix(self._home_orientation)[:3, :3]
@@ -820,21 +924,11 @@ class Z1FSM(Node):
         poses:           list = []
         transit_indices: set  = set()
 
-        # home transit
         transit_indices.add(0)
         poses.append(self._make_home_pose())
-
-        # posa fase 3
         poses.extend(self._wrist_poses_at(pos, R_base,
                                           ny=self._body_scan_arc_wrist_ny,
                                           nz=self._body_scan_arc_wrist_nz))
-        self.get_logger().info(
-            f'🗺️  Fase 3: pos=[{pos[0]:.3f},{pos[1]:.3f},{pos[2]:.3f}] '
-            f'(home +X={self._body_scan_p3_offset_x:.2f}m '
-            f'+Y={self._body_scan_p3_offset_y:.2f}m '
-            f'+Z={self._body_scan_p3_offset_z:.2f}m, '
-            f'look-at torso [{torso_estimate[0]:.3f},{torso_estimate[1]:.3f},{torso_estimate[2]:.3f}])'
-        )
         return poses, transit_indices
 
     def _on_tracker_state(self, msg: String):
@@ -847,7 +941,10 @@ class Z1FSM(Node):
         """
         Callback /torso_scan_point: riceve dati per-frame dal tracker
         durante la body scan e li invia allo scanner.
-        data = [score, n_kp, conf, x_world, y_world, z_world]
+        data = [score, n_kp, conf, x_world, y_world, z_world,
+                kp5_conf, kp6_conf, kp11_conf, kp12_conf]
+        Gli indici 6-9 (per-keypoint confidence) sono opzionali per
+        retrocompatibilità con tracker privi di tale campo.
         """
         if self.state == self.BODY_SCANNING and self._body_scanner is not None:
             self._body_scanner.feed_scan_data(list(msg.data))
@@ -1167,12 +1264,37 @@ class Z1FSM(Node):
                 self.set_state(self.WAITING)
                 return
 
+            # ── Aggiornamento dinamico look-at (solo fase 2) ──────────────
+            # Se la stima del torso è migliorata di più della soglia rispetto
+            # all'ultima usata, aggiorna l'orientamento delle pose rimanenti.
+            if (self._scan_phase == 2
+                    and self._body_scanner is not None
+                    and self._scan_torso_estimate is not None):
+                if self._scan_last_lookat is None:
+                    self._scan_last_lookat = self._scan_torso_estimate.copy()
+                else:
+                    drift = np.linalg.norm(self._scan_torso_estimate - self._scan_last_lookat)
+                    if drift > self._body_scan_lookat_thr:
+                        n = self._body_scanner.update_remaining_lookat(
+                            self._scan_torso_estimate,
+                            self._orientation_for_xee,
+                        )
+                        if n > 0:
+                            self.get_logger().info(
+                                f'🔄 Look-at aggiornato su {n} pose rimanenti '
+                                f'(drift={drift*100:.1f}cm, '
+                                f'torso=[{self._scan_torso_estimate[0]:.3f},'
+                                f'{self._scan_torso_estimate[1]:.3f},'
+                                f'{self._scan_torso_estimate[2]:.3f}])'
+                            )
+                        self._scan_last_lookat = self._scan_torso_estimate.copy()
+
             now = self.get_clock().now().nanoseconds * 1e-9
             st  = self._body_scanner.tick(ik_done=self.ik_done, now=now)
 
             if st.action == ScanAction.SEND_IK:
                 # Fase 1: usa home_orientation (già nella pose).
-                # Fase 2: orientamento look-at + wrist già baked-in in _gen_arc_wrist_poses.
+                # Fase 2: orientamento look-at aggiornato dinamicamente o baked-in.
                 self.ik_done = False
                 self.pub_ik_enable.publish(Bool(data=True))
                 self.pub_ik_goal.publish(st.goal)
@@ -1224,7 +1346,7 @@ class Z1FSM(Node):
                         self._finish_body_scan()
 
                 elif self._scan_phase == 2:
-                    # ── Fase 2 completata → Fase 3 ──────────────────────────
+                    # ── Fase 2 completata → Fase 3 adattiva ─────────────────
                     self.get_logger().info('✅ FASE 2 completata')
                     fused_p2 = self._body_scanner.fused_torso_xyz(
                         anchor   = self._scan_phase1_anchor,
@@ -1233,27 +1355,31 @@ class Z1FSM(Node):
                     self._scan_phase2_anchor = (fused_p2 if fused_p2 is not None
                                                 else self._scan_phase1_anchor)
                     a2 = self._scan_phase2_anchor
+
+                    # Interroga lo scanner per la visibilità per-keypoint
+                    kp_stats = self._body_scanner.kp_visibility_stats()
                     poses_p3, transit_p3 = self._gen_phase3_poses(
-                        torso_estimate=a2 if a2 is not None else self._scan_phase1_anchor
+                        torso_estimate = a2 if a2 is not None else self._scan_phase1_anchor,
+                        kp_stats       = kp_stats,
                     )
-                    self._body_scanner = BodySearchScanner(
-                        scan_poses         = poses_p3,
-                        scan_point_timeout = self._body_scan_wrist_timeout,
-                        scan_min_frames    = self._body_scan_wrist_min_fr,
-                        early_stop_score   = self._body_scan_early,
-                        logger             = self.get_logger(),
-                        transit_indices    = transit_p3,
-                        stability_k        = self._body_scan_stability_k,
-                    )
-                    self._body_scanner.reset()
-                    self._scan_phase = 3
-                    self.get_logger().info('━'*60)
-                    self.get_logger().info(
-                        f'▶ FASE 3 — Posizione laterale '
-                        f'(home +X={self._body_scan_p3_offset_x:.2f}m '
-                        f'+Y={self._body_scan_p3_offset_y:.2f}m '
-                        f'+Z={self._body_scan_p3_offset_z:.2f}m, look-at torso)'
-                    )
+
+                    # Fase 3 skip: tutti i keypoint erano già ben visibili
+                    if poses_p3 is None:
+                        self._finish_body_scan()
+                    else:
+                        self._body_scanner = BodySearchScanner(
+                            scan_poses         = poses_p3,
+                            scan_point_timeout = self._body_scan_wrist_timeout,
+                            scan_min_frames    = self._body_scan_wrist_min_fr,
+                            early_stop_score   = self._body_scan_early,
+                            logger             = self.get_logger(),
+                            transit_indices    = transit_p3,
+                            stability_k        = self._body_scan_stability_k,
+                        )
+                        self._body_scanner.reset()
+                        self._scan_phase = 3
+                        self.get_logger().info('━'*60)
+                        self.get_logger().info('▶ FASE 3 — Posizione adattiva keypoint')
 
                 else:
                     # ── Fase 3 completata → fine scan ───────────────────────

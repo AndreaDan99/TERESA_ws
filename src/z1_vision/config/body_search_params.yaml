@@ -80,6 +80,13 @@ z1_FSM:
     # Score oltre il quale si interrompe la scansione anticipatamente.
     body_scan_early_stop: 0.95
 
+    # ── Look-at dinamico (fase 2) ─────────────────────────────────
+    # Soglia [m] oltre cui la stima del torso viene considerata
+    # "migliorata abbastanza" da aggiornare il look-at delle pose rimanenti.
+    # Con 0.05m: aggiorna se la stima si sposta di più di 5cm rispetto
+    # all'ultima usata. Impostare a 9999 per disabilitare.
+    body_scan_lookat_update_thr: 0.05
+
     # ── Stabilità 3D (qualità depth) ──────────────────────────────
     # Scala della penalità sulla varianza 3D delle stime torso nel punto.
     # score_finale = detection_rate × avg_kp_score × 1/(1 + k × std_dev_3D)
@@ -94,13 +101,40 @@ z1_FSM:
     # Se tutte le misure arco sono outlier → usa direttamente l'anchor home.
     body_scan_fusion_max_dist: 0.15
 
-    # ── Fase 3: posizione laterale offset da home ──────────────────
-    # Il braccio si sposta dalla home di [offset_x, offset_y, offset_z]
-    # mantenendo l'orientamento di home (NO look-at verso il torso).
-    # Frame TERESA: X=laterale, Y=testa→fianchi (verso hips), Z=verticale(su)
-    body_scan_p3_offset_x: 0.00   # [m] offset laterale (+X)
-    body_scan_p3_offset_y: 0.20   # [m] offset verso fianchi (+Y, asse corpo)
-    body_scan_p3_offset_z: 0.20   # [m] offset verso l'alto (+Z, verticale)
+    # ── Fase 3: adattiva in base alla visibilità keypoint ─────────
+    #
+    # La fase 3 parte SOLO se almeno un gruppo di keypoint era poco visibile
+    # nelle fasi 1+2. Se tutto era già visibile, viene saltata (risparmio tempo).
+    #
+    # Frame TERESA:
+    #   X = laterale  (kp5=spalla lontana +X, kp6=spalla vicina -X,
+    #                   kp11=fianco lontano +X, kp12=fianco vicino -X)
+    #   Y = testa→fianchi (asse corpo)
+    #   Z = verticale (su)
+    #
+    # Soglia skip: se spalle E fianchi hanno conf media > soglia → skip fase 3
+    body_scan_p3_skip_threshold: 0.50
+
+    # Differenza minima di conf tra due keypoint per considerare l'asimmetria
+    # reale (evita reazioni a rumore di detection).
+    body_scan_p3_asym_threshold: 0.15
+
+    # Offset laterale (±X) per il caso spalle asimmetriche:
+    # ci si sposta verso il lato della spalla meno visibile.
+    body_scan_p3_ext_x: 0.08   # [m]
+
+    # Offset lungo l'asse corpo (+Y) per il caso fianchi nascosti:
+    # +15cm porta la camera all'altezza dei fianchi del paziente.
+    body_scan_p3_ext_y: 0.15   # [m]
+
+    # Offset verticale (+Z) aggiuntivo per vedere il fianco LONTANO (kp11, +X):
+    # piccolo rialzo che migliora l'angolo di vista sul fianco più distante.
+    body_scan_p3_far_hip_z: 0.05   # [m]
+
+    # Parametri legacy (non più usati, mantenuti per retrocompatibilità)
+    body_scan_p3_offset_x: 0.00
+    body_scan_p3_offset_y: 0.20
+    body_scan_p3_offset_z: 0.20
 
 
 # ── Parametri scan mode nel tracker ────────────────────────────────────────
