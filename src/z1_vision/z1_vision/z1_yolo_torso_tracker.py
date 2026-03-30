@@ -202,6 +202,10 @@ class Z1YoloTorsoTracker(Node):
         self._scan_state       = 'IDLE'   # IDLE | COLLECTING | POINT_LOCKED
         self._scan_valid       = 0
         self._scan_torso_world = None     # ultima posizione torso rilevata in scan mode
+        # Confidence per-keypoint torso dell'ultimo frame processato.
+        # Inizializzato vuoto: se _update_scan viene chiamata prima di
+        # _extract_torso (non dovrebbe, ma per sicurezza), tutti i kp = 0.0.
+        self._last_kp_conf: dict = {}
 
         # ── Interpolazione tracking (invariata) ────────────────────
         self.tracking_current_pos = None  # world frame
@@ -425,6 +429,10 @@ class Z1YoloTorsoTracker(Node):
         shoulder_conf = [kp_3d_conf[i] for i in SHOULDER_KEYPOINTS if i in kp_3d]
         hip_conf      = [kp_3d_conf[i] for i in HIP_KEYPOINTS      if i in kp_3d]
 
+        # Salva confidence per-keypoint torso per _update_scan (scan mode)
+        self._last_kp_conf = {idx: kp_3d_conf[idx] for idx in (5, 6, 11, 12)
+                              if idx in kp_3d_conf}
+
         # ── Metodo primario: spalle + fianchi ─────────────────────────
         if len(shoulder_pts) >= 1 and len(hip_pts) >= 1:
             torso_pts = shoulder_pts + hip_pts
@@ -461,15 +469,19 @@ class Z1YoloTorsoTracker(Node):
         """
         Logica di update in scan mode.
         Pubblica ogni frame su /torso_scan_point:
-          [score, n_kp, conf, x_world, y_world, z_world]
+          [score, n_kp, conf, x_world, y_world, z_world,
+           kp5_conf, kp6_conf, kp11_conf, kp12_conf]
+        - Indici 0-5 : come prima (retrocompatibili)
+        - Indici 6-9 : confidence individuale dei 4 keypoint torso.
+                       0.0 se il keypoint non è stato rilevato.
         score = (n_kp / 4) * conf  per frame validi, 0.0 altrimenti.
 
         Stato interno:
-          IDLE       → aspetta prima detection valida
-          COLLECTING → accumula frame validi
+          IDLE         → aspetta prima detection valida
+          COLLECTING   → accumula frame validi
           POINT_LOCKED → ha raggiunto scan_min_frames (continua a pubblicare)
         """
-        TORSO_KP_MAX = 4  # spalle + anche (max keypoint torso)
+        TORSO_KP_MAX = 4  # spalle + fianchi (max keypoint torso)
 
         valid = (torso_raw is not None
                  and n_valid >= self.min_keypoints
@@ -486,12 +498,21 @@ class Z1YoloTorsoTracker(Node):
         if torso_world is not None:
             self._scan_torso_world = torso_world
 
-        # ── Pubblica dato per-frame ──
+        # ── Confidence per-keypoint (kp5, kp6, kp11, kp12) ──────────────
+        # Recuperata da _extract_torso via kp_data.conf già disponibile
+        # nella callback. Usiamo self._last_kp_conf aggiornato in cb_synchronized.
+        kp5_c  = float(getattr(self, '_last_kp_conf', {}).get(5,  0.0))
+        kp6_c  = float(getattr(self, '_last_kp_conf', {}).get(6,  0.0))
+        kp11_c = float(getattr(self, '_last_kp_conf', {}).get(11, 0.0))
+        kp12_c = float(getattr(self, '_last_kp_conf', {}).get(12, 0.0))
+
+        # ── Pubblica dato per-frame ──────────────────────────────────────
         if torso_world is not None:
             data = [per_frame_score, float(n_valid), avg_conf,
-                    float(torso_world[0]), float(torso_world[1]), float(torso_world[2])]
+                    float(torso_world[0]), float(torso_world[1]), float(torso_world[2]),
+                    kp5_c, kp6_c, kp11_c, kp12_c]
         else:
-            data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            data = [0.0] * 10
         msg = Float32MultiArray()
         msg.data = data
         self.pub_scan_point.publish(msg)
