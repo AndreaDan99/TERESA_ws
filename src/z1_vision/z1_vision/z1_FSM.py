@@ -155,6 +155,7 @@ class Z1FSM(Node):
         # Evita combinazioni arco+wrist che portano fuori workspace/JTC.
         self.declare_parameter("body_scan_arc_wrist_ny",       1)
         self.declare_parameter("body_scan_arc_wrist_nz",       1)
+        self.declare_parameter("body_scan_stability_k",        10.0)  # scala penalità varianza 3D
 
         self._scan_on_start            = bool(self.get_parameter("body_scan_on_start").value)
         self._body_scan_center         = np.array(self.get_parameter("body_scan_center").value, dtype=float)
@@ -177,6 +178,7 @@ class Z1FSM(Node):
         self._body_scan_wrist_min_fr   = int(self.get_parameter("body_scan_wrist_min_frames").value)
         self._body_scan_arc_wrist_ny   = int(self.get_parameter("body_scan_arc_wrist_ny").value)
         self._body_scan_arc_wrist_nz   = int(self.get_parameter("body_scan_arc_wrist_nz").value)
+        self._body_scan_stability_k    = float(self.get_parameter("body_scan_stability_k").value)
 
         # ── WorkspaceChecker (Pinocchio, bloccante → thread) ────────────
         try:
@@ -387,6 +389,7 @@ class Z1FSM(Node):
                 scan_min_frames    = self._body_scan_wrist_min_fr,
                 early_stop_score   = self._body_scan_early,
                 logger             = self.get_logger(),
+                stability_k        = self._body_scan_stability_k,
             )
             self._body_scanner.reset()
             # Attiva scan mode nel tracker
@@ -520,30 +523,28 @@ class Z1FSM(Node):
 
     def _orientation_for_xee(self, x_ee: np.ndarray) -> np.ndarray:
         """
-        Calcola l'orientamento EE con X_ee = x_ee, mantenendo Y_ee il più vicino
-        possibile a Y_home (Gram-Schmidt).
+        Calcola l'orientamento EE con X_ee = x_ee (Gram-Schmidt, riferimento world).
 
         Metodo:
           1. X_ee = x_ee normalizzato
-          2. Y_ee = Y_home proiettato ⊥ a X_ee, normalizzato
-             (fallback: Z_home se Y_home è quasi parallelo a X_ee)
+          2. Y_ee = Z_world [0,0,1] proiettato ⊥ a X_ee, normalizzato
+             (fallback: X_world [1,0,0] se X_ee quasi parallelo a Z_world)
           3. Z_ee = X_ee × Y_ee
 
-        Vantaggi rispetto a Rodrigues:
-          - Nessun flip d'asse quando l'angolo tra x_home e x_ee è grande
-          - Y_ee rimane sempre vicino al riferimento home → continuità
+        Usare Z_world come riferimento produce orientamenti consistenti e
+        "dritti" in qualsiasi direzione — equivalente al comportamento
+        Rodrigues originale, senza flip d'asse.
         Ritorna quaternione [x, y, z, w].
         """
-        R_home = quaternion_matrix(self._home_orientation)[:3, :3]
-        x_ee   = x_ee / np.linalg.norm(x_ee)
+        x_ee = x_ee / np.linalg.norm(x_ee)
 
-        # Y_ee: Y_home proiettato ⊥ a X_ee
-        y_ref  = R_home[:, 1]
+        # Y_ee: Z_world proiettato ⊥ a X_ee
+        y_ref  = np.array([0.0, 0.0, 1.0])
         y_ee   = y_ref - np.dot(y_ref, x_ee) * x_ee
         y_norm = np.linalg.norm(y_ee)
         if y_norm < 1e-3:
-            # Y_home quasi parallelo a X_ee → usa Z_home come riferimento
-            y_ref  = R_home[:, 2]
+            # X_ee quasi parallelo a Z_world → usa X_world come riferimento
+            y_ref  = np.array([1.0, 0.0, 0.0])
             y_ee   = y_ref - np.dot(y_ref, x_ee) * x_ee
             y_norm = np.linalg.norm(y_ee)
         y_ee /= y_norm
@@ -1200,6 +1201,7 @@ class Z1FSM(Node):
                             early_stop_score   = self._body_scan_early,
                             logger             = self.get_logger(),
                             transit_indices    = transit_p2,
+                            stability_k        = self._body_scan_stability_k,
                         )
                         self._body_scanner.reset()
                         self._scan_phase = 2
@@ -1241,6 +1243,7 @@ class Z1FSM(Node):
                         early_stop_score   = self._body_scan_early,
                         logger             = self.get_logger(),
                         transit_indices    = transit_p3,
+                        stability_k        = self._body_scan_stability_k,
                     )
                     self._body_scanner.reset()
                     self._scan_phase = 3

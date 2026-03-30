@@ -65,9 +65,10 @@ class ScanTick:
 
 @dataclass
 class _PointResult:
-    arm_pose:  PoseStamped
-    score:     float
-    torso_xyz: np.ndarray   # mediana posizioni world frame valide in quel punto
+    arm_pose:   PoseStamped
+    score:      float
+    torso_xyz:  np.ndarray   # mediana posizioni world frame valide in quel punto
+    std_dev_3d: float = 0.0  # deviazione standard 3D delle posizioni (proxy qualità depth)
 
 
 # ── Stato interno ─────────────────────────────────────────────────────────────
@@ -97,6 +98,10 @@ class BodySearchScanner:
     scan_min_frames    : frame validi minimi per dichiarare il punto pronto
     early_stop_score   : score (0-1) oltre cui si interrompe la scansione anticipata
     logger             : riferimento al logger ROS (opzionale)
+    stability_k        : scala del termine di stabilità 3D (default 10.0).
+                         score_finale = detection_rate × avg_kp_score × 1/(1 + k × std_dev_3D)
+                         Con k=10: std=5mm → ×0.95, std=2cm → ×0.83, std=10cm → ×0.50.
+                         Impostare a 0.0 per disabilitare il termine (comportamento precedente).
     """
 
     def __init__(
@@ -107,6 +112,7 @@ class BodySearchScanner:
         early_stop_score:   float = 0.85,
         logger: Any = None,
         transit_indices:    set[int] | None = None,
+        stability_k:        float = 10.0,
     ):
         self._poses          = scan_poses
         self._timeout        = scan_point_timeout
@@ -114,6 +120,7 @@ class BodySearchScanner:
         self._early_stop     = early_stop_score
         self._log            = logger
         self._transit        = transit_indices or set()
+        self._stability_k    = stability_k
 
         # Stato della macchina a stati interna
         self._state:     _St               = _St.INIT
@@ -265,20 +272,22 @@ class BodySearchScanner:
             return ScanTick(ScanAction.WAIT)
 
         # ── Calcola e salva il risultato per questo punto ──
-        final_score = self._compute_score()
+        final_score, std_3d = self._compute_score()
         xyz_median  = (np.median(np.array(self._positions), axis=0)
                        if self._positions else np.zeros(3))
         self._results.append(_PointResult(
-            arm_pose  = self._poses[self._idx],
-            score     = final_score,
-            torso_xyz = xyz_median,
+            arm_pose   = self._poses[self._idx],
+            score      = final_score,
+            torso_xyz  = xyz_median,
+            std_dev_3d = std_3d,
         ))
 
         tag = "✅" if ready else "⏱️ timeout"
         self._log_i(
             f"{tag} Punto {self._idx + 1}/{len(self._poses)}: "
             f"score={final_score:.3f} "
-            f"({self._frames_valid}/{self._frames_total} frame validi)"
+            f"({self._frames_valid}/{self._frames_total} frame validi, "
+            f"std3d={std_3d*100:.1f}cm)"
         )
 
         # ── Early stop? ──
@@ -339,18 +348,39 @@ class BodySearchScanner:
 
     # ── Helper ────────────────────────────────────────────────────────────────
 
-    def _compute_score(self) -> float:
+    def _compute_score(self) -> tuple[float, float]:
         """
         Score del punto corrente:
-          detection_rate × avg_per_frame_score
-        dove avg_per_frame_score = mean((n_kp/max_kp) × avg_conf) dei frame validi.
+          detection_rate × avg_per_frame_score × stability_3d
+
+        dove:
+          detection_rate      = frame_validi / frame_totali
+          avg_per_frame_score = mean((n_kp/max_kp) × avg_conf) dei frame validi
+          stability_3d        = 1 / (1 + stability_k × std_dev_3D)
+
+        std_dev_3D è la deviazione standard media delle posizioni 3D accumulate
+        nel punto corrente (proxy della qualità della misura di depth RealSense).
+        Con stability_k=10: std=5mm → ×0.95, std=2cm → ×0.83, std=10cm → ×0.50.
+        Se c'è meno di 2 frame validi, stability_3d = 1.0 (nessuna penalità).
+
+        Ritorna (score_finale, std_dev_3d).
         """
         if self._frames_total == 0:
-            return 0.0
+            return 0.0, 0.0
+
         detection_rate = self._frames_valid / self._frames_total
         avg_score      = (self._score_sum / self._frames_valid
                           if self._frames_valid > 0 else 0.0)
-        return detection_rate * avg_score
+
+        # ── Stabilità 3D ──────────────────────────────────────────────────
+        std_3d = 0.0
+        if len(self._positions) >= 2:
+            arr    = np.array(self._positions)          # shape (N, 3)
+            std_3d = float(np.mean(np.std(arr, axis=0)))  # media delle std su x,y,z
+
+        stability = 1.0 / (1.0 + self._stability_k * std_3d)
+
+        return detection_rate * avg_score * stability, std_3d
 
     def best_arm_pose(self) -> Optional[PoseStamped]:
         """Ritorna la PoseStamped del punto con score massimo, o None."""

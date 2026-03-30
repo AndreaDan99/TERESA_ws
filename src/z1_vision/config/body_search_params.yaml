@@ -80,6 +80,13 @@ z1_FSM:
     # Score oltre il quale si interrompe la scansione anticipatamente.
     body_scan_early_stop: 0.95
 
+    # ── Stabilità 3D (qualità depth) ──────────────────────────────
+    # Scala della penalità sulla varianza 3D delle stime torso nel punto.
+    # score_finale = detection_rate × avg_kp_score × 1/(1 + k × std_dev_3D)
+    # Con k=10: std=5mm → ×0.95 (quasi nulla), std=2cm → ×0.83, std=10cm → ×0.50.
+    # Impostare a 0.0 per disabilitare (comportamento precedente).
+    body_scan_stability_k: 10.0
+
     # ── Outlier rejection nella fusione finale ─────────────────────
     # Distanza massima [m] tra una stima arco e l'anchor home per essere
     # inclusa nella media pesata finale. Misure più lontane vengono scartate
