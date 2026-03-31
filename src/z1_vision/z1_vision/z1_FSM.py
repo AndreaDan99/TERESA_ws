@@ -1262,11 +1262,12 @@ class Z1FSM(Node):
                     self._skip_impedance_hold = True
                     self.set_state(self.WAITING)
                 elif self._scan_mgr.is_center_hub:
-                    # Centro hub FAST: nessuna misura, pausa poi primo punto FAST
+                    # Centro hub FAST: nessuna misura, avanza subito a pt1 poi pausa
+                    self._scan_mgr.advance()   # idx: 0 → 1
                     self.get_logger().info(
                         f'📍 FAST: centro hub raggiunto '
                         f'→ SCAN_PAUSE {self._scan_pause_s:.1f}s '
-                        f'→ {self._scan_mgr.next_name}'
+                        f'→ {self._scan_mgr.current_name}'
                     )
                     self.set_state(self.SCAN_PAUSE)
                 else:
