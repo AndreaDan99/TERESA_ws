@@ -43,19 +43,20 @@ z1_FSM:
 
     # ── Modalità scansione FAST Ultrasound ────────────────────────
     # "single"          → singolo punto al centro torso
-    # "fast_ultrasound" → protocollo FAST: centro hub + 5 finestre ecografiche
+    # "fast_ultrasound" → protocollo FAST: centro hub + 4 finestre ecografiche
     #
     # World frame (TERESA):
     #   X → verso il torso  (asse di approccio, gestito da surface frame)
     #   Y → testa → piedi   (asse corpo)
     #   Z → destra → sinistra (laterale)
     #
-    # I 5 punti FAST sono calcolati geometricamente dai keypoint YOLO 3D
+    # I 4 punti FAST sono calcolati geometricamente dai keypoint YOLO 3D
     # (kp5=spalla lontana, kp6=spalla vicina, kp11=fianco lontano, kp12=fianco vicino)
-    # al termine del body scan. I ratios qui sotto sono frazioni delle dimensioni
-    # anatomiche reali del paziente (adattativi, non dipendono dalla taglia).
+    # al termine del body scan. I ratios sono frazioni delle dimensioni anatomiche
+    # reali del paziente (adattativi). Tutti i punti vengono clippati a restare
+    # dentro il bounding box torso [shoulder_mid_y, hip_mid_y].
     #
-    # Sequenza: Centro(hub) → Sottoxifoidea → RUQ → LUQ → Sovrapubica → Pleurica Dx
+    # Sequenza: Centro(hub) → Sottoxifoidea → RUQ → LUQ → Sovrapubica
     #           Con pausa scan_pause_s al centro tra ogni punto FAST.
     scan_mode:        "fast_ultrasound"   # "single" | "fast_ultrasound"
     scan_clearance_x: 0.120              # [m] retrazione -X tra punti (SCAN_PRELIFT)
@@ -64,25 +65,23 @@ z1_FSM:
     # ── Ratios anatomici FAST ──────────────────────────────────────
     # Tutti espressi come frazioni di torso_len (lunghezza spalle→fianchi)
     # o shoulder_width (larghezza spalle), sempre ≥ 0.
-    # Segno: body_ratio > 0 = verso i piedi; lat_ratio > 0 = verso sinistra (kp5 side).
+    # body_ratio: frazione di torso_len dalla spalla verso i piedi
+    # lat_ratio:  frazione di shoulder_width laterale (kp6=destra, kp5=sinistra)
     #
-    # pt1 Sottoxifoidea: 25% di torso_len sotto le spalle, linea mediana
+    # pt1 Sottoxifoidea: 25% torso_len sotto le spalle, linea mediana
     fast_subxiphoid_body_ratio: 0.25
     #
     # pt2 RUQ (Morrison's pouch): 40% torso_len, 50% shoulder_width verso destra (kp6)
     fast_ruq_body_ratio:        0.40
-    fast_ruq_lat_ratio:         0.50   # verso kp6 (lato vicino, destra)
+    fast_ruq_lat_ratio:         0.50
     #
-    # pt3 LUQ (Koller's pouch): 35% torso_len (leggermente più alto di RUQ), 60% verso sinistra
+    # pt3 LUQ (Koller's pouch): 35% torso_len, 60% shoulder_width verso sinistra (kp5)
     fast_luq_body_ratio:        0.35
-    fast_luq_lat_ratio:         0.60   # verso kp5 (lato lontano, sinistra)
+    fast_luq_lat_ratio:         0.60
     #
-    # pt4 Sovrapubica: 15% di torso_len sotto i fianchi, linea mediana
+    # pt4 Sovrapubica: 15% torso_len DENTRO i fianchi (hip_mid - ratio*torso_len)
+    #   clippato automaticamente a non superare hip_mid_y
     fast_suprapubic_body_ratio: 0.15
-    #
-    # pt5 Pleurica Dx: 10% sopra le spalle, 40% shoulder_width verso destra
-    fast_pleural_body_ratio:    0.10
-    fast_pleural_lat_ratio:     0.40   # verso kp6 (lato vicino, destra)
 
     # ── Debug ──────────────────────────────────────────────────────
     # Se true: dopo WAIT_IK_DONE torna in WAITING senza avviare impedance.

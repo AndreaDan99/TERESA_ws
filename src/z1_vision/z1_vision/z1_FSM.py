@@ -682,7 +682,7 @@ class Z1FSM(Node):
                     self.get_logger().info('━'*60)
                     self.get_logger().info('🔬 FAST ULTRASOUND — punti calcolati da keypoint YOLO:')
                     names = ['Centro (hub)', 'Sottoxifoidea', 'RUQ (Morrison)',
-                             'LUQ (Koller)', 'Sovrapubica', 'Pleurica Dx']
+                             'LUQ (Koller)', 'Sovrapubica']
                     for i, (name, off) in enumerate(zip(names, self._scan_mgr.offsets)):
                         marker = '🏠' if i == 0 else f'[{i}/5]'
                         self.get_logger().info(

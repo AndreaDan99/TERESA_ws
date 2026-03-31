@@ -5,7 +5,8 @@ z1_scan_manager.py
 Gestione della sequenza di scansione fast-ultrasound FAST per z1_FSM.
 
 Protocollo FAST (Focused Assessment with Sonography in Trauma):
-  5 finestre ecografiche calcolate dai keypoint 3D YOLO del torso.
+  4 finestre ecografiche calcolate dai keypoint 3D YOLO del torso.
+  Tutti i punti sono clippati a restare dentro [shoulder_mid, hip_mid].
 
 Struttura sequenza:
   idx=0 : Centro hub (navigazione, NESSUNA misura impedance)
@@ -13,7 +14,6 @@ Struttura sequenza:
   idx=2 : RUQ - Morrison's pouch (fianco destro)
   idx=3 : LUQ - Koller's pouch  (fianco sinistro)
   idx=4 : Sovrapubica  (pelvica)
-  idx=5 : Pleurica dx  (base polmone destro)
 
 Calcolo punti FAST da keypoint anatomici:
   kp5  = spalla lontana (+X in world frame)
@@ -33,9 +33,9 @@ Calcolo punti FAST da keypoint anatomici:
                                 - ratio_ruq_lat  * shoulder_width * lateral_axis
   pt_luq         = shoulder_mid + ratio_luq_body * torso_len * body_axis
                                 + ratio_luq_lat  * shoulder_width * lateral_axis
-  pt_suprapubic  = hip_mid      + ratio_suprapubic_body * torso_len * body_axis
-  pt_pleural_r   = shoulder_mid - ratio_pleural_body * torso_len * body_axis
-                                - ratio_pleural_lat  * shoulder_width * lateral_axis
+  pt_suprapubic  = hip_mid      - ratio_suprapubic_body * torso_len * body_axis
+
+  Tutti i punti vengono clippati: Y ∈ [shoulder_mid_y, hip_mid_y].
 
 Gli offset sono espressi come (0, dy, dz) RELATIVI al torso_center.
 World frame TERESA: X=approccio, Y=testa→piedi, Z=destra→sinistra.
@@ -58,14 +58,13 @@ from std_msgs.msg            import Bool
 from visualization_msgs.msg  import Marker
 
 
-# Nomi per logging dei 6 slot (idx 0..5)
+# Nomi per logging dei 5 slot (idx 0..4)
 FAST_POINT_NAMES = [
     "Centro (hub)",
     "Sottoxifoidea",
     "RUQ (Morrison's pouch)",
     "LUQ (Koller's pouch)",
     "Sovrapubica",
-    "Pleurica Dx",
 ]
 
 
@@ -75,7 +74,7 @@ class ScanManager:
 
     Modalità:
       MODE_SINGLE       → singolo punto al centro torso
-      qualsiasi altra   → protocollo FAST (6 slot: centro hub + 5 punti FAST)
+      qualsiasi altra   → protocollo FAST (5 slot: centro hub + 4 punti FAST)
 
     World frame (TERESA):
       X → verso il torso  (asse di approccio)
@@ -100,8 +99,6 @@ class ScanManager:
         ratio_luq_body:         float,
         ratio_luq_lat:          float,
         ratio_suprapubic_body:  float,
-        ratio_pleural_body:     float,
-        ratio_pleural_lat:      float,
     ):
         self.mode          = mode
         self.clearance     = clearance
@@ -115,8 +112,6 @@ class ScanManager:
         self._ratio_luq_body        = ratio_luq_body
         self._ratio_luq_lat         = ratio_luq_lat
         self._ratio_suprapubic_body = ratio_suprapubic_body
-        self._ratio_pleural_body    = ratio_pleural_body
-        self._ratio_pleural_lat     = ratio_pleural_lat
 
         # Offsets (dx, dy, dz) relativi al torso_center in world frame.
         # offsets[0] = (0,0,0) = centro hub
@@ -165,8 +160,6 @@ class ScanManager:
         r_luq_b  = float(_declare("fast_luq_body_ratio",         0.35))
         r_luq_l  = float(_declare("fast_luq_lat_ratio",          0.60))
         r_sup_b  = float(_declare("fast_suprapubic_body_ratio",  0.15))
-        r_ple_b  = float(_declare("fast_pleural_body_ratio",     0.10))
-        r_ple_l  = float(_declare("fast_pleural_lat_ratio",      0.40))
 
         return cls(
             mode=mode, clearance=clr, ik_timeout=tmo, scan_pause_s=pause,
@@ -174,7 +167,6 @@ class ScanManager:
             ratio_ruq_body=r_ruq_b, ratio_ruq_lat=r_ruq_l,
             ratio_luq_body=r_luq_b, ratio_luq_lat=r_luq_l,
             ratio_suprapubic_body=r_sup_b,
-            ratio_pleural_body=r_ple_b, ratio_pleural_lat=r_ple_l,
         )
 
     # ── Proprietà ─────────────────────────────────────────────────────────
@@ -294,16 +286,23 @@ class ScanManager:
                          + self._ratio_luq_body * body_len * body_axis
                          + self._ratio_luq_lat  * shoulder_width * lateral_axis)
 
+        # Sovrapubica: DENTRO i fianchi (- = verso le spalle rispetto a hip_mid)
         pt_suprapubic = (hip_mid
-                         + self._ratio_suprapubic_body * body_len * body_axis)
+                         - self._ratio_suprapubic_body * body_len * body_axis)
 
-        pt_pleural_r  = (shoulder_mid
-                         - self._ratio_pleural_body * body_len * body_axis
-                         - self._ratio_pleural_lat  * shoulder_width * lateral_axis)
+        # ── Clipping: tutti i punti restano dentro [shoulder_mid_y, hip_mid_y] ──
+        y_min = float(shoulder_mid[1])   # Y spalle (più verso testa)
+        y_max = float(hip_mid[1])        # Y fianchi (più verso piedi)
+
+        def _clip_y(pt):
+            """Clippa la coordinata Y del punto al bounding box torso."""
+            clipped = pt.copy()
+            clipped[1] = float(np.clip(pt[1], y_min, y_max))
+            return clipped
 
         # ── Converti in offset relativi al torso_center ────────────────
         def _rel(pt):
-            d = pt - torso_center
+            d = _clip_y(pt) - torso_center
             return (0.0, float(d[1]), float(d[2]))   # dx=0 sempre (X gestito da surface)
 
         self.offsets = [
@@ -312,7 +311,6 @@ class ScanManager:
             _rel(pt_ruq),         # idx 2
             _rel(pt_luq),         # idx 3
             _rel(pt_suprapubic),  # idx 4
-            _rel(pt_pleural_r),   # idx 5
         ]
         return True
 
