@@ -1251,17 +1251,9 @@ class Z1FSM(Node):
 
             if self.ik_done:
                 self.pub_ik_enable.publish(Bool(data=False))
-                if self._skip_impedance:
-                    # Modalità debug: salta impedance, torna in attesa
-                    # → non riprovare finché il lock non si perde (evita loop)
-                    self.get_logger().warn(
-                        "⚠️  skip_impedance=True → IK completato, "
-                        "impedance SALTATA → WAITING (hold fino a nuovo lock)"
-                    )
-                    self._skip_impedance_hold = True
-                    self.set_state(self.WAITING)
-                elif self._scan_mgr.is_center_hub:
+                if self._scan_mgr.is_center_hub:
                     # Centro hub FAST: nessuna misura, avanza subito a pt1 poi pausa
+                    # (ha priorità su skip_impedance: il centro non fa mai impedance)
                     self._scan_mgr.advance()   # idx: 0 → 1
                     self.get_logger().info(
                         f'📍 FAST: centro hub raggiunto '
@@ -1269,6 +1261,25 @@ class Z1FSM(Node):
                         f'→ {self._scan_mgr.current_name}'
                     )
                     self.set_state(self.SCAN_PAUSE)
+                elif self._skip_impedance:
+                    # Salta impedance — comportamento per modalità:
+                    #   fast_ultrasound + punti rimanenti: PRELIFT verso centro,
+                    #     poi pausa e prossimo punto FAST (dry-run completo)
+                    #   single / ultimo punto FAST: WAITING con hold
+                    if (self._scan_mgr.mode != self._scan_mgr.MODE_SINGLE
+                            and not self._scan_mgr.is_complete):
+                        self.get_logger().warn(
+                            f"⚠️  skip_impedance → {self._scan_mgr.current_name} "
+                            "raggiunto, misura SALTATA → SCAN_PRELIFT"
+                        )
+                        self.set_state(self.SCAN_PRELIFT)
+                    else:
+                        self.get_logger().warn(
+                            "⚠️  skip_impedance=True → IK completato, "
+                            "impedance SALTATA → WAITING (hold fino a nuovo lock)"
+                        )
+                        self._skip_impedance_hold = True
+                        self.set_state(self.WAITING)
                 else:
                     self.set_state(self.WRIST_ALIGN)
 
