@@ -70,10 +70,13 @@ class _PointResult:
     torso_xyz:  np.ndarray   # mediana posizioni world frame valide in quel punto
     std_dev_3d: float = 0.0  # deviazione standard 3D delle posizioni (proxy qualità depth)
     kp_conf:    np.ndarray = None  # conf media per keypoint [kp5, kp6, kp11, kp12]
+    kp_xyz:     np.ndarray = None  # posizioni 3D world [4,3]: [kp5,kp6,kp11,kp12]; NaN se mancante
 
     def __post_init__(self):
         if self.kp_conf is None:
             self.kp_conf = np.zeros(4)
+        if self.kp_xyz is None:
+            self.kp_xyz = np.full((4, 3), np.nan)
 
 
 # ── Stato interno ─────────────────────────────────────────────────────────────
@@ -144,6 +147,8 @@ class BodySearchScanner:
         # Buffer messaggi in arrivo (riempito da feed_scan_data, svuotato in tick)
         self._pending: list[list[float]] = []
         self._kp_conf_sum: np.ndarray    = np.zeros(4)  # [kp5, kp6, kp11, kp12]
+        self._kp_xyz_sum:   np.ndarray = np.zeros((4, 3))  # somma pesata posizioni [kp5,kp6,kp11,kp12]
+        self._kp_xyz_count: np.ndarray = np.zeros(4)        # conta frame validi per keypoint
 
     # ── API pubblica ──────────────────────────────────────────────────────────
 
@@ -275,6 +280,15 @@ class BodySearchScanner:
                     # Accumula confidence per-keypoint (kp5, kp6, kp11, kp12)
                     if len(data) >= 10:
                         self._kp_conf_sum += np.array(data[6:10], dtype=float)
+                    # Accumula posizioni 3D per-keypoint (kp5, kp6, kp11, kp12) — indici 10-21
+                    if len(data) >= 22:
+                        for ki, base in enumerate((10, 13, 16, 19)):
+                            kp_pos = np.array(data[base:base+3], dtype=float)
+                            conf_k = float(data[6 + ki])   # kp_conf corrispondente
+                            # Accumula solo se keypoint rilevato (pos != [0,0,0] e conf > 0)
+                            if conf_k > 0.0 and np.any(kp_pos != 0.0):
+                                self._kp_xyz_sum[ki]   += kp_pos * conf_k
+                                self._kp_xyz_count[ki] += conf_k
 
         elapsed   = now - self._point_t0
         ready     = self._frames_valid >= self._min_frames
@@ -289,12 +303,18 @@ class BodySearchScanner:
                       if self._positions else np.zeros(3))
         kp_avg = (self._kp_conf_sum / self._frames_valid
                   if self._frames_valid > 0 else np.zeros(4))
+        # Media pesata posizioni keypoint (NaN se keypoint mai rilevato)
+        kp_xyz_avg = np.full((4, 3), np.nan)
+        for ki in range(4):
+            if self._kp_xyz_count[ki] > 0.0:
+                kp_xyz_avg[ki] = self._kp_xyz_sum[ki] / self._kp_xyz_count[ki]
         self._results.append(_PointResult(
             arm_pose   = self._poses[self._idx],
             score      = final_score,
             torso_xyz  = xyz_median,
             std_dev_3d = std_3d,
             kp_conf    = kp_avg,
+            kp_xyz     = kp_xyz_avg,
         ))
 
         tag = "✅" if ready else "⏱️ timeout"
@@ -560,6 +580,46 @@ class BodySearchScanner:
             return None
         return sum(r.torso_xyz * w for r, w in zip(valid, weights)) / total_w
 
+    def fused_kp_xyz(self) -> np.ndarray | None:
+        """
+        Restituisce le posizioni 3D world fuse dei 4 keypoint torso,
+        pesate per score × kp_conf individuale.
+
+        Ritorna np.ndarray shape (4, 3) con:
+          [0] = kp5  (spalla lontana)
+          [1] = kp6  (spalla vicina)
+          [2] = kp11 (fianco lontano)
+          [3] = kp12 (fianco vicino)
+
+        NaN per keypoint mai rilevato in nessun punto.
+        Ritorna None se nessun punto valido disponibile.
+        """
+        valid = [r for r in self._results if r.score > 0.0]
+        if not valid:
+            return None
+
+        kp_xyz_sum   = np.zeros((4, 3))
+        kp_weight    = np.zeros(4)
+
+        for r in valid:
+            if r.kp_xyz is None:
+                continue
+            for ki in range(4):
+                if not np.isnan(r.kp_xyz[ki]).any():
+                    w = r.score * float(r.kp_conf[ki]) if r.kp_conf is not None else r.score
+                    kp_xyz_sum[ki]   += r.kp_xyz[ki] * w
+                    kp_weight[ki]    += w
+
+        result = np.full((4, 3), np.nan)
+        for ki in range(4):
+            if kp_weight[ki] > 1e-9:
+                result[ki] = kp_xyz_sum[ki] / kp_weight[ki]
+
+        # Se tutti NaN, ritorna None
+        if np.all(np.isnan(result)):
+            return None
+        return result
+
     def _clear_point(self):
         """Azzera i contatori del punto corrente."""
         self._frames_total = 0
@@ -567,6 +627,8 @@ class BodySearchScanner:
         self._score_sum    = 0.0
         self._positions    = []
         self._kp_conf_sum  = np.zeros(4)   # [kp5, kp6, kp11, kp12]
+        self._kp_xyz_sum   = np.zeros((4, 3))
+        self._kp_xyz_count = np.zeros(4)
 
     def _log_i(self, msg: str):
         if self._log:

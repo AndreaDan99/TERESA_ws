@@ -33,6 +33,7 @@ class Z1FSM(Node):
     EMERGENCY            = "EMERGENCY"
     FAULT                = "FAULT"
     BODY_SCANNING        = "BODY_SCANNING"
+    SCAN_PAUSE           = "SCAN_PAUSE"
 
     # States where the torque_controller may be active.
     # Any keyboard command arriving in these states must first switch to JTC.
@@ -95,6 +96,8 @@ class Z1FSM(Node):
 
         # ── Timeout WAIT_IK_DONE (dichiarato da ScanManager.from_params) ──
         self._wait_ik_timeout = float(self.get_parameter("wait_ik_timeout_s").value)
+        self.declare_parameter("scan_pause_s", 2.0)
+        self._scan_pause_s = float(self.get_parameter("scan_pause_s").value)
         self._wait_ik_start: float | None = None
 
         # ── Workspace out-of-range topic ────────────────────────────────
@@ -238,6 +241,8 @@ class Z1FSM(Node):
         self._scan_phase2_anchor:  np.ndarray | None       = None  # stima torso fusa fine fase 2 (anchor per fase 3)
         self._scan_phase: int                              = 1  # 1=home, 2=arc+wrist, 3=hips
         self._scan_last_lookat: np.ndarray | None          = None  # ultima stima usata per aggiornare look-at pose
+        self._scan_kp_xyz:   np.ndarray | None             = None  # keypoint 3D fusi dal body scan
+        self._scan_pause_start: float | None               = None  # timestamp inizio SCAN_PAUSE
         # _tracker_ready: True dopo aver ricevuto almeno un messaggio su
         # /torso_tracker_state. Garantisce che il nodo tracker sia avviato
         # e il modello YOLO sia caricato prima di iniziare la body scan.
@@ -268,6 +273,8 @@ class Z1FSM(Node):
         self.pub_tracker_scan_mode   = self.create_publisher(Bool,         '/tracker_scan_mode',  10)
         self.pub_tracker_scan_next   = self.create_publisher(Bool,         '/tracker_scan_next',  10)
         self.pub_torso_scan_seed     = self.create_publisher(PointStamped, '/torso_scan_seed',    10)
+        self.pub_torso_scan_keypoints = self.create_publisher(
+            Float32MultiArray, '/torso_scan_keypoints', 10)
 
         # ── Service clients: switch controller ──────────────────────────
         self.switch_to_torque_client = self.create_client(Trigger, '/safe_switch/to_torque')
@@ -409,6 +416,14 @@ class Z1FSM(Node):
             self._body_scanner.reset()
             # Attiva scan mode nel tracker
             self.pub_tracker_scan_mode.publish(Bool(data=True))
+
+        if s == self.SCAN_PAUSE:
+            self._scan_pause_start = self.get_clock().now().nanoseconds * 1e-9
+            next_pt = self._scan_mgr.current_name
+            self.get_logger().info(
+                f'⏸  SCAN_PAUSE: centro raggiunto — pausa {self._scan_pause_s:.1f}s '
+                f'→ poi {next_pt}'
+            )
 
         if s == self.HOMING:
             self.ik_done              = False
@@ -641,6 +656,15 @@ class Z1FSM(Node):
                 '⚠️  Scanner senza risultati validi → uso anchor come seed di fallback'
             )
 
+        # ── Keypoint 3D fusi → punti FAST ────────────────────────────────
+        kp_xyz = (self._body_scanner.fused_kp_xyz()
+                  if self._body_scanner is not None else None)
+        if kp_xyz is not None:
+            self._scan_kp_xyz = kp_xyz
+            kp_msg = Float32MultiArray()
+            kp_msg.data = [float(v) for v in kp_xyz.flatten()]
+            self.pub_torso_scan_keypoints.publish(kp_msg)
+
         if fused is not None:
             seed_msg = PointStamped()
             seed_msg.header.stamp    = self.get_clock().now().to_msg()
@@ -652,6 +676,26 @@ class Z1FSM(Node):
             self.get_logger().info(
                 f'📍 Seed torso fuso: [{fused[0]:.3f}, {fused[1]:.3f}, {fused[2]:.3f}]'
             )
+            # Calcola punti FAST dai keypoint
+            if kp_xyz is not None:
+                ok = self._scan_mgr.set_fast_points(kp_xyz, fused)
+                if ok:
+                    self.get_logger().info('━'*60)
+                    self.get_logger().info('🔬 FAST ULTRASOUND — punti calcolati da keypoint YOLO:')
+                    names = ['Centro (hub)', 'Sottoxifoidea', 'RUQ (Morrison)',
+                             'LUQ (Koller)', 'Sovrapubica', 'Pleurica Dx']
+                    for i, (name, off) in enumerate(zip(names, self._scan_mgr.offsets)):
+                        marker = '🏠' if i == 0 else f'[{i}/5]'
+                        self.get_logger().info(
+                            f'   {marker} {name}: dy={off[1]:+.3f}m  dz={off[2]:+.3f}m'
+                        )
+                    self.get_logger().info('━'*60)
+                else:
+                    self.get_logger().warn(
+                        '⚠️  set_fast_points fallito (keypoint insufficienti) '
+                        '→ scansione FAST con solo centro'
+                    )
+
         self.pub_ik_enable.publish(Bool(data=False))
         self.pub_tracker_scan_mode.publish(Bool(data=False))
         self._body_scan_done = True
@@ -1165,9 +1209,13 @@ class Z1FSM(Node):
 
                 self._last_approach_pose = target   # salvata per WRIST_ALIGN
 
-                p = target.pose.position
+                p       = target.pose.position
+                pt_name = self._scan_mgr.current_name
+                pt_idx  = self._scan_mgr.idx
+                total   = self._scan_mgr.fast_total
+                idx_lbl = f"[{pt_idx}/{total}]" if pt_idx > 0 else "[hub]"
                 self.get_logger().info(
-                    f"🎯 APPROACHING pt{self._scan_mgr.idx}: goal "
+                    f"🎯 APPROACHING {idx_lbl} {pt_name}: "
                     f"x={p.x:.3f} y={p.y:.3f} z={p.z:.3f}"
                 )
                 self.pub_ik_enable.publish(Bool(data=True))
@@ -1213,6 +1261,14 @@ class Z1FSM(Node):
                     )
                     self._skip_impedance_hold = True
                     self.set_state(self.WAITING)
+                elif self._scan_mgr.is_center_hub:
+                    # Centro hub FAST: nessuna misura, pausa poi primo punto FAST
+                    self.get_logger().info(
+                        f'📍 FAST: centro hub raggiunto '
+                        f'→ SCAN_PAUSE {self._scan_pause_s:.1f}s '
+                        f'→ {self._scan_mgr.next_name}'
+                    )
+                    self.set_state(self.SCAN_PAUSE)
                 else:
                     self.set_state(self.WRIST_ALIGN)
 
@@ -1481,7 +1537,21 @@ class Z1FSM(Node):
         # ── SCAN_PRELIFT ──────────────────────────────────────────────────
         elif self.state == self.SCAN_PRELIFT:
             if self._scan_mgr.tick_prelift(self):
-                self.set_state(self.APPROACHING)
+                # Ritornati al centro: pausa prima del prossimo punto FAST
+                if self._scan_mgr.mode != self._scan_mgr.MODE_SINGLE:
+                    self.set_state(self.SCAN_PAUSE)
+                else:
+                    self.set_state(self.APPROACHING)
+
+        # ── SCAN_PAUSE ────────────────────────────────────────────────────
+        elif self.state == self.SCAN_PAUSE:
+            if self._scan_pause_start is not None:
+                elapsed = self.get_clock().now().nanoseconds * 1e-9 - self._scan_pause_start
+                if elapsed >= self._scan_pause_s:
+                    self.get_logger().info(
+                        f'▶  SCAN_PAUSE terminata → APPROACHING {self._scan_mgr.current_name}'
+                    )
+                    self.set_state(self.APPROACHING)
 
         # ── HOMING ────────────────────────────────────────────────────────
         elif self.state == self.HOMING:

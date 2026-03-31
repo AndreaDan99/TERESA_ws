@@ -2,20 +2,55 @@
 """
 z1_scan_manager.py
 ──────────────────
-Gestione della sequenza di scansione fast-ultrasound per z1_FSM.
+Gestione della sequenza di scansione fast-ultrasound FAST per z1_FSM.
 
-Incapsula tutta la logica scan (offsets, sequenza punti, SCAN_PRELIFT)
-così che z1_FSM.py rimanga semplice.
+Protocollo FAST (Focused Assessment with Sonography in Trauma):
+  5 finestre ecografiche calcolate dai keypoint 3D YOLO del torso.
+
+Struttura sequenza:
+  idx=0 : Centro hub (navigazione, NESSUNA misura impedance)
+  idx=1 : Sottoxifoidea  (cardiaca)
+  idx=2 : RUQ - Morrison's pouch (fianco destro)
+  idx=3 : LUQ - Koller's pouch  (fianco sinistro)
+  idx=4 : Sovrapubica  (pelvica)
+  idx=5 : Pleurica dx  (base polmone destro)
+
+Calcolo punti FAST da keypoint anatomici:
+  kp5  = spalla lontana (+X in world frame)
+  kp6  = spalla vicina  (-X in world frame)
+  kp11 = fianco lontano (+X)
+  kp12 = fianco vicino  (-X)
+
+  shoulder_mid  = (kp5 + kp6) / 2
+  hip_mid       = (kp11 + kp12) / 2
+  body_axis     = normalize(hip_mid - shoulder_mid)   [head → feet]
+  lateral_axis  = normalize(kp5 - kp6)                [right → left]
+  torso_len     = |hip_mid - shoulder_mid|
+  shoulder_width = |kp5 - kp6|
+
+  pt_subxiphoid  = shoulder_mid + ratio_subxiphoid_body * torso_len * body_axis
+  pt_ruq         = shoulder_mid + ratio_ruq_body * torso_len * body_axis
+                                - ratio_ruq_lat  * shoulder_width * lateral_axis
+  pt_luq         = shoulder_mid + ratio_luq_body * torso_len * body_axis
+                                + ratio_luq_lat  * shoulder_width * lateral_axis
+  pt_suprapubic  = hip_mid      + ratio_suprapubic_body * torso_len * body_axis
+  pt_pleural_r   = shoulder_mid - ratio_pleural_body * torso_len * body_axis
+                                - ratio_pleural_lat  * shoulder_width * lateral_axis
+
+Gli offset sono espressi come (0, dy, dz) RELATIVI al torso_center.
+World frame TERESA: X=approccio, Y=testa→piedi, Z=destra→sinistra.
 
 Uso:
-    mgr = ScanManager.from_params(node)   # crea da ROS parameters
-    mgr.reset()                           # inizio nuovo ciclo
-    mgr.advance()                         # passa al prossimo punto
-    mgr.tick_prelift(fsm) -> bool         # tick SCAN_PRELIFT, True = done
-    mgr.on_jtc_switch_success(fsm) -> str # dopo switch JTC, restituisce next state
+    mgr = ScanManager.from_params(node)
+    mgr.set_fast_points(kp_xyz, torso_center)  # dopo body scan
+    mgr.reset()
+    mgr.tick_prelift(fsm)  -> bool
+    mgr.on_jtc_switch_success(fsm) -> str
 """
 
 from __future__ import annotations
+
+import numpy as np
 
 from builtin_interfaces.msg  import Duration as BuiltinDuration
 from geometry_msgs.msg       import PoseStamped
@@ -23,137 +58,283 @@ from std_msgs.msg            import Bool
 from visualization_msgs.msg  import Marker
 
 
+# Nomi per logging dei 6 slot (idx 0..5)
+FAST_POINT_NAMES = [
+    "Centro (hub)",
+    "Sottoxifoidea",
+    "RUQ (Morrison's pouch)",
+    "LUQ (Koller's pouch)",
+    "Sovrapubica",
+    "Pleurica Dx",
+]
+
+
 class ScanManager:
     """
-    Gestisce la modalità di scansione del braccio (single | fast_ultrasound).
+    Gestisce la modalità di scansione del braccio.
+
+    Modalità:
+      MODE_SINGLE       → singolo punto al centro torso
+      qualsiasi altra   → protocollo FAST (6 slot: centro hub + 5 punti FAST)
 
     World frame (TERESA):
-      X → verso il basso / verso il torso  (asse di approccio)
-      Y → da faccia verso torso/gambe       (asse corpo, spalla → fianco)
-      Z → da fianco dx a fianco sx          (asse laterale)
-
-    Layout 5 punti fast_ultrasound (vista frontale, Z a destra):
-              Z- (destra)   Z=0     Z+ (sinistra)
-      Y- (spalla)  pt3                    pt4
-      Y=0 (centro)           pt0
-      Y+ (fianco)  pt1                    pt2
+      X → verso il torso  (asse di approccio)
+      Y → testa → piedi   (asse corpo)
+      Z → destra → sinistra (laterale)
     """
 
-    # ── Costanti modalità ─────────────────────────────────────────────────
-    # MODE_SINGLE è l'unica costante hardcoded: tutto ciò che non è "single"
-    # è trattato come scansione multi-punto. Il nome della modalità multi-punto
-    # (es. "fast_ultrasound") è definito solo nel YAML (scan_mode).
     MODE_SINGLE = "single"
 
     # ── Costruttori ────────────────────────────────────────────────────────
 
     def __init__(
         self,
-        mode:         str,
-        offsets:      list[tuple[float, float, float]],
-        clearance:    float,
-        ik_timeout:   float,
+        mode:          str,
+        clearance:     float,
+        ik_timeout:    float,
+        scan_pause_s:  float,
+        # Ratios anatomici FAST
+        ratio_subxiphoid_body:  float,
+        ratio_ruq_body:         float,
+        ratio_ruq_lat:          float,
+        ratio_luq_body:         float,
+        ratio_luq_lat:          float,
+        ratio_suprapubic_body:  float,
+        ratio_pleural_body:     float,
+        ratio_pleural_lat:      float,
     ):
-        """
-        Parameters
-        ----------
-        mode       : ScanManager.MODE_SINGLE | qualsiasi stringa dal YAML (scan_mode)
-        offsets    : lista di (dx, dy, dz) in world frame; offsets[0] = centro
-        clearance  : clearance aggiuntivo lungo -X durante SCAN_PRELIFT [m]
-        ik_timeout : timeout IK identico a WAIT_IK_DONE [s]
-        """
-        self.mode       = mode
-        self.offsets    = offsets
-        self.clearance  = clearance
-        self._ik_timeout = ik_timeout
+        self.mode          = mode
+        self.clearance     = clearance
+        self._ik_timeout   = ik_timeout
+        self.scan_pause_s  = scan_pause_s
+
+        # Ratios anatomici
+        self._ratio_subxiphoid_body = ratio_subxiphoid_body
+        self._ratio_ruq_body        = ratio_ruq_body
+        self._ratio_ruq_lat         = ratio_ruq_lat
+        self._ratio_luq_body        = ratio_luq_body
+        self._ratio_luq_lat         = ratio_luq_lat
+        self._ratio_suprapubic_body = ratio_suprapubic_body
+        self._ratio_pleural_body    = ratio_pleural_body
+        self._ratio_pleural_lat     = ratio_pleural_lat
+
+        # Offsets (dx, dy, dz) relativi al torso_center in world frame.
+        # offsets[0] = (0,0,0) = centro hub
+        # offsets[1..5] = punti FAST (calcolati da set_fast_points)
+        # Default = solo centro (single mode o prima che set_fast_points sia chiamato)
+        self.offsets: list[tuple[float, float, float]] = [(0.0, 0.0, 0.0)]
 
         self.idx: int = 0
 
-        # Posa di approccio del punto centrale (pt0), salvata al primo APPROACHING.
-        # Usata da SCAN_PRELIFT come punto di ritorno dopo ogni punto non-centro.
-        self._center_approach_pose = None   # PoseStamped | None
+        # Posa di approccio del centro (pt0), salvata al primo APPROACHING.
+        self._center_approach_pose = None
 
-        # Stato interno SCAN_PRELIFT (macchina a 2 passi)
-        self._prelift_sent:  bool        = False
-        self._prelift_step:  int         = 0     # 0 = verso intermedio, 1 = verso centro
+        # Stato interno SCAN_PRELIFT
+        self._prelift_sent:  bool         = False
+        self._prelift_step:  int          = 0
         self._prelift_start: float | None = None
 
     @classmethod
     def from_params(cls, node) -> "ScanManager":
         """
         Costruisce ScanManager leggendo i ROS parameters dal nodo.
-        Dichiara i parametri se non già dichiarati.
 
         Parametri ROS letti:
-          scan_mode             : "single" | qualsiasi stringa (default "single")
-          scan_delta_lateral    : offset ±Z destra/sinistra [m]
-          scan_delta_axial      : offset ±Y spalla/fianco [m]
-          scan_center_y_offset  : shift +Y del centro rispetto alle spalle [m]
-          scan_clearance_x      : clearance aggiuntivo lungo -X in SCAN_PRELIFT [m]
-          wait_ik_timeout_s     : timeout IK condiviso con z1_FSM [s]
+          scan_mode             : "single" | "fast_ultrasound" (default "single")
+          scan_clearance_x      : clearance -X in SCAN_PRELIFT [m]
+          wait_ik_timeout_s     : timeout IK [s]
+          scan_pause_s          : pausa [s] al centro tra un punto FAST e l'altro
+          fast_*                : ratios anatomici per i 5 punti FAST
         """
         def _declare(name, default):
             try:
                 node.declare_parameter(name, default)
             except Exception:
-                pass   # già dichiarato
+                pass
             return node.get_parameter(name).value
 
-        mode = _declare("scan_mode",            "single")
-        _dl  = float(_declare("scan_delta_lateral",   0.06))
-        _da  = float(_declare("scan_delta_axial",     0.06))
-        _cy  = float(_declare("scan_center_y_offset", 0.05))
-        clr  = float(_declare("scan_clearance_x",     0.120))   # clearance lungo -X (asse approccio)
-        tmo  = float(_declare("wait_ik_timeout_s",    15.0))
+        mode    = _declare("scan_mode",             "single")
+        clr     = float(_declare("scan_clearance_x",      0.120))
+        tmo     = float(_declare("wait_ik_timeout_s",     15.0))
+        pause   = float(_declare("scan_pause_s",           2.0))
 
-        # (dx, dy, dz): dx=0 sempre, dz=0 sempre → linea su Y
-        # Layout 5 punti in linea lungo Y (spalla→fianco), passo = _da:
-        #   pt0: centro  (y = _cy)
-        #   pt1: +1 passo verso fianco  (y = _cy + _da)
-        #   pt2: -1 passo verso spalla  (y = _cy - _da)
-        #   pt3: +2 passi verso fianco  (y = _cy + 2*_da)
-        #   pt4: -2 passi verso spalla  (y = _cy - 2*_da)
-        offsets = [
-            (0.0,  _cy,           0.0),  # 0: centro
-            (0.0,  _cy + _da,     0.0),  # 1: verso fianco  (+Y)
-            (0.0,  _cy - _da,     0.0),  # 2: verso spalla  (-Y)
-            (0.0,  _cy + 2*_da,   0.0),  # 3: fianco+2  (+2Y)
-            (0.0,  _cy - 2*_da,   0.0),  # 4: spalla+2  (-2Y)
-        ]
+        # Ratios anatomici FAST (tutti configurabili via YAML)
+        r_sub_b  = float(_declare("fast_subxiphoid_body_ratio",  0.25))
+        r_ruq_b  = float(_declare("fast_ruq_body_ratio",         0.40))
+        r_ruq_l  = float(_declare("fast_ruq_lat_ratio",          0.50))
+        r_luq_b  = float(_declare("fast_luq_body_ratio",         0.35))
+        r_luq_l  = float(_declare("fast_luq_lat_ratio",          0.60))
+        r_sup_b  = float(_declare("fast_suprapubic_body_ratio",  0.15))
+        r_ple_b  = float(_declare("fast_pleural_body_ratio",     0.10))
+        r_ple_l  = float(_declare("fast_pleural_lat_ratio",      0.40))
 
-        return cls(mode=mode, offsets=offsets, clearance=clr, ik_timeout=tmo)
+        return cls(
+            mode=mode, clearance=clr, ik_timeout=tmo, scan_pause_s=pause,
+            ratio_subxiphoid_body=r_sub_b,
+            ratio_ruq_body=r_ruq_b, ratio_ruq_lat=r_ruq_l,
+            ratio_luq_body=r_luq_b, ratio_luq_lat=r_luq_l,
+            ratio_suprapubic_body=r_sup_b,
+            ratio_pleural_body=r_ple_b, ratio_pleural_lat=r_ple_l,
+        )
 
     # ── Proprietà ─────────────────────────────────────────────────────────
 
     @property
     def current_offset(self) -> tuple[float, float, float]:
         """Offset (dx, dy, dz) del punto corrente in world frame."""
-        return self.offsets[self.idx]
+        if self.idx < len(self.offsets):
+            return self.offsets[self.idx]
+        return (0.0, 0.0, 0.0)
 
     @property
     def is_complete(self) -> bool:
         """True se siamo all'ultimo punto (nessun avanzamento possibile)."""
         return self.idx >= len(self.offsets) - 1
 
+    @property
+    def is_center_hub(self) -> bool:
+        """True se il punto corrente è il centro hub (idx=0, fast mode)."""
+        return self.mode != self.MODE_SINGLE and self.idx == 0
+
+    @property
+    def current_name(self) -> str:
+        """Nome del punto corrente per logging."""
+        if self.mode == self.MODE_SINGLE:
+            return "singolo"
+        if self.idx < len(FAST_POINT_NAMES):
+            return FAST_POINT_NAMES[self.idx]
+        return f"pt{self.idx}"
+
+    @property
+    def next_name(self) -> str:
+        """Nome del prossimo punto per logging."""
+        if self.mode == self.MODE_SINGLE:
+            return "singolo"
+        next_idx = self.idx + 1
+        if next_idx < len(FAST_POINT_NAMES):
+            return FAST_POINT_NAMES[next_idx]
+        return f"pt{next_idx}"
+
+    @property
+    def fast_total(self) -> int:
+        """Numero totale di punti FAST (escluso centro hub)."""
+        return max(0, len(self.offsets) - 1)
+
+    @property
+    def fast_current(self) -> int:
+        """Indice del punto FAST corrente (1-based, 0 se centro hub)."""
+        return max(0, self.idx)
+
+    # ── Calcolo punti FAST ─────────────────────────────────────────────────
+
+    def set_fast_points(
+        self,
+        kp_xyz:       np.ndarray,
+        torso_center: np.ndarray,
+    ) -> bool:
+        """
+        Calcola i 5 punti FAST dai keypoint anatomici e li salva come
+        offset (0, dy, dz) relativi al torso_center.
+
+        Parameters
+        ----------
+        kp_xyz       : np.ndarray shape (4, 3) — [kp5, kp6, kp11, kp12] in world frame.
+                       NaN per keypoint non rilevato.
+        torso_center : np.ndarray shape (3,)   — centro torso fuso dal body scan.
+
+        Returns True se il calcolo è riuscito, False se i keypoint sono insufficienti
+        (in tal caso mantiene gli offset di default = solo centro).
+        """
+        if kp_xyz is None or kp_xyz.shape != (4, 3):
+            return False
+
+        kp5, kp6, kp11, kp12 = kp_xyz[0], kp_xyz[1], kp_xyz[2], kp_xyz[3]
+
+        # Controlla che spalle e fianchi siano disponibili
+        shoulders_ok = not (np.isnan(kp5).any() or np.isnan(kp6).any())
+        hips_ok      = not (np.isnan(kp11).any() or np.isnan(kp12).any())
+
+        if not shoulders_ok:
+            return False  # spalle obbligatorie (definiscono gli assi)
+
+        shoulder_mid = (kp5 + kp6) / 2.0
+
+        if hips_ok:
+            hip_mid = (kp11 + kp12) / 2.0
+        else:
+            # Fallback: stima fianchi come shoulder_mid + 0.3m lungo Y world
+            hip_mid = shoulder_mid + np.array([0.0, 0.30, 0.0])
+
+        # ── Assi anatomici ─────────────────────────────────────────────
+        body_vec = hip_mid - shoulder_mid
+        body_len = float(np.linalg.norm(body_vec))
+        if body_len < 0.05:   # < 5 cm: non ha senso
+            return False
+        body_axis = body_vec / body_len
+
+        lat_vec = kp5 - kp6
+        lat_len = float(np.linalg.norm(lat_vec))
+        if lat_len < 0.02:
+            # Fallback: asse Z world come laterale
+            lateral_axis = np.array([0.0, 0.0, 1.0])
+            shoulder_width = 0.35  # larghezza spalle adulto media [m]
+        else:
+            lateral_axis   = lat_vec / lat_len
+            shoulder_width = lat_len
+
+        # ── 5 punti FAST in world frame ────────────────────────────────
+        pt_subxiphoid = (shoulder_mid
+                         + self._ratio_subxiphoid_body * body_len * body_axis)
+
+        pt_ruq        = (shoulder_mid
+                         + self._ratio_ruq_body * body_len * body_axis
+                         - self._ratio_ruq_lat  * shoulder_width * lateral_axis)
+
+        pt_luq        = (shoulder_mid
+                         + self._ratio_luq_body * body_len * body_axis
+                         + self._ratio_luq_lat  * shoulder_width * lateral_axis)
+
+        pt_suprapubic = (hip_mid
+                         + self._ratio_suprapubic_body * body_len * body_axis)
+
+        pt_pleural_r  = (shoulder_mid
+                         - self._ratio_pleural_body * body_len * body_axis
+                         - self._ratio_pleural_lat  * shoulder_width * lateral_axis)
+
+        # ── Converti in offset relativi al torso_center ────────────────
+        def _rel(pt):
+            d = pt - torso_center
+            return (0.0, float(d[1]), float(d[2]))   # dx=0 sempre (X gestito da surface)
+
+        self.offsets = [
+            (0.0, 0.0, 0.0),      # idx 0: centro hub
+            _rel(pt_subxiphoid),  # idx 1
+            _rel(pt_ruq),         # idx 2
+            _rel(pt_luq),         # idx 3
+            _rel(pt_suprapubic),  # idx 4
+            _rel(pt_pleural_r),   # idx 5
+        ]
+        return True
+
     # ── Controllo sequenza ────────────────────────────────────────────────
 
     def reset(self):
-        """Resetta a inizio ciclo (chiamato su WAITING)."""
+        """Resetta a inizio ciclo."""
         self.idx = 0
         self.reset_prelift()
 
     def save_center_approach(self, pose) -> None:
-        """Salva la posa JTC del punto centrale (idx=0) per il ritorno in SCAN_PRELIFT."""
+        """Salva la posa JTC del centro (idx=0) per uso in APPROACHING e PRELIFT."""
         self._center_approach_pose = pose
 
     def reset_prelift(self):
-        """Resetta lo stato interno di SCAN_PRELIFT (chiamato su set_state)."""
+        """Resetta lo stato interno di SCAN_PRELIFT."""
         self._prelift_sent  = False
         self._prelift_step  = 0
         self._prelift_start = None
 
     def advance(self):
-        """Avanza al prossimo punto. Chiamato da on_jtc_switch_success."""
+        """Avanza al prossimo punto."""
         if self.idx < len(self.offsets) - 1:
             self.idx += 1
 
@@ -161,46 +342,34 @@ class ScanManager:
 
     def tick_prelift(self, fsm) -> bool:
         """
-        SCAN_PRELIFT a 2 passi dopo ogni punto non-centro:
+        SCAN_PRELIFT a 2 passi dopo ogni punto FAST:
 
-        Passo 0 — Intermedio: JTC va a (centro.x, pt_n.y, pt_n.z)
-                  Calcolato direttamente da _center_approach_pose + offset relativo.
-                  NON usa il surface frame live (che può derivare durante impedance).
+        Passo 0 — Intermedio: stessa X del centro, Y/Z del punto appena misurato.
+        Passo 1 — Centro: ritorna alla posa di approccio del centro (hub).
 
-        Passo 1 — Centro: JTC torna alla posa di approccio del centro (pt0).
-                  Movimento laterale sicuro alla distanza X del centro.
+        Poi: advance() → FSM va in SCAN_PAUSE → poi APPROACHING prossimo punto.
 
-        Poi: advance() → APPROACHING sul prossimo punto.
-
-        Returns True quando entrambi i passi sono completati.
+        Returns True quando entrambi i passi completati.
         """
-        # ── Passo 0: invia goal intermedio (centro.x, pt_n.y, pt_n.z) ──────
         if not self._prelift_sent:
             if self._center_approach_pose is None:
                 fsm.get_logger().warn('⚠️  SCAN_PRELIFT: center_approach_pose non salvata, skip')
                 self.advance()
                 return True
 
-            # Intermedio calcolato da posa centro + offset relativo rispetto a pt0.
-            # Usa SOLO _center_approach_pose (stabile, salvata a APPROACHING pt0).
-            # Evita del tutto _latest_surface_frame che può derivare durante impedance.
-            off_n = self.current_offset    # offset del punto corrente (pt1-4)
-            off_c = self.offsets[0]        # offset del centro (pt0)
-            c = self._center_approach_pose
+            off_n = self.current_offset
+            off_c = self.offsets[0]
+            c     = self._center_approach_pose
 
             target = PoseStamped()
-            target.header.frame_id    = 'world'
-            target.header.stamp       = fsm.get_clock().now().to_msg()
-            # X = centro (stessa distanza dal torso, = non ci avviciniamo più)
-            target.pose.position.x    = c.pose.position.x
-            # Y = centro + differenza offset assiale (spalla↔fianco)
-            target.pose.position.y    = c.pose.position.y + (off_n[1] - off_c[1])
-            # Z = centro + differenza offset laterale (destra↔sinistra)
-            target.pose.position.z    = c.pose.position.z + (off_n[2] - off_c[2])
-            # Stessa orientazione del centro
-            target.pose.orientation   = c.pose.orientation
+            target.header.frame_id  = 'world'
+            target.header.stamp     = fsm.get_clock().now().to_msg()
+            target.pose.position.x  = c.pose.position.x
+            target.pose.position.y  = c.pose.position.y + (off_n[1] - off_c[1])
+            target.pose.position.z  = c.pose.position.z + (off_n[2] - off_c[2])
+            target.pose.orientation = c.pose.orientation
 
-            fsm.ik_done = False          # reset esplicito prima di ogni goal
+            fsm.ik_done = False
             fsm.pub_ik_enable.publish(Bool(data=True))
             fsm.pub_ik_goal.publish(target)
             self._prelift_sent  = True
@@ -208,19 +377,19 @@ class ScanManager:
             self._prelift_start = fsm.get_clock().now().nanoseconds * 1e-9
             self._publish_marker(fsm, target)
             fsm.get_logger().info(
-                f"🔼 SCAN_PRELIFT passo0 pt{self.idx}: intermedio "
+                f"🔼 PRELIFT passo0 {self.current_name}: intermedio "
                 f"x={target.pose.position.x:.3f} "
                 f"y={target.pose.position.y:.3f} "
                 f"z={target.pose.position.z:.3f}"
             )
             return False
 
-        # ── Timeout ──────────────────────────────────────────────────────────
+        # Timeout
         if self._prelift_start is not None:
             elapsed = fsm.get_clock().now().nanoseconds * 1e-9 - self._prelift_start
             if elapsed > self._ik_timeout:
                 fsm.get_logger().warn(
-                    f"⏱️  SCAN_PRELIFT timeout passo{self._prelift_step} ({elapsed:.1f}s) → WAITING"
+                    f"⏱️  PRELIFT timeout passo{self._prelift_step} ({elapsed:.1f}s) → WAITING"
                 )
                 fsm.pub_ik_enable.publish(Bool(data=False))
                 fsm.set_state(fsm.WAITING)
@@ -229,36 +398,34 @@ class ScanManager:
         if not fsm.ik_done:
             return False
 
-        # ── Passo 0 completato → invia goal centro ───────────────────────────
+        # Passo 0 completato → invia goal centro
         if self._prelift_step == 0:
             if self._center_approach_pose is None:
-                # Centro non salvato: salta direttamente ad advance
-                fsm.get_logger().warn('⚠️  SCAN_PRELIFT: center_approach_pose non salvata, skip passo1')
+                fsm.get_logger().warn('⚠️  PRELIFT: center_approach_pose non salvata, skip passo1')
                 fsm.pub_ik_enable.publish(Bool(data=False))
                 self.advance()
                 return True
 
             c = self._center_approach_pose
-            fsm.ik_done = False          # reset prima del secondo goal
+            fsm.ik_done = False
             fsm.pub_ik_enable.publish(Bool(data=True))
             fsm.pub_ik_goal.publish(c)
             self._prelift_step  = 1
             self._prelift_start = fsm.get_clock().now().nanoseconds * 1e-9
             fsm.get_logger().info(
-                f"🔼 SCAN_PRELIFT passo1: ritorno centro "
+                f"🔼 PRELIFT passo1: ritorno centro "
                 f"x={c.pose.position.x:.3f} "
                 f"y={c.pose.position.y:.3f} "
                 f"z={c.pose.position.z:.3f}"
             )
             return False
 
-        # ── Passo 1 completato → advance → APPROACHING prossimo punto ────────
+        # Passo 1 completato → advance
         fsm.pub_ik_enable.publish(Bool(data=False))
         self.advance()
-        off = self.current_offset
         fsm.get_logger().info(
-            f"✅ SCAN_PRELIFT completato → APPROACHING pt{self.idx} "
-            f"off=({off[0]:.2f},{off[1]:.2f},{off[2]:.2f})"
+            f"✅ PRELIFT completato → centro raggiunto "
+            f"(prossimo: {self.current_name})"
         )
         return True
 
@@ -266,31 +433,29 @@ class ScanManager:
 
     def on_jtc_switch_success(self, fsm) -> str:
         """
-        Chiamato quando lo switch JTC riesce.
-        Decide lo stato successivo e aggiorna l'indice.
+        Chiamato quando lo switch JTC riesce dopo impedance.
 
         Returns
         -------
-        "SCAN_PRELIFT" → ci sono altri punti da scansionare
-        "HOMING"       → scansione completata, si torna a home
+        "SCAN_PRELIFT" → ci sono altri punti FAST da visitare
+        "HOMING"       → scansione completata
         """
         if self.mode != self.MODE_SINGLE and not self.is_complete:
-            # NON avanzare qui: SCAN_PRELIFT deve prima salire dal punto CORRENTE
-            # (stesso Y/Z), poi advance() viene chiamato al termine del PRELIFT.
             off = self.current_offset
             fsm.get_logger().info(
-                f"✅ Switch → JTC | Fast US: pt{self.idx} completato → SCAN_PRELIFT "
-                f"(sale da off=({off[0]:.2f},{off[1]:.2f},{off[2]:.2f}))"
+                f"✅ Switch → JTC | FAST [{self.fast_current}/{self.fast_total}] "
+                f"{self.current_name} completato → PRELIFT"
             )
             return "SCAN_PRELIFT"
         else:
             self.reset()
             fsm.get_logger().info(
-                "✅ Switch torque_controller → JTC | scansione completa → HOMING"
+                f"✅ Switch → JTC | Scansione FAST completata "
+                f"({self.fast_total}/{self.fast_total} punti) → HOMING"
             )
             return "HOMING"
 
-    # ── Helpers interni ───────────────────────────────────────────────────
+    # ── Helpers ───────────────────────────────────────────────────────────
 
     def _publish_marker(self, fsm, target: PoseStamped):
         """Marker arancione per visualizzare il target SCAN_PRELIFT in RViz."""

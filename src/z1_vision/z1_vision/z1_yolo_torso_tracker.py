@@ -206,6 +206,8 @@ class Z1YoloTorsoTracker(Node):
         # Inizializzato vuoto: se _update_scan viene chiamata prima di
         # _extract_torso (non dovrebbe, ma per sicurezza), tutti i kp = 0.0.
         self._last_kp_conf: dict = {}
+        self._last_kp_3d: dict = {}       # kp_idx → [x,y,z] world frame (kp5,6,11,12)
+        self._last_kp_3d_cam: dict = {}   # kp_idx → [x,y,z] camera frame (kp5,6,11,12)
 
         # ── Interpolazione tracking (invariata) ────────────────────
         self.tracking_current_pos = None  # world frame
@@ -433,6 +435,10 @@ class Z1YoloTorsoTracker(Node):
         self._last_kp_conf = {idx: kp_3d_conf[idx] for idx in (5, 6, 11, 12)
                               if idx in kp_3d_conf}
 
+        # Salva posizioni 3D camera frame per kp torso (verranno trasformate in world in _update_scan)
+        self._last_kp_3d_cam = {idx: kp_3d[idx] for idx in (5, 6, 11, 12)
+                                if idx in kp_3d}
+
         # ── Metodo primario: spalle + fianchi ─────────────────────────
         if len(shoulder_pts) >= 1 and len(hip_pts) >= 1:
             torso_pts = shoulder_pts + hip_pts
@@ -468,12 +474,16 @@ class Z1YoloTorsoTracker(Node):
     def _update_scan(self, torso_raw, n_valid, avg_conf):
         """
         Logica di update in scan mode.
-        Pubblica ogni frame su /torso_scan_point:
+        Pubblica ogni frame su /torso_scan_point (Float32MultiArray, 22 float):
           [score, n_kp, conf, x_world, y_world, z_world,
-           kp5_conf, kp6_conf, kp11_conf, kp12_conf]
-        - Indici 0-5 : come prima (retrocompatibili)
-        - Indici 6-9 : confidence individuale dei 4 keypoint torso.
-                       0.0 se il keypoint non è stato rilevato.
+           kp5_conf, kp6_conf, kp11_conf, kp12_conf,
+           kp5_x, kp5_y, kp5_z, kp6_x, kp6_y, kp6_z,
+           kp11_x, kp11_y, kp11_z, kp12_x, kp12_y, kp12_z]
+        - Indici  0-5 : come prima (retrocompatibili)
+        - Indici  6-9 : confidence individuale dei 4 keypoint torso.
+                        0.0 se il keypoint non è stato rilevato.
+        - Indici 10-21: posizioni 3D world frame per kp5, kp6, kp11, kp12
+                        (3 float ciascuno: x, y, z). 0.0,0.0,0.0 se non rilevato.
         score = (n_kp / 4) * conf  per frame validi, 0.0 altrimenti.
 
         Stato interno:
@@ -506,13 +516,29 @@ class Z1YoloTorsoTracker(Node):
         kp11_c = float(getattr(self, '_last_kp_conf', {}).get(11, 0.0))
         kp12_c = float(getattr(self, '_last_kp_conf', {}).get(12, 0.0))
 
+        # ── Posizioni 3D world per-keypoint (kp5, kp6, kp11, kp12) ─────────────
+        # Indici 10-21: kp5_xyz, kp6_xyz, kp11_xyz, kp12_xyz
+        # 0.0,0.0,0.0 se il keypoint non è stato rilevato.
+        def _kp_world(idx):
+            cam = getattr(self, '_last_kp_3d_cam', {}).get(idx)
+            if cam is None:
+                return [0.0, 0.0, 0.0]
+            w = self._camera_to_world(np.array(cam))
+            return [float(w[0]), float(w[1]), float(w[2])]
+
+        kp5_xyz  = _kp_world(5)
+        kp6_xyz  = _kp_world(6)
+        kp11_xyz = _kp_world(11)
+        kp12_xyz = _kp_world(12)
+
         # ── Pubblica dato per-frame ──────────────────────────────────────
         if torso_world is not None:
             data = [per_frame_score, float(n_valid), avg_conf,
                     float(torso_world[0]), float(torso_world[1]), float(torso_world[2]),
-                    kp5_c, kp6_c, kp11_c, kp12_c]
+                    kp5_c, kp6_c, kp11_c, kp12_c,
+                    *kp5_xyz, *kp6_xyz, *kp11_xyz, *kp12_xyz]
         else:
-            data = [0.0] * 10
+            data = [0.0] * 22
         msg = Float32MultiArray()
         msg.data = data
         self.pub_scan_point.publish(msg)

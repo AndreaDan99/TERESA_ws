@@ -41,28 +41,48 @@ z1_FSM:
     ik_approach_standoff: 0.250   # [m] distanza di standoff dalla superficie (= desired_normal_offset)
     approach_mode:        "normal"     # "normal" | "vertical"
 
-    # ── Modalità scansione ─────────────────────────────────────────
-    # "single"          → singolo punto al centro (default)
-    # "fast_ultrasound" → 5 punti in linea lungo Y (spalla→fianco)
+    # ── Modalità scansione FAST Ultrasound ────────────────────────
+    # "single"          → singolo punto al centro torso
+    # "fast_ultrasound" → protocollo FAST: centro hub + 5 finestre ecografiche
     #
     # World frame (TERESA):
-    #   X → verso il basso (discesa braccio)
-    #   Y → da faccia verso torso/gambe (asse corpo: spalla→fianco)
-    #   Z → da fianco dx a fianco sx (laterale)
+    #   X → verso il torso  (asse di approccio, gestito da surface frame)
+    #   Y → testa → piedi   (asse corpo)
+    #   Z → destra → sinistra (laterale)
     #
-    # scan_center_y_offset: shift +Y del punto centrale rispetto alla spalla [m]
-    # scan_delta_axial:     passo tra punti lungo Y (es. 0.05 = 5 cm) [m]
-    # scan_delta_lateral:   non usato in modalità linea (ignorato, dz=0)
+    # I 5 punti FAST sono calcolati geometricamente dai keypoint YOLO 3D
+    # (kp5=spalla lontana, kp6=spalla vicina, kp11=fianco lontano, kp12=fianco vicino)
+    # al termine del body scan. I ratios qui sotto sono frazioni delle dimensioni
+    # anatomiche reali del paziente (adattativi, non dipendono dalla taglia).
     #
-    # Layout 5 punti: pt0=centro, pt1=+1 passo, pt2=-1 passo, pt3=+2 passi, pt4=-2 passi
-    scan_mode:              "single"          # fast_ultrasound non adattato per normal mode
-    scan_delta_lateral:     0.00   # [m] non usato (linea, dz=0)
-    scan_delta_axial:       0.05   # [m] passo tra punti lungo Y (spalla→fianco)
-    scan_center_y_offset:   0.05   # [m] shift +Y centro (spalla → torso)
-    # Clearance aggiuntivo durante SCAN_PRELIFT lungo -X (lontano dal torso):
-    # prima di spostarsi al prossimo punto il braccio arretra a
-    # p_surf.x - standoff - scan_clearance_x per evitare collisioni.
-    scan_clearance_x:       0.120  # [m] extra retrazione -X (= standoff)
+    # Sequenza: Centro(hub) → Sottoxifoidea → RUQ → LUQ → Sovrapubica → Pleurica Dx
+    #           Con pausa scan_pause_s al centro tra ogni punto FAST.
+    scan_mode:        "fast_ultrasound"   # "single" | "fast_ultrasound"
+    scan_clearance_x: 0.120              # [m] retrazione -X tra punti (SCAN_PRELIFT)
+    scan_pause_s:     2.0                # [s] pausa al centro hub tra un punto FAST e l'altro
+
+    # ── Ratios anatomici FAST ──────────────────────────────────────
+    # Tutti espressi come frazioni di torso_len (lunghezza spalle→fianchi)
+    # o shoulder_width (larghezza spalle), sempre ≥ 0.
+    # Segno: body_ratio > 0 = verso i piedi; lat_ratio > 0 = verso sinistra (kp5 side).
+    #
+    # pt1 Sottoxifoidea: 25% di torso_len sotto le spalle, linea mediana
+    fast_subxiphoid_body_ratio: 0.25
+    #
+    # pt2 RUQ (Morrison's pouch): 40% torso_len, 50% shoulder_width verso destra (kp6)
+    fast_ruq_body_ratio:        0.40
+    fast_ruq_lat_ratio:         0.50   # verso kp6 (lato vicino, destra)
+    #
+    # pt3 LUQ (Koller's pouch): 35% torso_len (leggermente più alto di RUQ), 60% verso sinistra
+    fast_luq_body_ratio:        0.35
+    fast_luq_lat_ratio:         0.60   # verso kp5 (lato lontano, sinistra)
+    #
+    # pt4 Sovrapubica: 15% di torso_len sotto i fianchi, linea mediana
+    fast_suprapubic_body_ratio: 0.15
+    #
+    # pt5 Pleurica Dx: 10% sopra le spalle, 40% shoulder_width verso destra
+    fast_pleural_body_ratio:    0.10
+    fast_pleural_lat_ratio:     0.40   # verso kp6 (lato vicino, destra)
 
     # ── Debug ──────────────────────────────────────────────────────
     # Se true: dopo WAIT_IK_DONE torna in WAITING senza avviare impedance.
