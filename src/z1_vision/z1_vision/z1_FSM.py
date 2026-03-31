@@ -83,8 +83,8 @@ class Z1FSM(Node):
 
         # ── Modalità scansione (delegata a ScanManager) ─────────────────
         # Tutti i parametri scan vengono dichiarati e letti internamente
-        # da ScanManager.from_params(): scan_mode, scan_delta_lateral/axial,
-        # scan_center_y_offset, scan_clearance_x, wait_ik_timeout_s.
+        # da ScanManager.from_params(): scan_mode, scan_clearance_x,
+        # wait_ik_timeout_s, scan_pause_s, fast_*_ratio.
         self._scan_mgr = ScanManager.from_params(self)
 
         # ── Debug: skip impedance per verificare solo allineamento JTC ──
@@ -94,9 +94,8 @@ class Z1FSM(Node):
         self.declare_parameter("skip_impedance", False)
         self._skip_impedance = bool(self.get_parameter("skip_impedance").value)
 
-        # ── Timeout WAIT_IK_DONE (dichiarato da ScanManager.from_params) ──
+        # ── Timeout e pausa scan (dichiarati da ScanManager.from_params) ──
         self._wait_ik_timeout = float(self.get_parameter("wait_ik_timeout_s").value)
-        self.declare_parameter("scan_pause_s", 2.0)
         self._scan_pause_s = float(self.get_parameter("scan_pause_s").value)
         self._wait_ik_start: float | None = None
 
