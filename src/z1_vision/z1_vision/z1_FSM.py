@@ -553,28 +553,28 @@ class Z1FSM(Node):
 
     def _orientation_for_xee(self, x_ee: np.ndarray) -> np.ndarray:
         """
-        Calcola l'orientamento EE con X_ee = x_ee (Gram-Schmidt, riferimento world).
+        Calcola l'orientamento EE con X_ee = x_ee (Gram-Schmidt, riferimento home).
 
         Metodo:
           1. X_ee = x_ee normalizzato
-          2. Y_ee = Z_world [0,0,1] proiettato ⊥ a X_ee, normalizzato
-             (fallback: X_world [1,0,0] se X_ee quasi parallelo a Z_world)
+          2. Y_ee = Y_home proiettato ⊥ a X_ee, normalizzato
+             (fallback: Z_home se Y_home è quasi parallelo a X_ee)
           3. Z_ee = X_ee × Y_ee
 
-        Usare Z_world come riferimento produce orientamenti consistenti e
-        "dritti" in qualsiasi direzione — equivalente al comportamento
-        Rodrigues originale, senza flip d'asse.
+        Usare Y_home come riferimento mantiene il polso vicino alla
+        configurazione home, evitando flip d'asse e rotazioni inaspettate.
         Ritorna quaternione [x, y, z, w].
         """
-        x_ee = x_ee / np.linalg.norm(x_ee)
+        x_ee   = x_ee / np.linalg.norm(x_ee)
+        R_home = quaternion_matrix(self._home_orientation)[:3, :3]
 
-        # Y_ee: Z_world proiettato ⊥ a X_ee
-        y_ref  = np.array([0.0, 0.0, 1.0])
+        # Y_ee: Y_home proiettato ⊥ a X_ee
+        y_ref  = R_home[:, 1]
         y_ee   = y_ref - np.dot(y_ref, x_ee) * x_ee
         y_norm = np.linalg.norm(y_ee)
         if y_norm < 1e-3:
-            # X_ee quasi parallelo a Z_world → usa X_world come riferimento
-            y_ref  = np.array([1.0, 0.0, 0.0])
+            # Y_home quasi parallelo a X_ee → usa Z_home come riferimento
+            y_ref  = R_home[:, 2]
             y_ee   = y_ref - np.dot(y_ref, x_ee) * x_ee
             y_norm = np.linalg.norm(y_ee)
         y_ee /= y_norm
