@@ -1,397 +1,520 @@
 #!/usr/bin/env python3
-"""
-YOLO Skeleton Detection Node per Spot Boston Dynamics - OTTIMIZZATO + TF.
-Processa RGB + Depth → skeleton 3D in BODY FRAME.
-"""
 import rclpy
 from rclpy.node import Node
-from message_filters import Subscriber, ApproximateTimeSynchronizer
 
 from sensor_msgs.msg import Image, CameraInfo
-from geometry_msgs.msg import PoseArray, Pose, TransformStamped, PointStamped
-from visualization_msgs.msg import MarkerArray  
+from geometry_msgs.msg import PoseArray, Pose, Point
+from visualization_msgs.msg import Marker, MarkerArray
 from cv_bridge import CvBridge
 
 import numpy as np
-import cv2
 from ultralytics import YOLO
 
-# Import TF2
-from tf2_ros import Buffer, TransformListener, TransformException
-from tf2_geometry_msgs import do_transform_point
 
-# Import moduli locali
-from .kalman_filter import Kalman3D
-from .skeleton_utils import (
-    torso_length_constraint, 
-    compute_torso_length, 
-    smooth_torso_length,
-    SKELETON_EDGES
-)
-from .depth_processing import get_depth_at_pixel, filter_depth_outliers
-from .visualization import build_skeleton_markers
+# ============================================================
+#                Kalman Filter 3D
+# ============================================================
+
+class Kalman3D:
+    def __init__(self, dt=1/15, q=0.2, r=0.002, p0=1.0):
+        self.dt = float(dt)
+
+        self.x = np.zeros((6,1), dtype=np.float64)
+        self.P = np.eye(6, dtype=np.float64) * p0
+
+        self.F = np.eye(6, dtype=np.float64)
+        self.F[0,3] = self.F[1,4] = self.F[2,5] = self.dt
+
+        self.H = np.zeros((3,6), dtype=np.float64)
+        self.H[0,0] = self.H[1,1] = self.H[2,2] = 1.0
+
+        self.Q_base = np.eye(6, dtype=np.float64) * q
+        self.Q = self.Q_base.copy()
+        self.R = np.eye(3, dtype=np.float64) * r
+
+        self.initialized = False
+
+    def predict(self, vel_damping=1.0):
+        self.x = self.F @ self.x
+        self.P = self.F @ self.P @ self.F.T + self.Q
+        self.x[3:,0] *= float(vel_damping)
+
+    def update(self, z):
+        z = np.asarray(z, dtype=np.float64).reshape(3,1)
+
+        if not self.initialized:
+            self.x[0:3] = z
+            self.x[3:] = 0.0
+            self.initialized = True
+            return
+
+        y = z - self.H @ self.x
+        S = self.H @ self.P @ self.H.T + self.R
+        K = self.P @ self.H.T @ np.linalg.inv(S)
+
+        self.x = self.x + K @ y
+        self.P = (np.eye(6) - K @ self.H) @ self.P
+
+    def get_position(self):
+        if not self.initialized:
+            return None
+        return self.x[0:3,0].copy()
+
+    def set_position(self, p):
+        self.x[0:3,0] = np.asarray(p, dtype=np.float64).reshape(3)
 
 
-class YoloSkeletonSpot(Node):
-    """
-    YOLO11-Pose detection con Kalman filtering 3D + trasformazione a body frame.
-    """
-    
+# ============================================================
+#                       Skeleton Node
+# ============================================================
+def TORSO_length_constraint(pts, visible, L_ref, stiffness=0.35):
+    if L_ref is None:
+        return pts
+
+    idx = [5, 6, 11, 12]
+    if any(pts[i] is None for i in idx):
+        return pts
+
+    # se tutti visibili → NON fare nulla
+    if all(visible[i] for i in idx):
+        return pts
+
+    sh_mid = 0.5 * (pts[5] + pts[6])
+    hip_mid = 0.5 * (pts[11] + pts[12])
+
+    v = sh_mid - hip_mid
+    dist = np.linalg.norm(v)
+    if dist < 1e-6:
+        return pts
+
+    v_corr = (v / dist) * L_ref
+    target_sh_mid = hip_mid + v_corr
+
+    delta = target_sh_mid - sh_mid
+
+    # muovi SOLO le spalle (le anche restano ancorate)
+    pts[5] += stiffness * delta
+    pts[6] += stiffness * delta
+
+    return pts
+
+class YoloSkeletonNodeOrbbec(Node):
+
     def __init__(self):
-        super().__init__("yolo_skeleton_spot")
-        
-        # ============================================================
-        # PARAMETRI FISSI (puoi sovrascrivere con launch file)
-        # ============================================================
+        super().__init__("yolo_skeleton_node_orbbec")
+
         self.declare_parameter("model_path", "yolo11n-pose.pt")
-        self.declare_parameter("conf_thr", 0.3)
-        self.declare_parameter("vel_damping", 0.6)
-        self.declare_parameter("max_depth_m", 3.0)
-        self.declare_parameter("camera_name", "frontleft")
-        self.declare_parameter("imgsz", 416)
-        self.declare_parameter("device", "0")  # "0" per GPU, "cpu" per CPU
-        self.declare_parameter("use_half", True)  # FP16 su GPU
-        self.declare_parameter("target_frame", "body")  # Frame output: body di Spot
-        
-        # Leggi parametri
+        self.declare_parameter("conf_thr", 0.25)
+        self.declare_parameter("vel_damping", 0.5)
+        self.declare_parameter("max_depth_m", 5.0)
+
         self.conf_thr = float(self.get_parameter("conf_thr").value)
         self.vel_damping = float(self.get_parameter("vel_damping").value)
         self.max_depth_m = float(self.get_parameter("max_depth_m").value)
-        camera_name = self.get_parameter("camera_name").value
-        self.imgsz = int(self.get_parameter("imgsz").value)
-        device = self.get_parameter("device").value
-        self.use_half = bool(self.get_parameter("use_half").value)
-        self.target_frame = self.get_parameter("target_frame").value
-        
-        # YOLO Model
-        model_path = self.get_parameter("model_path").value
-        self.model = YOLO(model_path)
-        
-        # GPU setup con fallback
-        try:
-            self.model.to(device)
-            self.get_logger().info(f"✅ Model loaded on device: {device}")
-        except Exception as e:
-            self.get_logger().warn(f"⚠️ Failed to load on {device}, using CPU: {e}")
-            device = "cpu"
-            self.use_half = False
-            self.model.to("cpu")
-        
-        self.device = device
+
+        self.model = YOLO(self.get_parameter("model_path").value)
         self.bridge = CvBridge()
-        
-        # TF2 Buffer e Listener
-        self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
-        
-        # Synchronized subscribers
-        self.sub_color = Subscriber(
-            self, Image, f"/camera/{camera_name}/camera/image"
-        )
-        self.sub_depth = Subscriber(
-            self, Image, f"/depth/{camera_name}/camera/image"
-        )
-        
-        self.sync = ApproximateTimeSynchronizer(
-            [self.sub_color, self.sub_depth],
-            queue_size=2,
-            slop=0.05
-        )
-        self.sync.registerCallback(self.cb_synchronized)
-        
-        # Camera info
+
+        # Topic Orbbec
+        self.sub_color = self.create_subscription(
+            Image, "/camera/color/image_raw", self.cb_color, 10)
+
+        self.sub_depth = self.create_subscription(
+            Image, "/camera/depth/image_raw", self.cb_depth, 10)
+
         self.sub_info = self.create_subscription(
-            CameraInfo, f"/camera/{camera_name}/camera_info", self.cb_info, 1
-        )
-        
-        # Publishers
+            CameraInfo, "/camera/color/camera_info", self.cb_info, 10)
+
         self.pub_poses = self.create_publisher(
-            PoseArray, "/human_pose/points_3d", 1
+            PoseArray, "/human_pose/points_3d", 10
         )
         self.pub_markers = self.create_publisher(
-            MarkerArray, "/human_pose/skeleton_markers", 1
+            MarkerArray, "/human_pose/skeleton_markers", 10
         )
-        
-        # State
+
+        self.depth_img = None
         self.cam_info = None
+
         self.num_joints = 17
-        self.torso_len_ref = None
-        self.torso_len_smoothed = None
-        
+        self.TORSO_len_ref = None
         self.kf = [Kalman3D() for _ in range(self.num_joints)]
-        self.visible = [False] * self.num_joints
-        self.edges = SKELETON_EDGES
-        
-        self._tune_kalman_filters()
-        
-        self.get_logger().info(
-            f"✅ YOLO Skeleton Node ready\n"
-            f"   Camera: {camera_name}\n"
-            f"   Target frame: {self.target_frame}\n"
-            f"   Imgsz: {self.imgsz}\n"
-            f"   Device: {self.device}\n"
-            f"   Half precision: {self.use_half}"
-        )
-        
-    def _tune_kalman_filters(self):
-        """Tuning Kalman per torso/arms/legs."""
-        TORSO = {5, 6, 11, 12}
-        ARMS = {7, 8, 9, 10}
-        LEGS = {13, 14, 15, 16}
-        NOSE = {0}
-        
+
+        self.declare_parameter("z_offset", 0.0)
+        self.z_offset = float(self.get_parameter("z_offset").value)
+
+        self.TORSO = {5, 6, 11, 12}
+        self.ARMS  = {7, 8, 9, 10}
+        self.LEGS  = {13, 14, 15, 16}
+        self.NOSE  = {0}
+
         for i, kf in enumerate(self.kf):
-            if i in TORSO:
+            if i in self.TORSO:
                 kf.Q *= 0.7
                 kf.R *= 0.7
-            elif i in ARMS:
-                kf.Q *= 1.2
-                kf.R *= 1.2
-            elif i in LEGS:
-                kf.Q *= 1.4
-                kf.R *= 1.3
-            elif i in NOSE:
-                kf.Q *= 0.8
-                kf.R *= 0.6
+            elif i in self.ARMS:
+                kf.Q *= 1.0
+                kf.R *= 1.0
+            elif i in self.LEGS:
+                kf.Q *= 0.9
+                kf.R *= 0.9
+            elif i in self.NOSE:
+                kf.Q *= 1.5
+                kf.R *= 1.5
+
+        self.KNEE_MIN_DEG = 30.0
+        self.KNEE_MAX_DEG = 175.0
+
+        self.visible = [False]*self.num_joints
+        self.missing_count = [0] * self.num_joints
+
+        # Skeleton edges (COCO)
+        self.edges = [
+            (0,1),(0,2),(1,3),(2,4),
+            (5,6),
+            (5,7),(7,9),
+            (6,8),(8,10),
+            (11,12),
+            (11,13),(13,15),
+            (12,14),(14,16),
+            (5,11),(6,12),
+        ]
+
+        self.get_logger().info("✅ YOLO skeleton node (Orbbec) ready")
+
+    def adaptive_Q(self, kf, joint_idx):
+        Q = kf.Q_base.copy()
+
+        miss = self.missing_count[joint_idx]
+        time_factor = min(1.0 + 0.15 * miss, 3.0)
+
+        if joint_idx in {5, 6, 11, 12}:
+            part_factor = 0.7
+        elif joint_idx in {7, 8, 9, 10}:
+            part_factor = 1.2
+        elif joint_idx in {13, 14, 15, 16}:
+            part_factor = 1.4
+        elif joint_idx == 0:
+            part_factor = 1.8
+        else:
+            part_factor = 1.0
+
+        kf.Q = Q * time_factor * part_factor
+
+    # ============================================================
 
     def cb_info(self, msg):
-        """Callback camera info."""
         self.cam_info = msg
 
-    def cb_synchronized(self, msg_color, msg_depth):
-        """Callback sincronizzato RGB + Depth."""
-        
-        if self.cam_info is None:
-            self.get_logger().warn(
-                "Camera info not received yet", 
-                throttle_duration_sec=2.0
-            )
-            return
-        
-        try:
-            frame = self.bridge.imgmsg_to_cv2(msg_color, desired_encoding='bgr8')
-            depth_img = self.bridge.imgmsg_to_cv2(msg_depth, desired_encoding='passthrough')
-            
-            # Spot depth è in millimetri → converti a metri
-            if depth_img.dtype == np.uint16:
-                depth_img = depth_img.astype(np.float32) / 1000.0
-            
-            # ✅ RESIZE DEPTH to match RGB usando INTER_NEAREST
-            rgb_height, rgb_width = frame.shape[:2]
-            depth_height, depth_width = depth_img.shape[:2]
-            
-            if (depth_height != rgb_height) or (depth_width != rgb_width):
-                depth_img = cv2.resize(
-                    depth_img, 
-                    (rgb_width, rgb_height),
-                    interpolation=cv2.INTER_NEAREST  # ✅ Preserva discontinuità depth
-                )
-                
-        except Exception as e:
-            self.get_logger().error(f"Failed to convert images: {e}")
-            return
-        
-        # YOLO inference
-        try:
-            results = self.model.predict(
-                frame,
-                conf=self.conf_thr,
-                classes=[0],
-                verbose=False,
-                imgsz=self.imgsz,
-                half=self.use_half,
-                device=self.device
-            )
-        except Exception as e:
-            self.get_logger().error(f"YOLO inference failed: {e}")
-            return
-        
-        # Validation
-        if len(results) == 0 or results[0].keypoints is None:
-            return
-        
-        kp_data = results[0].keypoints
-        if kp_data.xy is None or kp_data.xy.shape[0] == 0:
-            return
-        
-        # Extract keypoints
-        kp_xy = kp_data.xy.cpu().numpy()[0]
-        kp_conf = kp_data.conf.cpu().numpy()[0]
-        
-        self._process_skeleton(kp_xy, kp_conf, depth_img, msg_color.header)
+    def cb_depth(self, msg):
+        self.depth_img = self.bridge.imgmsg_to_cv2(msg, "passthrough")
 
+    def robust_depth(self, u, v, win=5):
+        h, w = self.depth_img.shape
+        r = win // 2
+        patch = self.depth_img[
+            max(0,v-r):min(h,v+r+1),
+            max(0,u-r):min(w,u+r+1)
+        ]
+        patch = patch[patch > 0]
+        if patch.size < 6:
+            return None
+        return float(np.median(patch)) * 0.001
 
+    def knee_angle_ok(self, hip, knee, ankle):
+        v1 = hip - knee
+        v2 = ankle - knee
+        n1 = np.linalg.norm(v1)
+        n2 = np.linalg.norm(v2)
+        if n1 < 1e-6 or n2 < 1e-6:
+            return True
+        c = np.clip(np.dot(v1, v2) / (n1 * n2), -1.0, 1.0)
+        ang = np.degrees(np.arccos(c))
+        return self.KNEE_MIN_DEG <= ang <= self.KNEE_MAX_DEG
 
-    def _process_skeleton(self, kp_xy, kp_conf, depth_img, header):
-        """Processa skeleton: depth lookup + Kalman + constraint + TF transform."""
-        
-        # ✅ DEBUG: Log detection
-        self.get_logger().info(
-            f'Processing skeleton: {len(kp_xy)} keypoints detected',
-            throttle_duration_sec=1.0
-        )
-        
-        K = np.array(self.cam_info.k).reshape(3, 3)
-        fx, fy = K[0, 0], K[1, 1]
-        cx, cy = K[0, 2], K[1, 2]
-        
-        pts = [None] * self.num_joints
-        
-        # Depth lookup + backprojection nel CAMERA FRAME
-        valid_count = 0
-        for i in range(self.num_joints):
-            if kp_conf[i] < self.conf_thr:
-                self.visible[i] = False
-                continue
-            
-            u, v = int(kp_xy[i, 0]), int(kp_xy[i, 1])
-            depth = get_depth_at_pixel(depth_img, u, v, window_size=3)
-            depth = filter_depth_outliers(depth, self.max_depth_m)
-            
-            if depth is None:
-                self.visible[i] = False
-                continue
-            
-            # Backproject 2D → 3D (camera frame)
-            x = (u - cx) * depth / fx
-            y = (v - cy) * depth / fy
-            z = depth
-            
-            pts[i] = np.array([x, y, z], dtype=np.float64)
-            self.visible[i] = True
-            valid_count += 1
-        
-        # ✅ DEBUG: Log valid points
-        self.get_logger().info(
-            f'Valid 3D points: {valid_count}/17',
-            throttle_duration_sec=1.0
+    # ============================================================
+
+    def cb_color(self, msg):
+        if self.depth_img is None or self.cam_info is None:
+            return
+
+        img = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+        res = self.model(img, verbose=False)
+
+        self.visible = [False]*self.num_joints
+
+        # ---------- NO PERSON / NO KEYPOINTS ----------
+        if len(res) == 0 or res[0].keypoints is None or res[0].keypoints.xy is None:
+            self.predict_only(msg.header.stamp)
+            return
+
+        kp_xy = res[0].keypoints.xy
+        if kp_xy.shape[0] == 0:
+            self.predict_only(msg.header.stamp)
+            return
+
+        kp = kp_xy[0].cpu().numpy()
+
+        conf = res[0].keypoints.conf
+        if conf is not None:
+            conf = conf[0].cpu().numpy()
+
+        fx, fy, cx, cy = (
+            self.cam_info.k[0],
+            self.cam_info.k[4],
+            self.cam_info.k[2],
+            self.cam_info.k[5]
         )
 
-        # Torso constraint (nel camera frame)
-        if self.torso_len_ref is None:
-            new_len = compute_torso_length(pts)
-            if new_len is not None:
-                self.torso_len_ref = new_len
-                self.torso_len_smoothed = new_len
-        else:
-            new_len = compute_torso_length(pts)
-            self.torso_len_smoothed = smooth_torso_length(
-                new_len, self.torso_len_smoothed, alpha=0.3
-            )
-        
-        pts = torso_length_constraint(pts, self.visible, self.torso_len_smoothed)
-        
-        # Kalman filtering (nel camera frame)
-        for i in range(self.num_joints):
-            self.kf[i].predict(self.vel_damping)
-            
-            if pts[i] is not None:
-                self.kf[i].update(pts[i])
-            
-            pts[i] = self.kf[i].get_position()
-        
-        # Trasforma da camera frame a body frame
-        pts_transformed = self._transform_points_to_target(
-            pts, 
-            self.cam_info.header.frame_id,
-            self.target_frame,
-            header.stamp
-        )
-        
-        # Publish nel body frame
-        self._publish_skeleton(pts_transformed, header)
+        pts = [None]*self.num_joints
 
-    def _transform_points_to_target(self, pts, source_frame, target_frame, stamp):
-        """Trasforma lista di punti da source a target frame usando TF2."""
-        
-        # ✅ AGGIUNTO: Se target_frame vuoto, salta trasformazione
-        if not target_frame or target_frame == '':
-            return pts
-        
-        try:
-            # ✅ CORRETTO: Usa Time(0) per latest available transform
-            # Evita extrapolation error
-            transform = self.tf_buffer.lookup_transform(
-                target_frame,
-                source_frame,
-                rclpy.time.Time(),  # ✅ Usa latest available invece di stamp specifico
-                timeout=rclpy.duration.Duration(seconds=0.5)  # Aumentato timeout
-            )
-        except TransformException as e:
-            self.get_logger().warn(
-                f"Transform {source_frame}→{target_frame} failed: {e}",
-                throttle_duration_sec=2.0
-            )
-            return pts  # Return original se transform fallisce
-        
-        # Trasforma ogni punto
-        pts_transformed = []
-        for p in pts:
-            if p is None:
-                pts_transformed.append(None)
+        for i in range(self.num_joints):
+            # Non predire occhi / orecchie
+            if i in {1, 2, 3, 4}:
                 continue
-            
-            # Crea PointStamped con Time(0) per latest
-            point_stamped = PointStamped()
-            point_stamped.header.stamp = rclpy.time.Time().to_msg()  # ✅ Latest
-            point_stamped.header.frame_id = source_frame
-            point_stamped.point.x = float(p[0])
-            point_stamped.point.y = float(p[1])
-            point_stamped.point.z = float(p[2])
-            
-            # Applica transform
-            transformed = do_transform_point(point_stamped, transform)
-            
-            # Converti back a numpy
-            pts_transformed.append(np.array([
-                transformed.point.x,
-                transformed.point.y,
-                transformed.point.z
-            ], dtype=np.float64))
-        
-        return pts_transformed
-
-
-    def _publish_skeleton(self, pts, header):
-        """
-        Pubblica PoseArray + Markers nel target frame.
-        
-        IMPORTANTE: Pubblica SEMPRE 17 pose (anche se None → NaN)
-        """
-        pa = PoseArray()
-        pa.header = header
-        pa.header.frame_id = self.target_frame if self.target_frame else header.frame_id
-        
-        # ✅ CORRETTO: Pubblica SEMPRE 17 pose
-        for i in range(self.num_joints):
-            pose = Pose()
-            
-            if pts[i] is not None:
-                # Punto valido
-                pose.position.x = float(pts[i][0])
-                pose.position.y = float(pts[i][1])
-                pose.position.z = float(pts[i][2])
+            # Damping differenziato
+            if i in self.LEGS:
+                damping = 0.5
+            elif i in self.ARMS:
+                damping = 0.4
+            elif i in self.TORSO:
+                damping = 0.2
             else:
-                # Punto non valido → NaN
-                pose.position.x = float('nan')
-                pose.position.y = float('nan')
-                pose.position.z = float('nan')
-            
-            pose.orientation.w = 1.0  # Orientamento default
-            pa.poses.append(pose)
-        
-        # Pubblica PoseArray (sempre 17 elementi)
-        self.pub_poses.publish(pa)
-        
-        # Markers per visualizzazione
-        ma = build_skeleton_markers(pa, pts, self.visible)
-        self.pub_markers.publish(ma)
+                damping = self.vel_damping
 
+            if conf is not None and conf[i] < self.conf_thr:
+                continue
+
+            u, v = int(kp[i][0]), int(kp[i][1])
+            d = self.robust_depth(u, v)
+            if d is None or d > self.max_depth_m:
+                continue
+
+            X = (u - cx) * d / fx
+            Y = (v - cy) * d / fy
+            Z = d + self.z_offset
+
+            meas = np.array([X, Y, Z], dtype=np.float64)
+
+            self.kf[i].predict(1.0)
+
+            if i == 13:  # left knee
+                if pts[11] is not None and pts[15] is not None:
+                    if not self.knee_angle_ok(pts[11], meas, pts[15]):
+                        self.kf[i].predict(self.vel_damping)
+                        pts[i] = self.kf[i].get_position()
+                        continue
+
+            if i == 14:  # right knee
+                if pts[12] is not None and pts[16] is not None:
+                    if not self.knee_angle_ok(pts[12], meas, pts[16]):
+                        self.kf[i].Q *= 0.3
+                        continue
+
+            # ---------- GATING ----------
+            if self.kf[i].initialized:
+                pred = self.kf[i].get_position()
+                sigma = np.sqrt(np.trace(self.kf[i].P[0:3,0:3]))
+
+                if i in self.LEGS:
+                    threshold = 3.5
+                else:
+                    threshold = 2.5
+
+                if np.linalg.norm(meas - pred) < threshold * sigma:
+                    self.kf[i].update(meas)
+            else:
+                self.kf[i].update(meas)
+
+            self.visible[i] = True
+
+        for i in range(self.num_joints):
+            if self.visible[i]:
+                self.missing_count[i] = 0
+            else:
+                self.missing_count[i] += 1
+
+        # Predict missing joints
+        for i in range(self.num_joints):
+            if not self.visible[i]:
+                self.adaptive_Q(self.kf[i], i)
+                self.kf[i].predict(self.vel_damping)
+            else:
+                self.kf[i].Q = self.kf[i].Q_base.copy()
+
+            pts[i] = self.kf[i].get_position()
+
+        if (
+            pts[5] is not None and pts[6] is not None and
+            pts[11] is not None and pts[12] is not None
+        ):
+            sh_mid = 0.5 * (pts[5] + pts[6])
+            hip_mid = 0.5 * (pts[11] + pts[12])
+            L = np.linalg.norm(sh_mid - hip_mid)
+
+            if self.TORSO_len_ref is None:
+                self.TORSO_len_ref = L
+            else:
+                self.TORSO_len_ref = 0.98 * self.TORSO_len_ref + 0.02 * L
+
+        pts = TORSO_length_constraint(
+            pts,
+            self.visible,
+            self.TORSO_len_ref,
+            stiffness=0.35
+        )
+
+        # Vincolo morbido NASO → spalle (solo se predetto)
+        if (
+            pts[0] is not None and
+            pts[5] is not None and
+            pts[6] is not None and
+            not self.visible[0]
+        ):
+            sh_mid = 0.5 * (pts[5] + pts[6])
+            pts[0] = pts[0] + 0.55 * (sh_mid - pts[0])
+
+        self.publish_all(pts, msg.header.stamp)
+
+    # ============================================================
+
+    def predict_only(self, stamp):
+        pts = []
+        for i, k in enumerate(self.kf):
+            if i in {1, 2, 3, 4}:
+                pts.append(None)
+                continue
+
+            if k.initialized:
+                self.adaptive_Q(k, i)
+
+                if i in {13, 14, 15, 16}:
+                    damping = 0.5
+                elif i in {7, 8, 9, 10}:
+                    damping = 0.4
+                elif i in {5, 6, 11, 12}:
+                    damping = 0.2
+                else:
+                    damping = self.vel_damping
+
+                k.predict(damping)
+                k.Q = k.Q_base.copy()
+                pts.append(k.get_position())
+            else:
+                pts.append(None)
+
+        self.visible = [False] * self.num_joints
+
+        valid_pts = [p for p in pts if p is not None]
+        if len(valid_pts) < 4:
+            self.publish_empty(stamp)
+            return
+
+        self.publish_all(pts, stamp)
+
+    # ============================================================
+
+    def publish_empty(self, stamp):
+        empty_pose_array = PoseArray()
+        empty_pose_array.header.stamp = stamp
+        empty_pose_array.header.frame_id = "camera_color_optical_frame"
+        self.pub_poses.publish(empty_pose_array)
+
+        empty_marker_array = MarkerArray()
+
+        for ns, mid in [("joints_visible", 0), ("joints_predicted", 1), ("bones", 2)]:
+            m = Marker()
+            m.header.stamp = stamp
+            m.header.frame_id = "camera_color_optical_frame"
+            m.ns = ns
+            m.id = mid
+            m.action = Marker.DELETE
+            empty_marker_array.markers.append(m)
+
+        self.pub_markers.publish(empty_marker_array)
+
+    # ============================================================
+
+    def publish_all(self, pts, stamp):
+        if pts is None or len(pts) != self.num_joints:
+            self.publish_empty(stamp)
+            return
+
+        # ---------- PoseArray ----------
+        pa = PoseArray()
+        pa.header.frame_id = "camera_color_optical_frame"
+        pa.header.stamp = stamp
+
+        for p in pts:
+            pose = Pose()
+            if p is None:
+                pose.position.x = pose.position.y = pose.position.z = float("nan")
+            else:
+                pose.position.x, pose.position.y, pose.position.z = float(p[0]), float(p[1]), float(p[2])
+            pose.orientation.w = 1.0
+            pa.poses.append(pose)
+
+        self.pub_poses.publish(pa)
+
+        # ---------- Markers ----------
+        ma = MarkerArray()
+
+        j_vis = Marker()
+        j_vis.header = pa.header
+        j_vis.ns = "joints_visible"
+        j_vis.id = 0
+        j_vis.type = Marker.SPHERE_LIST
+        j_vis.action = Marker.ADD
+        j_vis.scale.x = j_vis.scale.y = j_vis.scale.z = 0.03
+        j_vis.color.r = 1.0
+        j_vis.color.a = 1.0
+
+        j_pred = Marker()
+        j_pred.header = pa.header
+        j_pred.ns = "joints_predicted"
+        j_pred.id = 1
+        j_pred.type = Marker.SPHERE_LIST
+        j_pred.action = Marker.ADD
+        j_pred.scale.x = j_pred.scale.y = j_pred.scale.z = 0.03
+        j_pred.color.b = 1.0
+        j_pred.color.a = 1.0
+
+        for i, p in enumerate(pts):
+            if p is None:
+                continue
+            pt = Point(x=float(p[0]), y=float(p[1]), z=float(p[2]))
+            if i < len(self.visible) and self.visible[i]:
+                j_vis.points.append(pt)
+            else:
+                j_pred.points.append(pt)
+
+        ma.markers.append(j_vis)
+        ma.markers.append(j_pred)
+
+        b = Marker()
+        b.header = pa.header
+        b.ns = "bones"
+        b.id = 2
+        b.type = Marker.LINE_LIST
+        b.action = Marker.ADD
+        b.scale.x = 0.015
+        b.color.g = 1.0
+        b.color.a = 1.0
+
+        for a, c in self.edges:
+            if a >= len(pts) or c >= len(pts):
+                continue
+            if pts[a] is not None and pts[c] is not None:
+                b.points.append(Point(x=float(pts[a][0]), y=float(pts[a][1]), z=float(pts[a][2])))
+                b.points.append(Point(x=float(pts[c][0]), y=float(pts[c][1]), z=float(pts[c][2])))
+
+        ma.markers.append(b)
+
+        self.pub_markers.publish(ma)
 
 
 def main():
     rclpy.init()
-    node = YoloSkeletonSpot()
+    node = YoloSkeletonNodeOrbbec()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()

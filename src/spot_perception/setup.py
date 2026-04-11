@@ -14,8 +14,6 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'),
             glob('launch/*.py')),
-        (os.path.join('share', package_name, 'config'),
-            glob('config/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -26,8 +24,9 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'yolo_skeleton = spot_perception.yolo_skeleton_spot:main',
-            'posture_classifier = spot_perception.posture_classifier:main',
+            'yolo_skeleton_node_orbbec = spot_perception.yolo_skeleton_spot:main',
+            'human_posture_analyzer_spot = spot_perception.posture_classifier:main',
+            'human_bounding_box_visualizer = spot_perception.human_bounding_box_visualizer:main',
             'laying_human_detector = spot_perception.laying_human_detector:main',
         ],
     },

@@ -106,6 +106,73 @@ impedance controller, \texttt{spot\_perception} package.
 \end{branchboxb}
 
 % ============================================================
+\section{Come avviare il sistema}
+% ============================================================
+
+\subsection*{Prerequisiti}
+\begin{itemize}[leftmargin=1.5em]
+  \item SpotCore (SpotROS2 driver) in esecuzione sulla macchina Spot
+  \item Jetson con ROS2 Humble, driver Z1, Pinocchio, YOLO11
+  \item ROS\_DOMAIN\_ID uguale su Jetson e SpotCore (per DDS)
+  \item \texttt{colcon build} eseguito in \texttt{\$TERESA\_WS}
+\end{itemize}
+
+\subsection*{Launch sequence (4 terminali Jetson)}
+
+\begin{lstlisting}
+# PREREQUISITO: source su ogni terminale
+source /opt/ros/humble/setup.bash
+source ~/install/setup.bash
+\end{lstlisting}
+
+\begin{center}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Terminal} & \textbf{Machine} & \textbf{Comando Launch} \\
+\hline
+1 & SpotCore & \texttt{ros2 launch spot\_ros2 spot\_driver.launch.py} \\
+\hline
+2 (Jetson) & Jetson & \texttt{ros2 launch spot\_perception spot\_perception.launch.py} \\
+& & \texttt{test\_mode:=true} \\
+\hline
+3 (Jetson) & Jetson & \texttt{ros2 launch z1\_vision z1\_realsense.launch.py} \\
+& & \texttt{use\_rviz:=true} \\
+\hline
+4 (Jetson) & Jetson & \texttt{ros2 launch z1\_vision z1\_control.launch.py} \\
+& & \texttt{fsm\_delay:=5.0} \\
+\hline
+\end{tabular}
+\end{center}
+
+\subsection*{Parametri principali}
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{\texttt{test\_mode:=true}} (spot\_perception) — pubblica approach point ma NON invia comando navigazione
+  \item \textbf{\texttt{test\_mode:=false}} — abilita navigazione Spot verso target rilevato
+  \item \textbf{\texttt{use\_rviz:=true}} (z1\_realsense) — lancia RViz2 per visualizzazione
+  \item \textbf{\texttt{fsm\_delay:=5.0}} — secondi di attesa prima che FSM inizi (lascia tempo al setup)
+\end{itemize}
+
+\subsection*{Varianti di lancio}
+
+\textbf{Solo Z1 (senza Spot perception):}
+\begin{lstlisting}
+# Terminal 1: SpotCore (acceso prima)
+# Terminal 2: Jetson
+ros2 launch z1_vision z1_realsense.launch.py use_rviz:=true
+
+# Terminal 3: Jetson
+ros2 launch z1_vision z1_control.launch.py fsm_delay:=5.0
+\end{lstlisting}
+
+\textbf{Solo Perception (senza Z1):}
+\begin{lstlisting}
+# Terminal 1: SpotCore
+# Terminal 2: Jetson
+ros2 launch spot_perception spot_perception.launch.py test_mode:=true
+\end{lstlisting}
+
+% ============================================================
 \section{Architettura FSM (stato attuale — \texttt{Z1\_realsense})}
 % ============================================================
 
@@ -163,7 +230,7 @@ impedance controller, \texttt{spot\_perception} package.
 % ============================================================
 
 \begin{donebox}
-\textbf{\color{donegreen} Sessione 2026-03-15 (branch \texttt{FSM\_main})}
+\textbf{\color{donegreen} Aggiornato al 2026-04-11}
 
 \begin{itemize}[leftmargin=1.5em]
   \item[\checkmark] Pipeline base: YOLO11 + Kalman 3D + FSM IDLE/ESTIMATING/LOCKED
@@ -177,12 +244,6 @@ impedance controller, \texttt{spot\_perception} package.
   \item[\checkmark] \textbf{Fix orientamento EE}: \texttt{ik\_rot\_weight} portato da 0.5 a 0.8 per
         garantire EE perpendicolare alla superficie durante il JTC approach
 \end{itemize}
-\end{donebox}
-
-\vspace{0.8em}
-
-\begin{donebox}
-\textbf{\color{donegreen} Sessioni 2026-03-20 $\to$ 2026-03-31 (branch \texttt{Z1\_realsense})}
 
 \subsection*{Body Search Scan 3 fasi — \texttt{body\_search\_scanner.py}}
 \begin{itemize}[leftmargin=1.5em]
@@ -219,14 +280,8 @@ impedance controller, \texttt{spot\_perception} package.
   \item[\checkmark] Stima forza di contatto model-based (gravity + coriolis) senza sensore di forza esterno
   \item[\checkmark] Look-at dinamico in fase 2: l'EE punta verso il torso stimato ad ogni posa dell'arco
 \end{itemize}
-\end{donebox}
 
-\vspace{0.8em}
-
-\begin{donebox}
-\textbf{\color{donegreen} Sessione 2026-04-11 — Integrazione Spot + pulizia workspace}
-
-\subsection*{Nuovo package \texttt{spot\_perception} in \texttt{TERESA\_ws}}
+\subsection*{Integrazione Spot + pulizia workspace}
 \begin{itemize}[leftmargin=1.5em]
   \item[\checkmark] Creato package \texttt{src/spot\_perception} (ament\_python) per girare sulla Jetson
   \item[\checkmark] Migrati da \texttt{ros2\_spot\_ws}: \texttt{yolo\_skeleton\_spot.py},
@@ -254,6 +309,18 @@ impedance controller, \texttt{spot\_perception} package.
   \item[\checkmark] Installazione nativa su Jetson (no Docker): motivazione latenza real-time 500 Hz +
         accesso diretto USB + CUDA nativo L4T
 \end{itemize}
+
+\subsection*{Test su robot reale}
+\begin{itemize}[leftmargin=1.5em]
+  \item[\checkmark] \textbf{Ciclo FAST completo} testato e funzionante:
+        HOMING $\to$ BODY\_SCANNING $\to$ WAITING $\to$ CHECKING\_WORKSPACE
+        $\to$ APPROACHING $\to$ IMPEDANCE $\to$ SCAN\_PRELIFT $\to$ loop 4 punti
+  \item[\checkmark] \textbf{\texttt{body\_scan\_center}} e \texttt{body\_scan\_lookat\_distance}
+        calibrati sul robot reale
+  \item[\checkmark] \textbf{Orientamento look-at} verificato: EE ruota correttamente
+        spostandosi in alto/basso e lateralmente
+  \item[\checkmark] \textbf{\texttt{body\_scan\_min\_frames}}: 10 frame sufficienti per stima affidabile dello score
+\end{itemize}
 \end{donebox}
 
 % ============================================================
@@ -278,15 +345,8 @@ impedance controller, \texttt{spot\_perception} package.
 
 \subsection*{Alta priorità — test su robot reale (Z1)}
 \begin{itemize}[leftmargin=1.5em]
-  \item[$\square$] \textbf{Testare il ciclo FAST completo}:
-        HOMING $\to$ BODY\_SCANNING $\to$ WAITING $\to$ CHECKING\_WORKSPACE
-        $\to$ APPROACHING $\to$ IMPEDANCE $\to$ SCAN\_PRELIFT $\to$ loop 4 punti
-  \item[$\square$] \textbf{Calibrare \texttt{body\_scan\_center}} e
-        \texttt{body\_scan\_lookat\_distance} sul robot reale
   \item[$\square$] \textbf{Verificare Y clipping FAST}: controllare che tutti i punti
         rimangano entro il bounding box del torso nelle varie posture paziente
-  \item[$\square$] \textbf{Verificare l'orientamento look-at}: controllare nei log che
-        l'EE ruoti correttamente spostandosi in alto/basso e lateralmente
 \end{itemize}
 
 \subsection*{Media priorità}
@@ -301,8 +361,6 @@ impedance controller, \texttt{spot\_perception} package.
         sul robot reale
   \item[$\square$] \textbf{Tuning griglia body scan}: valutare se \texttt{ext\_y} e
         \texttt{ext\_z} coprono correttamente la zona torso sul robot reale
-  \item[$\square$] \textbf{Tuning \texttt{body\_scan\_min\_frames}}: verificare che
-        10 frame siano sufficienti per una stima affidabile dello score
 \end{itemize}
 
 \subsection*{Bassa priorità / futuri miglioramenti}
