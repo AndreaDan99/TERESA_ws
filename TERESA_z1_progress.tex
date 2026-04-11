@@ -1,6 +1,6 @@
 % ============================================================
 %  TERESA Z1 — Diario di progresso e TODO list
-%  Aggiornato: 2026-03-20
+%  Aggiornato: 2026-04-11
 % ============================================================
 \documentclass[a4paper,11pt]{article}
 
@@ -45,7 +45,7 @@
 \pagestyle{fancy}
 \fancyhf{}
 \lhead{\textbf{TERESA Z1} — Braccio robotico Unitree Z1}
-\rhead{Aggiornato: 2026-03-20}
+\rhead{Aggiornato: 2026-04-11}
 \cfoot{\thepage}
 
 % ── Ambienti custom ───────────────────────────────────────
@@ -67,11 +67,10 @@
   {\LARGE \textbf{TERESA — Braccio Unitree Z1}}\\[4pt]
   {\large Diario di sviluppo, TODO list e guida di avvio}\\[2pt]
   {\small
-    Branch attivi:
-    \textcolor{branchblue}{\texttt{FSM\_main}} \quad|\quad
+    Branch attivo:
     \textcolor{branchpurple}{\texttt{Z1\_realsense}}
     \quad|\quad Repo: \texttt{TERESA\_ws/src/z1\_vision}}\\[2pt]
-  {\small Ultimo aggiornamento: \textbf{20 Marzo 2026}}
+  {\small Ultimo aggiornamento: \textbf{11 Aprile 2026}}
 \end{center}
 \vspace{0.5em}
 \hrule
@@ -92,24 +91,18 @@ Lo stack completo è composto da:
   \item \textbf{Controllo forza}: Impedance controller in spazio cartesiano (500 Hz, torque control)
   \item \textbf{Sicurezza}: keyboard safety node, stati HOMING/EMERGENCY, workspace clipping
   \item \textbf{Orchestrazione}: FSM a 12 stati, launch files separati per controllo e percezione
+  \item \textbf{Integrazione Spot}: package \texttt{spot\_perception} su Jetson (Orbbec + YOLO skeleton + classificazione postura)
 \end{itemize}
 
 % ============================================================
 \section{Branch attivi}
 % ============================================================
 
-\begin{branchbox}
-\textbf{\textcolor{branchblue}{Branch \texttt{FSM\_main}}} — stack completo funzionante, base stabile\\
-Contiene tutto il codice fino alla sessione del 2026-03-15 più il fix
-\texttt{ik\_rot\_weight} per l'orientamento EE durante JTC.
-\end{branchbox}
-
-\vspace{0.5em}
-
 \begin{branchboxb}
-\textbf{\textcolor{branchpurple}{Branch \texttt{Z1\_realsense}}} — feature body search scan (2026-03-20)\\
-Estende \texttt{FSM\_main} con la pipeline di scansione a griglia per trovare
-la miglior posizione del braccio prima di avvicinarsi al torso.
+\textbf{\textcolor{branchpurple}{Branch \texttt{Z1\_realsense}}} — branch principale attivo (2026-04-11)\\
+Contiene l'intero stack: FAST protocol, body search scan 3 fasi,
+impedance controller, \texttt{spot\_perception} package.
+\texttt{FSM\_main} è la base stabile precedente (2026-03-15), da cui questo branch è stato esteso.
 \end{branchboxb}
 
 % ============================================================
@@ -189,100 +182,137 @@ la miglior posizione del braccio prima di avvicinarsi al torso.
 \vspace{0.8em}
 
 \begin{donebox}
-\textbf{\color{donegreen} Sessione 2026-03-20 (branch \texttt{Z1\_realsense})}
+\textbf{\color{donegreen} Sessioni 2026-03-20 $\to$ 2026-03-31 (branch \texttt{Z1\_realsense})}
 
-\subsection*{Body Search Scan — nuovo file \texttt{body\_search\_scanner.py}}
+\subsection*{Body Search Scan 3 fasi — \texttt{body\_search\_scanner.py}}
 \begin{itemize}[leftmargin=1.5em]
-  \item[\checkmark] Classe \texttt{BodySearchScanner}: FSM interna pura Python (nessun nodo ROS)
-        con stati INIT $\to$ MOVING $\to$ RESETTING $\to$ COLLECTING $\to$ BEST\_MOVING $\to$ EXITING $\to$ DONE/FAILED
+  \item[\checkmark] Classe \texttt{BodySearchScanner}: FSM interna 3 fasi
+        (wrist sweep in home $\to$ arco nel piano X$\times$Y a quota fissa $\to$ refinement adattivo)
   \item[\checkmark] Score per punto: $\text{detection\_rate} \times \text{avg\_per\_frame\_score}$,
-        dove \texttt{per\_frame\_score} $= (n\_kp/4) \times \text{avg\_conf}$
-  \item[\checkmark] Early stop: se score $\geq$ soglia (default 0.85) interrompe la scansione
-        anticipatamente senza visitare i punti restanti
-  \item[\checkmark] Fallback al miglior punto visto se nessuno supera la soglia
+        con per-keypoint confidence tracking e completeness-weighted fusion
+  \item[\checkmark] Stima 3D torso per triangolazione multi-vista con anchor-based outlier rejection
+  \item[\checkmark] Early stop: se score $\geq$ soglia interrompe la scansione anticipatamente;
+        fallback al miglior punto visto se nessuno supera la soglia
+  \item[\checkmark] Fase 3 fallback: se FAILED usa la stima di fase 2 invece di abortire
+  \item[\checkmark] Fase 3 pubblica sempre il seed al tracker anche se fallisce
 \end{itemize}
 
-\subsection*{Scan mode nel tracker — \texttt{z1\_yolo\_torso\_tracker.py}}
+\subsection*{Protocollo FAST — \texttt{z1\_scan\_manager.py} + \texttt{z1\_FSM.py}}
 \begin{itemize}[leftmargin=1.5em]
-  \item[\checkmark] Aggiunta FSM parallela scan mode (IDLE/COLLECTING/POINT\_LOCKED),
-        attivabile via topic \texttt{/tracker\_scan\_mode}
-  \item[\checkmark] In scan mode il tracker non entra mai in LOCKED normale:
-        accumula frame validi e pubblica \texttt{/torso\_scan\_point} $[$score, n\_kp, conf, x, y, z$]$
-  \item[\checkmark] \texttt{/tracker\_scan\_next}: reset del punto corrente per avanzare alla pose successiva
-  \item[\checkmark] Disattivando scan mode il tracker si resetta e riprende il ciclo IDLE $\to$ LOCKED normale
+  \item[\checkmark] Protocollo FAST implementato con punti anatomici derivati dai keypoint YOLO:
+        Centro hub $\to$ Sottoxifoidea (cardiaca) $\to$ RUQ Morrison's $\to$ LUQ Koller's $\to$ Sovrapubica
+  \item[\checkmark] Ridotto a \textbf{4 punti torso-only} (rimossa Pleurica Dx, troppo craniale):
+        tutti i punti clippati a $Y \in [\text{shoulder\_mid\_y},\, \text{hip\_mid\_y}]$
+        prima del calcolo dell'offset — il braccio non esce mai dal bounding box del torso
+  \item[\checkmark] \texttt{skip\_impedance} esegue il dry-run completo del FAST via SCAN\_PRELIFT:
+        centro hub $\to$ SCAN\_PAUSE $\to$ pt1 $\to$ PRELIFT $\to$ centro $\to$ \ldots $\to$ pt4 $\to$ WAITING
+  \item[\checkmark] \textbf{Fix}: \texttt{advance()} su center hub chiamato \emph{prima} di SCAN\_PAUSE
+        per evitare loop infinito hub $\to$ SCAN\_PAUSE $\to$ hub
 \end{itemize}
 
-\subsection*{Stato BODY\_SCANNING nella FSM — \texttt{z1\_FSM.py}}
+\subsection*{Fix orientamento e stabilità}
 \begin{itemize}[leftmargin=1.5em]
-  \item[\checkmark] Nuovo stato \texttt{BODY\_SCANNING} inserito in WAITING prima di aspettare il lock
-  \item[\checkmark] Generazione griglia $n_y \times n_z$ con orientamento look-at per ogni punto:
-        il punto di mira è calcolato automaticamente come
-        \texttt{home\_position + lookat\_distance $\times$ X\_ee\_home},
-        così in home l'orientamento è identico e spostandosi l'EE punta sempre
-        verso lo stesso punto fisso del torso paziente
-  \item[\checkmark] Riutilizzo di \texttt{\_orientation\_for\_xee()} già esistente per la rotazione
-        minima (Rodrigues) da home verso la direzione look-at
-  \item[\checkmark] \texttt{\_body\_scan\_done = False} ad ogni HOMING $\to$ ri-scansiona ad ogni nuovo ciclo
+  \item[\checkmark] \textbf{Fix}: \texttt{\_orientation\_for\_xee} ripristinata a riferimento \texttt{Y\_home}
+        (Gram-Schmidt): un commit precedente aveva silenziato questa modifica
+        usando \texttt{Z\_world}, causando rotazione polso di 90° attorno all'asse di approccio
+  \item[\checkmark] \textbf{Fix}: rimossa doppia dichiarazione \texttt{scan\_pause\_s} in \texttt{\_\_init\_\_} della FSM
+  \item[\checkmark] Stima forza di contatto model-based (gravity + coriolis) senza sensore di forza esterno
+  \item[\checkmark] Look-at dinamico in fase 2: l'EE punta verso il torso stimato ad ogni posa dell'arco
+\end{itemize}
+\end{donebox}
+
+\vspace{0.8em}
+
+\begin{donebox}
+\textbf{\color{donegreen} Sessione 2026-04-11 — Integrazione Spot + pulizia workspace}
+
+\subsection*{Nuovo package \texttt{spot\_perception} in \texttt{TERESA\_ws}}
+\begin{itemize}[leftmargin=1.5em]
+  \item[\checkmark] Creato package \texttt{src/spot\_perception} (ament\_python) per girare sulla Jetson
+  \item[\checkmark] Migrati da \texttt{ros2\_spot\_ws}: \texttt{yolo\_skeleton\_spot.py},
+        \texttt{posture\_classifier.py}, \texttt{laying\_human\_detector.py},
+        \texttt{depth\_processing.py}, \texttt{skeleton\_utils.py},
+        \texttt{kalman\_filter.py}, \texttt{visualization.py}
+  \item[\checkmark] Launch file \texttt{spot\_perception.launch.py} con parametri GPU Jetson
+        (\texttt{device: '0'}, \texttt{use\_half: true})
+  \item[\checkmark] Driver Orbbec (\texttt{src/orbbec\_camera}) già presente in \texttt{TERESA\_ws}
 \end{itemize}
 
-\subsection*{Nuovo file di configurazione \texttt{config/body\_search\_params.yaml}}
+\subsection*{Pulizia workspace}
 \begin{itemize}[leftmargin=1.5em]
-  \item[\checkmark] Griglia: \texttt{body\_scan\_center}, \texttt{ext\_y/ext\_z}, \texttt{ny/nz}
-        (default: 3$\times$2 $=$ 6 punti, $\pm$20 cm Y, $\pm$10 cm Z)
-  \item[\checkmark] Look-at: \texttt{body\_scan\_lookat\_distance: 1.0} m
-  \item[\checkmark] Timing: \texttt{body\_scan\_point\_timeout: 4.0} s, \texttt{body\_scan\_min\_frames: 10}
-  \item[\checkmark] Early stop: \texttt{body\_scan\_early\_stop: 0.85}
+  \item[\checkmark] Rimossi package obsoleti: \texttt{z1\_control} e \texttt{yolo\_pose\_ros}
+        (superseded da \texttt{z1\_vision} e \texttt{spot\_perception})
+\end{itemize}
+
+\subsection*{Decisione architetturale Jetson / SpotCore}
+\begin{itemize}[leftmargin=1.5em]
+  \item[\checkmark] \textbf{Jetson} (Orbbec USB + RealSense USB + Z1 USB):
+        \texttt{spot\_perception} + \texttt{z1\_vision} + driver camere + driver Z1
+  \item[\checkmark] \textbf{SpotCore}: solo \texttt{spot\_ros2} (driver hardware Spot) +
+        nodi navigazione (\texttt{target\_tracker}, \texttt{cmd\_vel\_controller}, \texttt{odom\_nav})
+  \item[\checkmark] Comunicazione Jetson $\leftrightarrow$ SpotCore via ROS2 DDS (stesso \texttt{ROS\_DOMAIN\_ID})
+  \item[\checkmark] Installazione nativa su Jetson (no Docker): motivazione latenza real-time 500 Hz +
+        accesso diretto USB + CUDA nativo L4T
 \end{itemize}
 \end{donebox}
 
 % ============================================================
-\section{TODO — Da fare domani (2026-03-21)}
+\section{TODO}
 % ============================================================
 
 \begin{todobox}
-\textbf{\color{todoorange} Alta priorità — test su robot reale}
+\textbf{\color{todoorange} Alta priorità — Jetson setup \& integrazione}
 
 \begin{itemize}[leftmargin=1.5em]
-  \item[$\square$] \textbf{Calibrare \texttt{body\_scan\_center}} in \texttt{body\_search\_params.yaml}:
-        verificare che coincida con la home position reale del braccio
-        (attualmente placeholder \texttt{[-0.09, 0.00, 0.44]})
-  \item[$\square$] \textbf{Verificare \texttt{body\_scan\_lookat\_distance}}: misurare la distanza
-        reale tra il braccio in home e il torso del paziente e aggiornare il parametro (default 1.0 m)
-  \item[$\square$] \textbf{Testare il ciclo body scan completo}:
-        HOMING $\to$ BODY\_SCANNING (6 punti griglia) $\to$ WAITING (best pose) $\to$
-        CHECKING\_WORKSPACE $\to$ APPROACHING $\to$ IMPEDANCE
-  \item[$\square$] \textbf{Verificare l'orientamento look-at sul robot}:
-        controllare nei log che il lookat target sia plausibile e che
+  \item[$\square$] \textbf{Jetson setup (installazione nativa)}: ROS2 Humble, Pinocchio,
+        driver Unitree Z1, RealSense SDK, Orbbec SDK, Ultralytics YOLO11
+  \item[$\square$] \textbf{Test \texttt{spot\_perception} su Jetson}: verificare che
+        \texttt{yolo\_skeleton}, \texttt{posture\_classifier} e \texttt{laying\_human\_detector}
+        girino correttamente con Orbbec reale
+  \item[$\square$] \textbf{Nodo orchestratore}: coordinare ``Spot arrivato in posizione''
+        $\to$ trigger avvio FAST scan su Z1
+        (topic/servizio tra SpotCore e Jetson via DDS)
+  \item[$\square$] \textbf{Configurare ROS\_DOMAIN\_ID} comune tra Jetson e SpotCore;
+        verificare che i topic attraversino la rete correttamente
+\end{itemize}
+
+\subsection*{Alta priorità — test su robot reale (Z1)}
+\begin{itemize}[leftmargin=1.5em]
+  \item[$\square$] \textbf{Testare il ciclo FAST completo}:
+        HOMING $\to$ BODY\_SCANNING $\to$ WAITING $\to$ CHECKING\_WORKSPACE
+        $\to$ APPROACHING $\to$ IMPEDANCE $\to$ SCAN\_PRELIFT $\to$ loop 4 punti
+  \item[$\square$] \textbf{Calibrare \texttt{body\_scan\_center}} e
+        \texttt{body\_scan\_lookat\_distance} sul robot reale
+  \item[$\square$] \textbf{Verificare Y clipping FAST}: controllare che tutti i punti
+        rimangano entro il bounding box del torso nelle varie posture paziente
+  \item[$\square$] \textbf{Verificare l'orientamento look-at}: controllare nei log che
         l'EE ruoti correttamente spostandosi in alto/basso e lateralmente
-  \item[$\square$] \textbf{Verificare early stop}: eseguire con paziente ben visibile
-        e controllare che la scan si interrompa anticipatamente (score $\geq$ 0.85)
-  \item[$\square$] \textbf{Testare il fix \texttt{ik\_rot\_weight: 0.8}}:
-        verificare che l'EE sia perpendicolare alla superficie durante il JTC approach
-        (problema del tilt precedente)
 \end{itemize}
 
 \subsection*{Media priorità}
 \begin{itemize}[leftmargin=1.5em]
-  \item[$\square$] \textbf{Tuning griglia}: valutare se \texttt{ext\_y=0.20} e
-        \texttt{ext\_z=0.10} coprono correttamente la zona torso
-        oppure se serve aumentare/ridurre
+  \item[$\square$] \textbf{Unificare pipeline YOLO sulla Jetson}: singola istanza modello
+        YOLO11 per Orbbec (skeleton 17 joint) e RealSense (torso center),
+        evitando doppio caricamento pesi in VRAM
+  \item[$\square$] \textbf{Test comunicazione Jetson $\leftrightarrow$ SpotCore}: verificare
+        latenza e affidabilità dei topic ROS2 critici (\texttt{/laying\_human/approach\_point},
+        trigger orchestratore)
+  \item[$\square$] \textbf{Merge \texttt{Z1\_realsense} su \texttt{FSM\_main}} dopo validazione
+        sul robot reale
+  \item[$\square$] \textbf{Tuning griglia body scan}: valutare se \texttt{ext\_y} e
+        \texttt{ext\_z} coprono correttamente la zona torso sul robot reale
   \item[$\square$] \textbf{Tuning \texttt{body\_scan\_min\_frames}}: verificare che
         10 frame siano sufficienti per una stima affidabile dello score
-        (aumentare se la stima è instabile, ridurre se la scan è troppo lenta)
-  \item[$\square$] \textbf{Merge Z1\_realsense su FSM\_main} dopo validazione robot reale
-  \item[$\square$] \textbf{Aggiornare launch file} per caricare anche
-        \texttt{body\_search\_params.yaml} se non già incluso
 \end{itemize}
 
 \subsection*{Bassa priorità / futuri miglioramenti}
 \begin{itemize}[leftmargin=1.5em]
-  \item[$\square$] \textbf{Integrazione con Spot / base mobile}: usare
-        \texttt{/target\_out\_of\_workspace} per comandare alla base di
-        avvicinarsi quando il target è fuori workspace
-  \item[$\square$] \textbf{Logging e monitoraggio}: ROS bag recording automatico
-        al launch con i topic principali
+  \item[$\square$] \textbf{Usare \texttt{/target\_out\_of\_workspace}}: comandare a Spot
+        di avvicinarsi quando il target è fuori workspace Z1
+  \item[$\square$] \textbf{Logging}: ROS bag recording automatico al launch
+        con i topic principali (FSM state, torso target, scan point, impedance)
   \item[$\square$] \textbf{Visualizzazione RViz}: marker per griglia scan, look-at target,
-        piano superficie, workspace reachability
+        piano superficie, workspace reachability, skeleton Spot
   \item[$\square$] \textbf{Multi-persona}: gestione del caso in cui YOLO rileva
         più persone (attualmente prende la prima/più vicina)
 \end{itemize}
@@ -363,6 +393,14 @@ ros2 run z1_vision fk_reader            # FK end-effector
 \texttt{z1\_keyboard\_safety.py}           & Safety node interattivo da terminale \\
 \texttt{kalman\_filter.py}                 & Filtro Kalman 3D [x,y,z,vx,vy,vz] \\
 \texttt{fk\_reader.py}                     & Utility: FK end-effector da joint\_states \\
+\midrule
+\multicolumn{2}{l}{\textit{Package \texttt{spot\_perception} (Jetson, Orbbec)}} \\
+\midrule
+\texttt{yolo\_skeleton\_spot.py}            & YOLO11 skeleton 17 joint + Kalman + TF $\to$ body frame \\
+\texttt{posture\_classifier.py}            & Classifica STANDING / SITTING / LYING \\
+\texttt{laying\_human\_detector.py}        & Rileva persona sdraiata $\to$ calcola approach point \\
+\texttt{depth\_processing.py}              & Depth lookup con window mediana + outlier filter \\
+\texttt{skeleton\_utils.py}               & Constraint lunghezza torso, COCO edges, smoothing \\
 \midrule
 \texttt{config/z1\_fsm\_params.yaml}        & Parametri FSM (home pose, topic, workspace) \\
 \texttt{config/z1\_ik\_jtc\_params.yaml}    & Parametri IK/JTC (\texttt{ik\_rot\_weight: 0.8}) \\
