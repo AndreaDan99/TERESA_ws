@@ -321,6 +321,51 @@ ros2 launch spot_perception spot_perception.launch.py test_mode:=true
         spostandosi in alto/basso e lateralmente
   \item[\checkmark] \textbf{\texttt{body\_scan\_min\_frames}}: 10 frame sufficienti per stima affidabile dello score
 \end{itemize}
+
+\subsection*{Package \texttt{teresa\_coordinator} — 11 aprile 2026}
+\begin{itemize}[leftmargin=1.5em]
+  \item[\checkmark] Creato package \texttt{src/teresa\_coordinator} (ament\_python)
+        per orchestrare la missione TERESA: navigazione Spot + futuro trigger Z1
+  \item[\checkmark] Nodo \texttt{teresa\_mission.py} — FSM a 5 stati:
+        \texttt{IDLE} $\to$ \texttt{COMPUTING\_GOAL} $\to$ \texttt{NAVIGATING}
+        $\to$ \texttt{ARRIVED} $\to$ \texttt{CROUCHING} $\to$ \texttt{READY\_FOR\_SCAN}
+  \item[\checkmark] \textbf{Geometria approccio laterale}: asse corpo calcolato da
+        keypoints COCO (piedi $\to$ testa); Spot si posiziona
+        perpendicolarmente all'asse, all'altezza del torso,
+        fuori dal bounding box (\texttt{approach\_margin} parametrizzabile)
+  \item[\checkmark] \textbf{Scelta automatica del lato}: candidate sinistro e destro,
+        si sceglie quello che richiede minor rotazione a Spot
+        (parametro \texttt{preferred\_side}: \texttt{auto} $|$ \texttt{left} $|$ \texttt{right})
+  \item[\checkmark] \textbf{Goal locking}: goal bloccato alla prima detection LYING ad alta
+        confidenza; se la detection si perde durante navigazione
+        (camera troppo vicina) il goal viene mantenuto;
+        si ricalcola solo se il paziente si sposta $>$ \texttt{goal\_relock\_threshold}
+  \item[\checkmark] \textbf{Crouch all'arrivo}: chiama \texttt{/spot/stand\_height}
+        (\texttt{spot\_msgs/srv/SetStandHeight}, range $[-0.15, +0.15]$\,m)
+        per abbassare Spot e avvicinare il braccio Z1 al torso
+  \item[\checkmark] \textbf{Parametro \texttt{dry\_run}} (default \texttt{true}):
+        calcola geometria e pubblica marker RViz senza muovere Spot;
+        necessario passare \texttt{dry\_run:=false} esplicitamente per muovere il robot
+  \item[\checkmark] \textbf{Visualizzazione RViz} — 5 marker pubblicati:
+        freccia azzurra (asse corpo), freccia gialla (direzione laterale),
+        freccia verde (goal Spot con orientamento), cubo rosso trasparente
+        (safe zone = bbox + margin), testo (stato FSM)
+  \item[\checkmark] \textbf{Trasformazione TF}: in modalità reale trasforma
+        \texttt{camera\_color\_optical\_frame} $\to$ \texttt{odom} via TF2;
+        in dry\_run visualizza in camera frame senza dipendenza da \texttt{spot\_ros2}
+  \item[\checkmark] \textbf{Separazione layer}: \texttt{spot\_perception} rimane
+        autonomo e testabile indipendentemente;
+        \texttt{teresa\_coordinator} è opzionale e si aggiunge sopra
+\end{itemize}
+
+\textbf{Modalità di test disponibili:}
+\begin{enumerate}
+  \item Solo perception: \texttt{ros2 launch spot\_perception spot\_perception.launch.py}
+  \item Perception + geometria dry run:
+        aggiungere \texttt{ros2 launch teresa\_coordinator teresa\_mission.launch.py}
+        (default \texttt{dry\_run:=true})
+  \item Sistema completo: \texttt{dry\_run:=false} (richiede \texttt{spot\_ros2} su SpotCore)
+\end{enumerate}
 \end{donebox}
 
 % ============================================================
@@ -336,9 +381,9 @@ ros2 launch spot_perception spot_perception.launch.py test_mode:=true
   \item[$\square$] \textbf{Test \texttt{spot\_perception} su Jetson}: verificare che
         \texttt{yolo\_skeleton}, \texttt{posture\_classifier} e \texttt{laying\_human\_detector}
         girino correttamente con Orbbec reale
-  \item[$\square$] \textbf{Nodo orchestratore}: coordinare ``Spot arrivato in posizione''
-        $\to$ trigger avvio FAST scan su Z1
-        (topic/servizio tra SpotCore e Jetson via DDS)
+  \item[\checkmark] \textbf{Nodo orchestratore \texttt{teresa\_mission}}: navigazione Spot
+        verso paziente sdraiato implementata (approccio laterale + crouch);
+        trigger Z1 FAST scan da aggiungere in seguito
   \item[$\square$] \textbf{Configurare ROS\_DOMAIN\_ID} comune tra Jetson e SpotCore;
         verificare che i topic attraversino la rete correttamente
 \end{itemize}
