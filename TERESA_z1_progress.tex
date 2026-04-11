@@ -426,31 +426,100 @@ ros2 launch spot_perception spot_perception.launch.py test_mode:=true
 % ============================================================
 
 \begin{warnbox}
-\textbf{Prerequisito}: workspace ROS2 compilato e sourced.\\
+\textbf{Prerequisito}: workspace ROS2 compilato e sourced su Jetson.\\
 \texttt{cd \textasciitilde/Documents/GIT\_Repositories/TERESA\_ws}\\
-\texttt{colcon build --packages-select z1\_vision \&\& source install/setup.bash}
+\texttt{colcon build --packages-select z1\_vision spot\_perception teresa\_coordinator}\\
+\texttt{source install/setup.bash}\\[4pt]
+\textbf{Variabile d'ambiente obbligatoria su tutte le macchine:}\\
+\texttt{export ROS\_DOMAIN\_ID=0}
 \end{warnbox}
 
-\subsection*{Terminale 1 — Hardware robot + camera + TF}
+% -------------------------------------------------------
+\subsection*{Livello 1 — Solo percezione Spot (Orbbec, Spot spento)}
+% -------------------------------------------------------
+Utile per testare rilevamento scheletro, postura e bounding box con Orbbec reale,
+senza Spot acceso e senza braccio Z1.
+
+\textbf{Jetson — Terminale 1:}
 \begin{lstlisting}
-ros2 launch z1_vision z1_realsense.launch.py
+ros2 launch spot_perception spot_perception.launch.py
 \end{lstlisting}
 
-\subsection*{Terminale 2 — Percezione (YOLO + surface)}
+\textbf{Jetson — Terminale 2 (visualizzazione):}
 \begin{lstlisting}
-ros2 launch z1_vision z1_perception.launch.py
+rviz2
+# Aggiungere topic: /human_pose/skeleton_markers, /human_pose/bounding_box,
+#                   /human_pose/torso_bounding_box, /laying_human/bbox
 \end{lstlisting}
 
-\subsection*{Terminale 3 — Stack di controllo}
+\textbf{Monitoraggio:}
 \begin{lstlisting}
-# Avvia: safe_controller_switch + z1_ik_to_jtc + impedance (t=0s)
-#        z1_FSM dopo 5s (primo stato: HOMING -> BODY_SCANNING -> ...)
-ros2 launch z1_vision z1_control.launch.py
+ros2 topic echo /human_pose/posture
+ros2 topic echo /human_pose/posture_confidence
+ros2 topic echo /laying_human/approach_point
 \end{lstlisting}
 
-\subsection*{Terminale 4 — Keyboard safety}
+% -------------------------------------------------------
+\subsection*{Livello 2 — Percezione + coordinator dry run (Spot spento)}
+% -------------------------------------------------------
+Verifica la geometria di approccio (asse corpo, goal laterale, safe zone)
+in RViz senza muovere Spot.
+
+\textbf{Jetson — Terminale 1:}
 \begin{lstlisting}
-ros2 run z1_vision z1_keyboard_safety
+ros2 launch spot_perception spot_perception.launch.py
+\end{lstlisting}
+
+\textbf{Jetson — Terminale 2:}
+\begin{lstlisting}
+# dry_run:=true e' il default — Spot non si muove
+ros2 launch teresa_coordinator teresa_mission.launch.py
+\end{lstlisting}
+
+\textbf{RViz — topic aggiuntivi del coordinator:}
+\begin{lstlisting}
+/teresa/body_axis       # freccia azzurra: asse testa-piedi
+/teresa/lateral_dir     # freccia gialla: direzione approccio laterale
+/teresa/approach_goal   # freccia verde: posizione+orientamento goal Spot
+/teresa/safe_zone       # cubo rosso trasparente: zona di sicurezza
+/teresa/fsm_state       # testo: stato FSM corrente
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection*{Livello 3 — Sistema completo TERESA (Spot acceso)}
+% -------------------------------------------------------
+Spot naviga fino al fianco del paziente e si abbassa.
+Il braccio Z1 non parte ancora (da integrare).
+
+\textbf{SpotCore (SSH da Jetson):}
+\begin{lstlisting}
+ros2 launch spot_ros2 spot_driver.launch.py
+\end{lstlisting}
+
+\textbf{Jetson — Terminale 1 (percezione Spot):}
+\begin{lstlisting}
+ros2 launch spot_perception spot_perception.launch.py
+\end{lstlisting}
+
+\textbf{Jetson — Terminale 2 (coordinator — muove Spot):}
+\begin{lstlisting}
+ros2 launch teresa_coordinator teresa_mission.launch.py dry_run:=false
+# Opzioni aggiuntive:
+#   preferred_side:=left|right|auto  (default: auto)
+#   approach_margin:=0.5             (distanza oltre bbox, metri)
+#   crouch_height:=-0.10             (abbassamento Spot, range -0.15..+0.15)
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection*{Livello 4 — Sistema completo + Z1 FAST scan (futuro)}
+% -------------------------------------------------------
+
+\textbf{Jetson — Terminali aggiuntivi (dopo aver avviato Livello 3):}
+\begin{lstlisting}
+ros2 launch z1_vision z1_realsense.launch.py    # HW Z1 + RealSense + TF
+ros2 launch z1_vision z1_perception.launch.py   # YOLO torso + surface
+ros2 launch z1_vision z1_control.launch.py      # FSM + IK + impedance
+ros2 run z1_vision z1_keyboard_safety           # safety interattivo
 \end{lstlisting}
 
 \begin{center}
@@ -466,13 +535,22 @@ ros2 run z1_vision z1_keyboard_safety
 \end{tabular}
 \end{center}
 
-\subsection*{Monitoraggio}
+% -------------------------------------------------------
+\subsection*{Monitoraggio generale}
+% -------------------------------------------------------
 \begin{lstlisting}
-ros2 topic echo /z1_fsm/state           # stato FSM
-ros2 topic echo /torso_target_ee_locked # target YOLO
+# Percezione Spot
+ros2 topic echo /human_pose/posture
+ros2 topic echo /human_pose/posture_confidence
+
+# Coordinator
+ros2 topic echo /teresa/fsm_state   # oppure vedere in RViz
+
+# Z1 (livello 4)
+ros2 topic echo /z1_fsm/state
+ros2 topic echo /torso_target_ee_locked
 ros2 topic echo /surface_signed_distance
-ros2 topic echo /torso_scan_point       # score scan (durante BODY_SCANNING)
-ros2 run z1_vision fk_reader            # FK end-effector
+ros2 run z1_vision fk_reader
 \end{lstlisting}
 
 % ============================================================
@@ -501,9 +579,20 @@ ros2 run z1_vision fk_reader            # FK end-effector
 \midrule
 \texttt{yolo\_skeleton\_spot.py}            & YOLO11 skeleton 17 joint + Kalman + TF $\to$ body frame \\
 \texttt{posture\_classifier.py}            & Classifica STANDING / SITTING / LYING \\
-\texttt{laying\_human\_detector.py}        & Rileva persona sdraiata $\to$ calcola approach point \\
+\texttt{laying\_human\_detector.py}        & Rileva persona sdraiata $\to$ approach point (test/RViz) \\
+\texttt{human\_bounding\_box\_visualizer.py}& Bbox 3D corpo intero e torso (RViz) \\
 \texttt{depth\_processing.py}              & Depth lookup con window mediana + outlier filter \\
 \texttt{skeleton\_utils.py}               & Constraint lunghezza torso, COCO edges, smoothing \\
+\midrule
+\multicolumn{2}{l}{\textit{Package \texttt{teresa\_coordinator} (Jetson)}} \\
+\midrule
+\texttt{teresa\_mission.py}                & FSM missione: geometria approccio laterale, navigazione
+                                             Spot, crouch; 5 stati: IDLE $\to$ COMPUTING\_GOAL
+                                             $\to$ NAVIGATING $\to$ ARRIVED $\to$ CROUCHING
+                                             $\to$ READY\_FOR\_SCAN \\
+\texttt{launch/teresa\_mission.launch.py}  & Launch con argomenti \texttt{dry\_run},
+                                             \texttt{preferred\_side}, \texttt{approach\_margin},
+                                             \texttt{crouch\_height} \\
 \midrule
 \texttt{config/z1\_fsm\_params.yaml}        & Parametri FSM (home pose, topic, workspace) \\
 \texttt{config/z1\_ik\_jtc\_params.yaml}    & Parametri IK/JTC (\texttt{ik\_rot\_weight: 0.8}) \\
