@@ -435,6 +435,47 @@ ros2 launch spot_perception spot_perception.launch.py test_mode:=true
 \end{warnbox}
 
 % -------------------------------------------------------
+\subsection*{Livello 0 — Test da PC sviluppo (senza Jetson, senza robot)}
+% -------------------------------------------------------
+Utile per sviluppo e debug sul proprio PC prima di portare il codice su Jetson.
+Non richiede hardware: il flusso è \texttt{git push} dal PC di sviluppo,
+\texttt{git pull} sul PC con ROS2 installato.
+
+\textbf{Prerequisito sul PC con ROS2:}
+\begin{lstlisting}
+git pull
+colcon build --packages-select z1_vision spot_perception teresa_coordinator
+source install/setup.bash
+export ROS_DOMAIN_ID=42   # qualsiasi numero, deve matchare su tutte le macchine
+\end{lstlisting}
+
+\textbf{Test z1\_vision standalone (senza Spot):}
+\begin{lstlisting}
+ros2 launch z1_vision z1_control.launch.py
+\end{lstlisting}
+
+\textbf{Test teresa\_coordinator in dry run (senza hardware Spot):}
+\begin{lstlisting}
+# Terminale 1 — percezione (usa bag o fake data se no Orbbec)
+ros2 launch spot_perception spot_perception.launch.py
+# Terminale 2 — coordinator senza movimento reale
+ros2 launch teresa_coordinator teresa_mission.launch.py dry_run:=true
+\end{lstlisting}
+
+\textbf{Test con SpotCore in rete (ROS2 DDS multicast):}\\
+Basta settare lo stesso \texttt{ROS\_DOMAIN\_ID} su PC e SpotCore.
+\texttt{spot\_perception} gira su SpotCore, \texttt{teresa\_coordinator} sul PC;
+i topic passano via rete automaticamente.
+\begin{lstlisting}
+# Su SpotCore
+export ROS_DOMAIN_ID=42
+ros2 launch spot_perception spot_perception.launch.py
+# Sul PC sviluppo
+export ROS_DOMAIN_ID=42
+ros2 launch teresa_coordinator teresa_mission.launch.py dry_run:=false
+\end{lstlisting}
+
+% -------------------------------------------------------
 \subsection*{Livello 1 — Solo percezione Spot (Orbbec, Spot spento)}
 % -------------------------------------------------------
 Utile per testare rilevamento scheletro, postura e bounding box con Orbbec reale,
