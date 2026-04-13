@@ -73,17 +73,21 @@ class PersonTrack:
         # Per-joint Q/R tuning
         for i, kf in enumerate(self.kf):
             if i in TORSO_JOINTS:
-                kf.Q *= 0.7;  kf.R *= 0.7
+                kf.Q *= 0.7
+                kf.R *= 0.7
             elif i in LEG_JOINTS:
-                kf.Q *= 0.9;  kf.R *= 0.9
+                kf.Q *= 0.9
+                kf.R *= 0.9
             elif i in NOSE_JOINTS:
-                kf.Q *= 1.5;  kf.R *= 1.5
+                kf.Q *= 1.5
+                kf.R *= 1.5
             # ARM_JOINTS: factor 1.0 — no change
 
 
 # ── TORSO length constraint ───────────────────────────────────
 def TORSO_length_constraint(pts, visible, L_ref, stiffness=0.35):
     """Soft constraint: keep shoulder-hip distance close to reference length L_ref."""
+    # NOTE: mutates pts[5] and pts[6] in-place. Callers must pass mutable arrays.
     if L_ref is None:
         return pts
     idx = [5, 6, 11, 12]
@@ -158,7 +162,7 @@ def assign_detections_to_tracks(detection_centroids, tracks, max_dist):
 
 
 # ── Target selection ──────────────────────────────────────────
-def _torso_angle_deg(track):
+def torso_angle_deg(track):
     """
     Compute torso angle (°) between the shoulder-hip vector and world-up.
     Returns None if any of joints 5, 6, 11, 12 are unavailable.
@@ -195,12 +199,12 @@ def select_target(tracks, lying_angle_min,
     # Collect LYING candidates: (depth_z, track_id)
     lying_candidates = []
     for track in tracks:
-        angle = _torso_angle_deg(track)
+        angle = torso_angle_deg(track)
         if angle is None:
             continue
         valid_joints = sum(1 for kf in track.kf if kf.get_position() is not None)
         if angle > lying_angle_min and valid_joints >= 4:
-            depth = float(track.centroid[2]) if track.centroid is not None else float('inf')
+            depth = float(track.centroid[2]) if track.centroid is not None else float('inf')  # Z = depth in camera frame
             lying_candidates.append((depth, track.track_id))
 
     lying_candidates.sort()   # closest first
