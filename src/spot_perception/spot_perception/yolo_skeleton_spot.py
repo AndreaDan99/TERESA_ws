@@ -377,102 +377,131 @@ class YoloSkeletonNodeOrbbec(Node):
     # ============================================================
 
     def publish_empty(self, stamp):
-        empty_pose_array = PoseArray()
-        empty_pose_array.header.stamp = stamp
-        empty_pose_array.header.frame_id = "camera_color_optical_frame"
-        self.pub_poses.publish(empty_pose_array)
+        """Publish empty PoseArray when no target is selected."""
+        empty = PoseArray()
+        empty.header.stamp = stamp
+        empty.header.frame_id = "camera_color_optical_frame"
+        self.pub_poses.publish(empty)
 
-        empty_marker_array = MarkerArray()
-
-        for ns, mid in [("joints_visible", 0), ("joints_predicted", 1), ("bones", 2)]:
-            m = Marker()
-            m.header.stamp = stamp
-            m.header.frame_id = "camera_color_optical_frame"
-            m.ns = ns
-            m.id = mid
-            m.action = Marker.DELETE
-            empty_marker_array.markers.append(m)
-
-        self.pub_markers.publish(empty_marker_array)
-
-    # ============================================================
-
-    def publish_all(self, pts, stamp):
-        if pts is None or len(pts) != self.num_joints:
-            self.publish_empty(stamp)
-            return
-
-        # ---------- PoseArray ----------
+    def _publish_target_pose(self, pts, stamp):
+        """Publish PoseArray of 17 joints for the target person only."""
         pa = PoseArray()
         pa.header.frame_id = "camera_color_optical_frame"
         pa.header.stamp = stamp
-
         for p in pts:
             pose = Pose()
             if p is None:
                 pose.position.x = pose.position.y = pose.position.z = float("nan")
             else:
-                pose.position.x, pose.position.y, pose.position.z = float(p[0]), float(p[1]), float(p[2])
+                pose.position.x = float(p[0])
+                pose.position.y = float(p[1])
+                pose.position.z = float(p[2])
             pose.orientation.w = 1.0
             pa.poses.append(pose)
-
         self.pub_poses.publish(pa)
 
-        # ---------- Markers ----------
+    def _publish_all_markers(self, stamp):
+        """
+        Publish MarkerArray with all tracked skeletons.
+        Target: green joints + bones + 'TARGET' text.
+        Others: grey joints + bones.
+        Removed tracks: DELETE markers.
+        """
         ma = MarkerArray()
+        current_ids = {t.track_id for t in self.tracks}
 
-        j_vis = Marker()
-        j_vis.header = pa.header
-        j_vis.ns = "joints_visible"
-        j_vis.id = 0
-        j_vis.type = Marker.SPHERE_LIST
-        j_vis.action = Marker.ADD
-        j_vis.scale.x = j_vis.scale.y = j_vis.scale.z = 0.03
-        j_vis.color.r = 1.0
-        j_vis.color.a = 1.0
+        # DELETE markers for tracks that no longer exist
+        for old_id in self._published_track_ids - current_ids:
+            for offset in range(4):
+                m = Marker()
+                m.header.stamp = stamp
+                m.header.frame_id = "camera_color_optical_frame"
+                m.ns = "multi_track"
+                m.id = old_id * 10 + offset
+                m.action = Marker.DELETE
+                ma.markers.append(m)
 
-        j_pred = Marker()
-        j_pred.header = pa.header
-        j_pred.ns = "joints_predicted"
-        j_pred.id = 1
-        j_pred.type = Marker.SPHERE_LIST
-        j_pred.action = Marker.ADD
-        j_pred.scale.x = j_pred.scale.y = j_pred.scale.z = 0.03
-        j_pred.color.b = 1.0
-        j_pred.color.a = 1.0
+        # ADD / UPDATE markers for active tracks
+        for track in self.tracks:
+            is_target = (track.track_id == self._target_track_id)
+            pts = [kf.get_position() for kf in track.kf]
+            base_id = track.track_id * 10
 
-        for i, p in enumerate(pts):
-            if p is None:
-                continue
-            pt = Point(x=float(p[0]), y=float(p[1]), z=float(p[2]))
-            if i < len(self.visible) and self.visible[i]:
-                j_vis.points.append(pt)
+            r, g, b = (0.0, 1.0, 0.0) if is_target else (0.6, 0.6, 0.6)
+
+            # Visible joints
+            jv = Marker()
+            jv.header.stamp = stamp
+            jv.header.frame_id = "camera_color_optical_frame"
+            jv.ns = "multi_track";  jv.id = base_id + 0
+            jv.type = Marker.SPHERE_LIST;  jv.action = Marker.ADD
+            jv.scale.x = jv.scale.y = jv.scale.z = 0.03
+            jv.color.r = r;  jv.color.g = g;  jv.color.b = b;  jv.color.a = 1.0
+
+            # Predicted joints (dimmer)
+            jp = Marker()
+            jp.header.stamp = stamp
+            jp.header.frame_id = "camera_color_optical_frame"
+            jp.ns = "multi_track";  jp.id = base_id + 1
+            jp.type = Marker.SPHERE_LIST;  jp.action = Marker.ADD
+            jp.scale.x = jp.scale.y = jp.scale.z = 0.03
+            jp.color.r = r * 0.4;  jp.color.g = g * 0.4
+            jp.color.b = b * 0.4 + 0.3;  jp.color.a = 0.5
+
+            for i, p in enumerate(pts):
+                if p is None:
+                    continue
+                pt = Point(x=float(p[0]), y=float(p[1]), z=float(p[2]))
+                if i < len(track.visible) and track.visible[i]:
+                    jv.points.append(pt)
+                else:
+                    jp.points.append(pt)
+
+            # Bones
+            bn = Marker()
+            bn.header.stamp = stamp
+            bn.header.frame_id = "camera_color_optical_frame"
+            bn.ns = "multi_track";  bn.id = base_id + 2
+            bn.type = Marker.LINE_LIST;  bn.action = Marker.ADD
+            bn.scale.x = 0.015
+            bn.color.r = r;  bn.color.g = g;  bn.color.b = b;  bn.color.a = 0.8
+
+            for a, c in self.edges:
+                if pts[a] is not None and pts[c] is not None:
+                    bn.points.append(Point(x=float(pts[a][0]), y=float(pts[a][1]), z=float(pts[a][2])))
+                    bn.points.append(Point(x=float(pts[c][0]), y=float(pts[c][1]), z=float(pts[c][2])))
+
+            ma.markers.extend([jv, jp, bn])
+
+            # TARGET text label — only for target track
+            if is_target and pts[5] is not None and pts[6] is not None:
+                sh_mid = 0.5 * (pts[5] + pts[6])
+                lbl = Marker()
+                lbl.header.stamp = stamp
+                lbl.header.frame_id = "camera_color_optical_frame"
+                lbl.ns = "multi_track";  lbl.id = base_id + 3
+                lbl.type = Marker.TEXT_VIEW_FACING;  lbl.action = Marker.ADD
+                lbl.pose.position.x = float(sh_mid[0])
+                lbl.pose.position.y = float(sh_mid[1]) - 0.15  # slightly above shoulders
+                lbl.pose.position.z = float(sh_mid[2])
+                lbl.pose.orientation.w = 1.0
+                lbl.scale.z = 0.12
+                lbl.color.r = 0.0;  lbl.color.g = 1.0;  lbl.color.b = 0.0;  lbl.color.a = 1.0
+                lbl.text = "TARGET"
+                ma.markers.append(lbl)
             else:
-                j_pred.points.append(pt)
+                # Ensure label is deleted when track is no longer the target
+                lbl_del = Marker()
+                lbl_del.header.stamp = stamp
+                lbl_del.header.frame_id = "camera_color_optical_frame"
+                lbl_del.ns = "multi_track";  lbl_del.id = base_id + 3
+                lbl_del.action = Marker.DELETE
+                ma.markers.append(lbl_del)
 
-        ma.markers.append(j_vis)
-        ma.markers.append(j_pred)
-
-        b = Marker()
-        b.header = pa.header
-        b.ns = "bones"
-        b.id = 2
-        b.type = Marker.LINE_LIST
-        b.action = Marker.ADD
-        b.scale.x = 0.015
-        b.color.g = 1.0
-        b.color.a = 1.0
-
-        for a, c in self.edges:
-            if a >= len(pts) or c >= len(pts):
-                continue
-            if pts[a] is not None and pts[c] is not None:
-                b.points.append(Point(x=float(pts[a][0]), y=float(pts[a][1]), z=float(pts[a][2])))
-                b.points.append(Point(x=float(pts[c][0]), y=float(pts[c][1]), z=float(pts[c][2])))
-
-        ma.markers.append(b)
-
+        self._published_track_ids = current_ids
         self.pub_markers.publish(ma)
+
+    # ============================================================
 
 
 def main():
