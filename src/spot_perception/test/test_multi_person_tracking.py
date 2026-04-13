@@ -66,3 +66,76 @@ def test_assign_none_centroid_detection_skipped():
     assert matches == []
     assert unmatched_dets == []
     assert unmatched_tracks == [0]
+
+
+def _set_torso(track, sh_l, sh_r, hip_l, hip_r):
+    """Helper: initialise 4 torso Kalman filters with given 3D positions."""
+    for idx, pos in [(5, sh_l), (6, sh_r), (11, hip_l), (12, hip_r)]:
+        track.kf[idx].update(pos)
+
+
+def test_select_target_picks_lying():
+    """Standing vs lying — lying person should be chosen."""
+    standing = PersonTrack(0)
+    # Standing: torso vertical — shoulders high (low Y in optical), hips low (high Y)
+    _set_torso(standing,
+               sh_l=np.array([0.0, -0.4, 2.0]), sh_r=np.array([0.2, -0.4, 2.0]),
+               hip_l=np.array([0.0,  0.4, 2.0]), hip_r=np.array([0.2,  0.4, 2.0]))
+    standing.centroid = np.array([0.1, 0.0, 2.0])
+
+    lying = PersonTrack(1)
+    # Lying: torso horizontal — same Y, separated along X
+    _set_torso(lying,
+               sh_l=np.array([ 0.4, 0.0, 1.5]), sh_r=np.array([ 0.4, 0.2, 1.5]),
+               hip_l=np.array([-0.4, 0.0, 1.5]), hip_r=np.array([-0.4, 0.2, 1.5]))
+    lying.centroid = np.array([0.0, 0.1, 1.5])
+
+    result_id, _ = select_target([standing, lying], lying_angle_min=65.0)
+    assert result_id == 1
+
+
+def test_select_target_picks_closest_lying():
+    """Two lying people — pick the closer one (smaller Z)."""
+    far_lying = PersonTrack(0)
+    _set_torso(far_lying,
+               sh_l=np.array([ 0.4, 0.0, 3.0]), sh_r=np.array([ 0.4, 0.2, 3.0]),
+               hip_l=np.array([-0.4, 0.0, 3.0]), hip_r=np.array([-0.4, 0.2, 3.0]))
+    far_lying.centroid = np.array([0.0, 0.1, 3.0])
+
+    near_lying = PersonTrack(1)
+    _set_torso(near_lying,
+               sh_l=np.array([ 0.4, 0.0, 1.5]), sh_r=np.array([ 0.4, 0.2, 1.5]),
+               hip_l=np.array([-0.4, 0.0, 1.5]), hip_r=np.array([-0.4, 0.2, 1.5]))
+    near_lying.centroid = np.array([0.0, 0.1, 1.5])
+
+    result_id, _ = select_target([far_lying, near_lying], lying_angle_min=65.0)
+    assert result_id == 1   # near_lying
+
+
+def test_select_target_no_lying_returns_none():
+    """No lying person → target is None."""
+    standing = PersonTrack(0)
+    _set_torso(standing,
+               sh_l=np.array([0.0, -0.4, 2.0]), sh_r=np.array([0.2, -0.4, 2.0]),
+               hip_l=np.array([0.0,  0.4, 2.0]), hip_r=np.array([0.2,  0.4, 2.0]))
+    standing.centroid = np.array([0.1, 0.0, 2.0])
+
+    result_id, _ = select_target([standing], lying_angle_min=65.0)
+    assert result_id is None
+
+
+def test_select_target_hysteresis_keeps_current():
+    """Target temporarily loses LYING — hysteresis keeps it for up to N frames."""
+    standing = PersonTrack(0)
+    _set_torso(standing,
+               sh_l=np.array([0.0, -0.4, 2.0]), sh_r=np.array([0.2, -0.4, 2.0]),
+               hip_l=np.array([0.0,  0.4, 2.0]), hip_r=np.array([0.2,  0.4, 2.0]))
+    standing.centroid = np.array([0.1, 0.0, 2.0])
+
+    # Track 0 was the target, miss_count=3, frames=10 → keep it
+    result_id, new_miss = select_target(
+        [standing], lying_angle_min=65.0,
+        current_target_id=0, hysteresis_miss_count=3, hysteresis_frames=10
+    )
+    assert result_id == 0
+    assert new_miss == 4
