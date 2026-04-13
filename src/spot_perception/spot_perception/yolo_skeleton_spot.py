@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
+import time
+
 import rclpy
 from rclpy.node import Node
-
 from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import PoseArray, Pose, Point
 from visualization_msgs.msg import Marker, MarkerArray
@@ -10,176 +11,89 @@ from cv_bridge import CvBridge
 import numpy as np
 from ultralytics import YOLO
 
-
-# ============================================================
-#                Kalman Filter 3D
-# ============================================================
-
-class Kalman3D:
-    def __init__(self, dt=1/15, q=0.2, r=0.002, p0=1.0):
-        self.dt = float(dt)
-
-        self.x = np.zeros((6,1), dtype=np.float64)
-        self.P = np.eye(6, dtype=np.float64) * p0
-
-        self.F = np.eye(6, dtype=np.float64)
-        self.F[0,3] = self.F[1,4] = self.F[2,5] = self.dt
-
-        self.H = np.zeros((3,6), dtype=np.float64)
-        self.H[0,0] = self.H[1,1] = self.H[2,2] = 1.0
-
-        self.Q_base = np.eye(6, dtype=np.float64) * q
-        self.Q = self.Q_base.copy()
-        self.R = np.eye(3, dtype=np.float64) * r
-
-        self.initialized = False
-
-    def predict(self, vel_damping=1.0):
-        self.x = self.F @ self.x
-        self.P = self.F @ self.P @ self.F.T + self.Q
-        self.x[3:,0] *= float(vel_damping)
-
-    def update(self, z):
-        z = np.asarray(z, dtype=np.float64).reshape(3,1)
-
-        if not self.initialized:
-            self.x[0:3] = z
-            self.x[3:] = 0.0
-            self.initialized = True
-            return
-
-        y = z - self.H @ self.x
-        S = self.H @ self.P @ self.H.T + self.R
-        K = self.P @ self.H.T @ np.linalg.inv(S)
-
-        self.x = self.x + K @ y
-        self.P = (np.eye(6) - K @ self.H) @ self.P
-
-    def get_position(self):
-        if not self.initialized:
-            return None
-        return self.x[0:3,0].copy()
-
-    def set_position(self, p):
-        self.x[0:3,0] = np.asarray(p, dtype=np.float64).reshape(3)
-
+from spot_perception.person_tracking import (
+    PersonTrack,
+    assign_detections_to_tracks,
+    select_target,
+    TORSO_length_constraint,
+)
 
 # ============================================================
 #                       Skeleton Node
 # ============================================================
-def TORSO_length_constraint(pts, visible, L_ref, stiffness=0.35):
-    if L_ref is None:
-        return pts
-
-    idx = [5, 6, 11, 12]
-    if any(pts[i] is None for i in idx):
-        return pts
-
-    # se tutti visibili → NON fare nulla
-    if all(visible[i] for i in idx):
-        return pts
-
-    sh_mid = 0.5 * (pts[5] + pts[6])
-    hip_mid = 0.5 * (pts[11] + pts[12])
-
-    v = sh_mid - hip_mid
-    dist = np.linalg.norm(v)
-    if dist < 1e-6:
-        return pts
-
-    v_corr = (v / dist) * L_ref
-    target_sh_mid = hip_mid + v_corr
-
-    delta = target_sh_mid - sh_mid
-
-    # muovi SOLO le spalle (le anche restano ancorate)
-    pts[5] += stiffness * delta
-    pts[6] += stiffness * delta
-
-    return pts
 
 class YoloSkeletonNodeOrbbec(Node):
 
     def __init__(self):
         super().__init__("yolo_skeleton_node_orbbec")
 
-        self.declare_parameter("model_path", "yolo11n-pose.pt")
-        self.declare_parameter("conf_thr", 0.25)
-        self.declare_parameter("vel_damping", 0.5)
-        self.declare_parameter("max_depth_m", 5.0)
+        # ── Parameters ──────────────────────────────────────────
+        self.declare_parameter("model_path",             "yolo11n-pose.pt")
+        self.declare_parameter("conf_thr",                0.25)
+        self.declare_parameter("vel_damping",             0.5)
+        self.declare_parameter("max_depth_m",             5.0)
+        self.declare_parameter("z_offset",                0.0)
+        self.declare_parameter("max_track_distance",      0.6)
+        self.declare_parameter("track_timeout",           1.5)
+        self.declare_parameter("lying_torso_angle_min",  65.0)
+        self.declare_parameter("max_tracks",              5)
+        self.declare_parameter("target_hysteresis_frames", 10)
 
-        self.conf_thr = float(self.get_parameter("conf_thr").value)
-        self.vel_damping = float(self.get_parameter("vel_damping").value)
-        self.max_depth_m = float(self.get_parameter("max_depth_m").value)
+        self.conf_thr              = float(self.get_parameter("conf_thr").value)
+        self.vel_damping           = float(self.get_parameter("vel_damping").value)
+        self.max_depth_m           = float(self.get_parameter("max_depth_m").value)
+        self.z_offset              = float(self.get_parameter("z_offset").value)
+        self._max_track_distance   = float(self.get_parameter("max_track_distance").value)
+        self._track_timeout        = float(self.get_parameter("track_timeout").value)
+        self._lying_angle_min      = float(self.get_parameter("lying_torso_angle_min").value)
+        self._max_tracks           = int(self.get_parameter("max_tracks").value)
+        self._hysteresis_frames    = int(self.get_parameter("target_hysteresis_frames").value)
 
-        self.model = YOLO(self.get_parameter("model_path").value)
+        self.model  = YOLO(self.get_parameter("model_path").value)
         self.bridge = CvBridge()
 
-        # Topic Orbbec
-        self.sub_color = self.create_subscription(
-            Image, "/camera/color/image_raw", self.cb_color, 10)
+        # ── Subscriptions ────────────────────────────────────────
+        self.sub_color = self.create_subscription(Image,      "/camera/color/image_raw",   self.cb_color, 10)
+        self.sub_depth = self.create_subscription(Image,      "/camera/depth/image_raw",   self.cb_depth, 10)
+        self.sub_info  = self.create_subscription(CameraInfo, "/camera/color/camera_info", self.cb_info,  10)
 
-        self.sub_depth = self.create_subscription(
-            Image, "/camera/depth/image_raw", self.cb_depth, 10)
+        # ── Publishers ───────────────────────────────────────────
+        self.pub_poses   = self.create_publisher(PoseArray,   "/human_pose/points_3d",       10)
+        self.pub_markers = self.create_publisher(MarkerArray, "/human_pose/skeleton_markers", 10)
 
-        self.sub_info = self.create_subscription(
-            CameraInfo, "/camera/color/camera_info", self.cb_info, 10)
-
-        self.pub_poses = self.create_publisher(
-            PoseArray, "/human_pose/points_3d", 10
-        )
-        self.pub_markers = self.create_publisher(
-            MarkerArray, "/human_pose/skeleton_markers", 10
-        )
-
+        # ── Sensor state ─────────────────────────────────────────
         self.depth_img = None
-        self.cam_info = None
+        self.cam_info  = None
 
+        # ── Multi-track state ────────────────────────────────────
+        self.tracks: list              = []    # list[PersonTrack]
+        self._next_track_id: int       = 0
+        self._target_track_id          = None  # int | None
+        self._target_hysteresis_miss   = 0
+        self._published_track_ids: set = set()
+
+        # ── Skeleton structure ───────────────────────────────────
         self.num_joints = 17
-        self.TORSO_len_ref = None
-        self.kf = [Kalman3D() for _ in range(self.num_joints)]
-
-        self.declare_parameter("z_offset", 0.0)
-        self.z_offset = float(self.get_parameter("z_offset").value)
-
         self.TORSO = {5, 6, 11, 12}
         self.ARMS  = {7, 8, 9, 10}
         self.LEGS  = {13, 14, 15, 16}
         self.NOSE  = {0}
 
-        for i, kf in enumerate(self.kf):
-            if i in self.TORSO:
-                kf.Q *= 0.7
-                kf.R *= 0.7
-            elif i in self.ARMS:
-                kf.Q *= 1.0
-                kf.R *= 1.0
-            elif i in self.LEGS:
-                kf.Q *= 0.9
-                kf.R *= 0.9
-            elif i in self.NOSE:
-                kf.Q *= 1.5
-                kf.R *= 1.5
+        self.edges = [
+            (0, 1), (0, 2), (1, 3), (2, 4),
+            (5, 6),
+            (5, 7), (7, 9),
+            (6, 8), (8, 10),
+            (11, 12),
+            (11, 13), (13, 15),
+            (12, 14), (14, 16),
+            (5, 11), (6, 12),
+        ]
 
         self.KNEE_MIN_DEG = 30.0
         self.KNEE_MAX_DEG = 175.0
 
-        self.visible = [False]*self.num_joints
-        self.missing_count = [0] * self.num_joints
-
-        # Skeleton edges (COCO)
-        self.edges = [
-            (0,1),(0,2),(1,3),(2,4),
-            (5,6),
-            (5,7),(7,9),
-            (6,8),(8,10),
-            (11,12),
-            (11,13),(13,15),
-            (12,14),(14,16),
-            (5,11),(6,12),
-        ]
-
-        self.get_logger().info("✅ YOLO skeleton node (Orbbec) ready")
+        self.get_logger().info("✅ YOLO skeleton node (Orbbec) — multi-person tracking ready")
 
     def adaptive_Q(self, kf, joint_idx):
         Q = kf.Q_base.copy()
