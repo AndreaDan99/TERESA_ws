@@ -69,6 +69,7 @@ class PersonTrack:
         self.TORSO_len_ref = None
         self.centroid = None        # np.array([x,y,z]) — mean of torso joints, updated each frame
         self.last_seen: float = time.monotonic()
+        self._cached_pts = [None] * 17  # last corrected positions (after constraints)
 
         # Per-joint Q/R tuning
         for i, kf in enumerate(self.kf):

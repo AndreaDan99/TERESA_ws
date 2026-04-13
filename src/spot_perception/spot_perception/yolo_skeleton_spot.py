@@ -242,8 +242,7 @@ class YoloSkeletonNodeOrbbec(Node):
             (t for t in self.tracks if t.track_id == self._target_track_id), None
         )
         if target is not None:
-            pts = [kf.get_position() for kf in target.kf]
-            self._publish_target_pose(pts, msg.header.stamp)
+            self._publish_target_pose(target._cached_pts, msg.header.stamp)
         else:
             self.publish_empty(msg.header.stamp)
 
@@ -352,6 +351,7 @@ class YoloSkeletonNodeOrbbec(Node):
             sh_mid = 0.5 * (pts[5] + pts[6])
             pts[0] = pts[0] + 0.55 * (sh_mid - pts[0])
 
+        track._cached_pts = pts
         return pts
 
     def _predict_track(self, track):
@@ -373,6 +373,7 @@ class YoloSkeletonNodeOrbbec(Node):
                 track.kf[i].Q = track.kf[i].Q_base.copy()
                 track.missing_count[i] += 1
         track.visible = [False] * self.num_joints
+        track._cached_pts = [kf.get_position() if kf.initialized else None for kf in track.kf]
 
     # ============================================================
 
@@ -424,7 +425,7 @@ class YoloSkeletonNodeOrbbec(Node):
         # ADD / UPDATE markers for active tracks
         for track in self.tracks:
             is_target = (track.track_id == self._target_track_id)
-            pts = [kf.get_position() for kf in track.kf]
+            pts = track._cached_pts
             base_id = track.track_id * 10
 
             r, g, b = (0.0, 1.0, 0.0) if is_target else (0.6, 0.6, 0.6)
