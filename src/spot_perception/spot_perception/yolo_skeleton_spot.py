@@ -172,177 +172,84 @@ class YoloSkeletonNodeOrbbec(Node):
 
         img = self.bridge.imgmsg_to_cv2(msg, "bgr8")
         res = self.model(img, verbose=False)
+        now = time.monotonic()
 
-        self.visible = [False]*self.num_joints
+        fx = self.cam_info.k[0];  fy = self.cam_info.k[4]
+        cx = self.cam_info.k[2];  cy = self.cam_info.k[5]
 
-        # ---------- NO PERSON / NO KEYPOINTS ----------
-        if len(res) == 0 or res[0].keypoints is None or res[0].keypoints.xy is None:
-            self.predict_only(msg.header.stamp)
-            return
+        # ── Collect all YOLO detections ──────────────────────────
+        kp_all, conf_all = [], []
+        if (len(res) > 0
+                and res[0].keypoints is not None
+                and res[0].keypoints.xy is not None):
+            kp_xy = res[0].keypoints.xy
+            for di in range(kp_xy.shape[0]):
+                kp_all.append(kp_xy[di].cpu().numpy())
+                c = res[0].keypoints.conf
+                conf_all.append(c[di].cpu().numpy() if c is not None else None)
 
-        kp_xy = res[0].keypoints.xy
-        if kp_xy.shape[0] == 0:
-            self.predict_only(msg.header.stamp)
-            return
+        # ── Compute raw centroids for assignment ─────────────────
+        centroids = [
+            self._compute_raw_centroid(kp, conf, fx, fy, cx, cy)
+            for kp, conf in zip(kp_all, conf_all)
+        ]
 
-        kp = kp_xy[0].cpu().numpy()
-
-        conf = res[0].keypoints.conf
-        if conf is not None:
-            conf = conf[0].cpu().numpy()
-
-        fx, fy, cx, cy = (
-            self.cam_info.k[0],
-            self.cam_info.k[4],
-            self.cam_info.k[2],
-            self.cam_info.k[5]
+        # ── Assign detections → tracks ───────────────────────────
+        matches, unmatched_dets, unmatched_tracks = assign_detections_to_tracks(
+            centroids, self.tracks, self._max_track_distance
         )
 
-        pts = [None]*self.num_joints
+        # ── Update matched tracks ─────────────────────────────────
+        for di, ti in matches:
+            self._update_track(self.tracks[ti], kp_all[di], conf_all[di], fx, fy, cx, cy)
+            self.tracks[ti].last_seen = now
+            if centroids[di] is not None:
+                self.tracks[ti].centroid = centroids[di]
 
-        for i in range(self.num_joints):
-            # Non predire occhi / orecchie
-            if i in {1, 2, 3, 4}:
-                continue
-            # Damping differenziato
-            if i in self.LEGS:
-                damping = 0.5
-            elif i in self.ARMS:
-                damping = 0.4
-            elif i in self.TORSO:
-                damping = 0.2
-            else:
-                damping = self.vel_damping
+        # ── Predict unmatched tracks ──────────────────────────────
+        for ti in unmatched_tracks:
+            self._predict_track(self.tracks[ti])
 
-            if conf is not None and conf[i] < self.conf_thr:
-                continue
+        # ── Remove timed-out tracks ───────────────────────────────
+        self.tracks = [
+            t for t in self.tracks
+            if (now - t.last_seen) < self._track_timeout
+        ]
 
-            u, v = int(kp[i][0]), int(kp[i][1])
-            d = self.robust_depth(u, v)
-            if d is None or d > self.max_depth_m:
-                continue
+        # ── Create new tracks for unmatched detections ────────────
+        for di in unmatched_dets:
+            if len(self.tracks) >= self._max_tracks:
+                break
+            new_track = PersonTrack(self._next_track_id)
+            self._next_track_id += 1
+            self._update_track(new_track, kp_all[di], conf_all[di], fx, fy, cx, cy)
+            new_track.last_seen = now
+            if centroids[di] is not None:
+                new_track.centroid = centroids[di]
+            self.tracks.append(new_track)
 
-            X = (u - cx) * d / fx
-            Y = (v - cy) * d / fy
-            Z = d + self.z_offset
-
-            meas = np.array([X, Y, Z], dtype=np.float64)
-
-            self.kf[i].predict(1.0)
-
-            if i == 13:  # left knee
-                if pts[11] is not None and pts[15] is not None:
-                    if not self.knee_angle_ok(pts[11], meas, pts[15]):
-                        self.kf[i].predict(self.vel_damping)
-                        pts[i] = self.kf[i].get_position()
-                        continue
-
-            if i == 14:  # right knee
-                if pts[12] is not None and pts[16] is not None:
-                    if not self.knee_angle_ok(pts[12], meas, pts[16]):
-                        self.kf[i].Q *= 0.3
-                        continue
-
-            # ---------- GATING ----------
-            if self.kf[i].initialized:
-                pred = self.kf[i].get_position()
-                sigma = np.sqrt(np.trace(self.kf[i].P[0:3,0:3]))
-
-                if i in self.LEGS:
-                    threshold = 3.5
-                else:
-                    threshold = 2.5
-
-                if np.linalg.norm(meas - pred) < threshold * sigma:
-                    self.kf[i].update(meas)
-            else:
-                self.kf[i].update(meas)
-
-            self.visible[i] = True
-
-        for i in range(self.num_joints):
-            if self.visible[i]:
-                self.missing_count[i] = 0
-            else:
-                self.missing_count[i] += 1
-
-        # Predict missing joints
-        for i in range(self.num_joints):
-            if not self.visible[i]:
-                self.adaptive_Q(self.kf[i], i)
-                self.kf[i].predict(self.vel_damping)
-            else:
-                self.kf[i].Q = self.kf[i].Q_base.copy()
-
-            pts[i] = self.kf[i].get_position()
-
-        if (
-            pts[5] is not None and pts[6] is not None and
-            pts[11] is not None and pts[12] is not None
-        ):
-            sh_mid = 0.5 * (pts[5] + pts[6])
-            hip_mid = 0.5 * (pts[11] + pts[12])
-            L = np.linalg.norm(sh_mid - hip_mid)
-
-            if self.TORSO_len_ref is None:
-                self.TORSO_len_ref = L
-            else:
-                self.TORSO_len_ref = 0.98 * self.TORSO_len_ref + 0.02 * L
-
-        pts = TORSO_length_constraint(
-            pts,
-            self.visible,
-            self.TORSO_len_ref,
-            stiffness=0.35
+        # ── Select target ─────────────────────────────────────────
+        self._target_track_id, self._target_hysteresis_miss = select_target(
+            self.tracks,
+            lying_angle_min=self._lying_angle_min,
+            current_target_id=self._target_track_id,
+            hysteresis_miss_count=self._target_hysteresis_miss,
+            hysteresis_frames=self._hysteresis_frames,
         )
 
-        # Vincolo morbido NASO → spalle (solo se predetto)
-        if (
-            pts[0] is not None and
-            pts[5] is not None and
-            pts[6] is not None and
-            not self.visible[0]
-        ):
-            sh_mid = 0.5 * (pts[5] + pts[6])
-            pts[0] = pts[0] + 0.55 * (sh_mid - pts[0])
+        # ── Publish ───────────────────────────────────────────────
+        target = next(
+            (t for t in self.tracks if t.track_id == self._target_track_id), None
+        )
+        if target is not None:
+            pts = [kf.get_position() for kf in target.kf]
+            self._publish_target_pose(pts, msg.header.stamp)
+        else:
+            self.publish_empty(msg.header.stamp)
 
-        self.publish_all(pts, msg.header.stamp)
+        self._publish_all_markers(msg.header.stamp)
 
     # ============================================================
-
-    def predict_only(self, stamp):
-        pts = []
-        for i, k in enumerate(self.kf):
-            if i in {1, 2, 3, 4}:
-                pts.append(None)
-                continue
-
-            if k.initialized:
-                self.adaptive_Q(k, i)
-
-                if i in {13, 14, 15, 16}:
-                    damping = 0.5
-                elif i in {7, 8, 9, 10}:
-                    damping = 0.4
-                elif i in {5, 6, 11, 12}:
-                    damping = 0.2
-                else:
-                    damping = self.vel_damping
-
-                k.predict(damping)
-                k.Q = k.Q_base.copy()
-                pts.append(k.get_position())
-            else:
-                pts.append(None)
-
-        self.visible = [False] * self.num_joints
-
-        valid_pts = [p for p in pts if p is not None]
-        if len(valid_pts) < 4:
-            self.publish_empty(stamp)
-            return
-
-        self.publish_all(pts, stamp)
 
     def _update_track(self, track, kp, conf, fx, fy, cx, cy):
         """
