@@ -95,12 +95,10 @@ class YoloSkeletonNodeOrbbec(Node):
 
         self.get_logger().info("✅ YOLO skeleton node (Orbbec) — multi-person tracking ready")
 
-    def adaptive_Q(self, kf, joint_idx):
+    def _adaptive_Q(self, kf, missing_count, joint_idx):
         Q = kf.Q_base.copy()
-
-        miss = self.missing_count[joint_idx]
+        miss = missing_count[joint_idx]
         time_factor = min(1.0 + 0.15 * miss, 3.0)
-
         if joint_idx in {5, 6, 11, 12}:
             part_factor = 0.7
         elif joint_idx in {7, 8, 9, 10}:
@@ -111,7 +109,6 @@ class YoloSkeletonNodeOrbbec(Node):
             part_factor = 1.8
         else:
             part_factor = 1.0
-
         kf.Q = Q * time_factor * part_factor
 
     # ============================================================
@@ -121,6 +118,28 @@ class YoloSkeletonNodeOrbbec(Node):
 
     def cb_depth(self, msg):
         self.depth_img = self.bridge.imgmsg_to_cv2(msg, "passthrough")
+
+    def _compute_raw_centroid(self, kp, conf, fx, fy, cx, cy):
+        """
+        Compute 3D centroid of torso joints (5,6,11,12) from raw YOLO keypoints.
+        Used for track assignment — no Kalman involved.
+        Returns np.array([x,y,z]) or None if fewer than 2 torso joints have valid depth.
+        """
+        pts = []
+        for i in [5, 6, 11, 12]:
+            if conf is not None and conf[i] < self.conf_thr:
+                continue
+            u, v = int(kp[i][0]), int(kp[i][1])
+            d = self.robust_depth(u, v)
+            if d is None or d > self.max_depth_m:
+                continue
+            X = (u - cx) * d / fx
+            Y = (v - cy) * d / fy
+            Z = d + self.z_offset
+            pts.append(np.array([X, Y, Z], dtype=np.float64))
+        if len(pts) < 2:
+            return None
+        return np.mean(pts, axis=0)
 
     def robust_depth(self, u, v, win=5):
         h, w = self.depth_img.shape
@@ -324,6 +343,129 @@ class YoloSkeletonNodeOrbbec(Node):
             return
 
         self.publish_all(pts, stamp)
+
+    def _update_track(self, track, kp, conf, fx, fy, cx, cy):
+        """
+        Run one Kalman update step for the given PersonTrack using YOLO keypoints kp.
+        Mirrors the per-joint logic from the original single-person cb_color.
+        Returns pts: list[np.array|None] of length 17.
+        """
+        track.visible = [False] * self.num_joints
+        pts = [None] * self.num_joints
+
+        for i in range(self.num_joints):
+            if i in {1, 2, 3, 4}:
+                continue
+
+            if i in self.LEGS:
+                damping = 0.5
+            elif i in self.ARMS:
+                damping = 0.4
+            elif i in self.TORSO:
+                damping = 0.2
+            else:
+                damping = self.vel_damping
+
+            if conf is not None and conf[i] < self.conf_thr:
+                continue
+
+            u, v = int(kp[i][0]), int(kp[i][1])
+            d = self.robust_depth(u, v)
+            if d is None or d > self.max_depth_m:
+                continue
+
+            X = (u - cx) * d / fx
+            Y = (v - cy) * d / fy
+            Z = d + self.z_offset
+            meas = np.array([X, Y, Z], dtype=np.float64)
+
+            track.kf[i].predict(1.0)
+
+            if i == 13 and pts[11] is not None and pts[15] is not None:
+                if not self.knee_angle_ok(pts[11], meas, pts[15]):
+                    track.kf[i].predict(damping)
+                    pts[i] = track.kf[i].get_position()
+                    continue
+
+            if i == 14 and pts[12] is not None and pts[16] is not None:
+                if not self.knee_angle_ok(pts[12], meas, pts[16]):
+                    track.kf[i].Q *= 0.3
+                    continue
+
+            if track.kf[i].initialized:
+                pred  = track.kf[i].get_position()
+                sigma = np.sqrt(np.trace(track.kf[i].P[0:3, 0:3]))
+                threshold = 3.5 if i in self.LEGS else 2.5
+                if np.linalg.norm(meas - pred) < threshold * sigma:
+                    track.kf[i].update(meas)
+            else:
+                track.kf[i].update(meas)
+
+            track.visible[i] = True
+
+        # Update missing counts
+        for i in range(self.num_joints):
+            if track.visible[i]:
+                track.missing_count[i] = 0
+            else:
+                track.missing_count[i] += 1
+
+        # Predict missing joints + get all positions
+        for i in range(self.num_joints):
+            if not track.visible[i]:
+                self._adaptive_Q(track.kf[i], track.missing_count, i)
+                if i in self.LEGS:
+                    damp = 0.5
+                elif i in self.ARMS:
+                    damp = 0.4
+                elif i in self.TORSO:
+                    damp = 0.2
+                else:
+                    damp = self.vel_damping
+                track.kf[i].predict(damp)
+            else:
+                track.kf[i].Q = track.kf[i].Q_base.copy()
+            pts[i] = track.kf[i].get_position()
+
+        # TORSO length constraint
+        if all(pts[i] is not None for i in [5, 6, 11, 12]):
+            sh_mid  = 0.5 * (pts[5]  + pts[6])
+            hip_mid = 0.5 * (pts[11] + pts[12])
+            L = np.linalg.norm(sh_mid - hip_mid)
+            if track.TORSO_len_ref is None:
+                track.TORSO_len_ref = L
+            else:
+                track.TORSO_len_ref = 0.98 * track.TORSO_len_ref + 0.02 * L
+
+        pts = TORSO_length_constraint(pts, track.visible, track.TORSO_len_ref, stiffness=0.35)
+
+        # Nose → shoulders soft constraint (only when nose is predicted, not visible)
+        if (pts[0] is not None and pts[5] is not None
+                and pts[6] is not None and not track.visible[0]):
+            sh_mid = 0.5 * (pts[5] + pts[6])
+            pts[0] = pts[0] + 0.55 * (sh_mid - pts[0])
+
+        return pts
+
+    def _predict_track(self, track):
+        """Predict-only step for a track that had no matching detection this frame."""
+        for i in range(self.num_joints):
+            if i in {1, 2, 3, 4}:
+                continue
+            if track.kf[i].initialized:
+                self._adaptive_Q(track.kf[i], track.missing_count, i)
+                if i in self.LEGS:
+                    damp = 0.5
+                elif i in self.ARMS:
+                    damp = 0.4
+                elif i in self.TORSO:
+                    damp = 0.2
+                else:
+                    damp = self.vel_damping
+                track.kf[i].predict(damp)
+                track.kf[i].Q = track.kf[i].Q_base.copy()
+                track.missing_count[i] += 1
+        track.visible = [False] * self.num_joints
 
     # ============================================================
 
