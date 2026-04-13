@@ -99,6 +99,11 @@ def generate_launch_description():
             'conf_thr': 0.25,
             'vel_damping': 0.5,
             'max_depth_m': 5.0,
+            'max_track_distance': 0.6,
+            'track_timeout': 1.5,
+            'lying_torso_angle_min': 65.0,
+            'max_tracks': 5,
+            'target_hysteresis_frames': 10,
         }]
     )
 
