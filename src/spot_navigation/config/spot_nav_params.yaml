@@ -2,7 +2,7 @@ spot_goal_navigator:
   ros__parameters:
     # Topic that spot_driver subscribes to.
     # Use "/my_spot/cmd_vel" if spot_name="my_spot" in spot_driver config.
-    cmd_vel_topic: "/cmd_vel"
+    cmd_vel_topic: "/my_spot/cmd_vel"
 
     # Stop when closer than this to goal (metres)
     goal_tolerance: 0.3
