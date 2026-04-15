@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import math
 import sys
+import termios
 import threading
+import tty
 from enum import Enum, auto
 
 import rclpy
@@ -126,7 +128,7 @@ class SpotGoalNavigatorNode(Node):
             f'SpotGoalNavigator ready.\n'
             f'  cmd_vel → {self._p.cmd_vel_topic}\n'
             f'  robot_frame: {self._p.robot_frame}\n'
-            f'Press "s" + Enter to start navigation to latest approach point.'
+            f'Press "s" to navigate | ESC to EMERGENCY STOP.'
         )
 
     # ── Callbacks ──────────────────────────────────────────────────────────────
@@ -137,14 +139,28 @@ class SpotGoalNavigatorNode(Node):
             self._latest_goal = msg
 
     def _keyboard_loop(self) -> None:
-        """Blocking stdin reader — runs on daemon thread."""
-        while rclpy.ok():
-            try:
-                line = sys.stdin.readline().strip()
-            except EOFError:
-                break
-            if line == 's':
-                self._on_start_key()
+        """Raw single-char stdin reader — runs on daemon thread."""
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            while rclpy.ok():
+                ch = sys.stdin.read(1)
+                if ch == 's':
+                    self._on_start_key()
+                elif ch == '\x1b':  # ESC
+                    self._on_estop_key()
+        except Exception:
+            pass
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+    def _on_estop_key(self) -> None:
+        with self._lock:
+            self._state     = NavState.STOPPED
+            self._goal_odom = None
+        self._cmd_pub.publish(Twist())
+        self.get_logger().warn('EMERGENCY STOP — Spot fermato.')
 
     def _on_start_key(self) -> None:
         with self._lock:
