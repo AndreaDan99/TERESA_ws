@@ -22,14 +22,12 @@ class LayingHumanDetector(Node):
         self.declare_parameter('approach_distance', 1.0)  # Metri da bbox (AUMENTATO da 0.8)
         self.declare_parameter('min_detection_confidence', 0.5)
         self.declare_parameter('min_valid_keypoints', 4)
-        self.declare_parameter('bbox_padding', 0.2)
         self.declare_parameter('test_mode', True)  # DEFAULT: True (no navigation)
         self.declare_parameter('detection_timeout', 2.0)  # Secondi senza detection per reset
 
         self.approach_dist = float(self.get_parameter('approach_distance').value)
         self.min_conf = float(self.get_parameter('min_detection_confidence').value)
         self.min_kp = int(self.get_parameter('min_valid_keypoints').value)
-        self.bbox_pad = float(self.get_parameter('bbox_padding').value)
         self.test_mode = bool(self.get_parameter('test_mode').value)
         self.detection_timeout = float(self.get_parameter('detection_timeout').value)
 
@@ -52,10 +50,6 @@ class LayingHumanDetector(Node):
         # Publishers
         self.goal_pub = self.create_publisher(
             PoseStamped, '/laying_human/approach_point', 10  # RINOMINATO topic
-        )
-        
-        self.bbox_pub = self.create_publisher(
-            Marker, '/laying_human/bbox', 10
         )
         
         self.approach_marker_pub = self.create_publisher(
@@ -161,9 +155,6 @@ class LayingHumanDetector(Node):
             throttle_duration_sec=2.0
         )
         
-        # Pubblica visualizzazione bounding box
-        self.publish_bbox(bbox_center, bbox_size, msg.header)
-        
         # Calcola e pubblica approach point
         if not self.test_mode and not self.goal_sent:
             self.publish_approach_point(bbox_center, bbox_size, msg.header)
@@ -173,52 +164,19 @@ class LayingHumanDetector(Node):
             # In test mode: pubblica approach point MA non invia goal navigazione
             self.publish_approach_point(bbox_center, bbox_size, msg.header, visualize_only=True)
             
-    def publish_bbox(self, center, size, header):
-        """Visualizza bounding box persona in RViz (cubo rosso trasparente)."""
-        marker = Marker()
-        marker.header.frame_id = header.frame_id
-        marker.header.stamp = header.stamp
-        marker.ns = 'laying_human_bbox'
-        marker.id = 0
-        marker.type = Marker.CUBE
-        marker.action = Marker.ADD
-        
-        # Posizione centro bbox
-        marker.pose.position.x = float(center[0])
-        marker.pose.position.y = float(center[1])
-        marker.pose.position.z = float(center[2])
-        marker.pose.orientation.w = 1.0
-        
-        # Dimensioni con padding
-        marker.scale.x = float(size[0] + self.bbox_pad)
-        marker.scale.y = float(size[1] + self.bbox_pad)
-        marker.scale.z = float(size[2] + self.bbox_pad)
-        
-        # Colore rosso trasparente
-        marker.color.r = 1.0
-        marker.color.g = 0.0
-        marker.color.b = 0.0
-        marker.color.a = 0.3
-        
-        marker.lifetime.sec = 1  # Aggiorna ogni secondo
-        
-        self.bbox_pub.publish(marker)
-    
     def publish_approach_point(self, bbox_center, bbox_size, header, visualize_only=False):
         """
         Calcola e pubblica approach point per Spot.
-        
-        GEOMETRIA CORRETTA per body frame Spot:
-        - X = forward (avanti)
-        - Y = left (sinistra)
-        - Z = up (su)
-        
-        Strategia: posiziona Spot DAVANTI alla persona (lungo +X) + distanza sicurezza.
+
+        Geometria: frame camera_color_optical_frame (Z=depth forward, X=right, Y=down).
+        Spot deve avvicinarsi lungo Z: goal_z = persona_z - approach_dist.
+        Il navigator trasforma poi odom→body tramite TF.
         """
-        # Goal: davanti alla bbox (lungo X forward) + approach_distance
-        goal_x = bbox_center[0] + (bbox_size[0] / 2.0) + self.approach_dist
-        goal_y = bbox_center[1]  # Mantieni stessa coordinata Y (left/right)
-        goal_z = 0.0  # Ground level (Spot cammina a z=0 nel body frame)
+        # Goal: camera_color_optical_frame — X=right, Y=down, Z=depth
+        # Approach along Z (depth): stay at same X/Y, move closer by approach_dist
+        goal_x = bbox_center[0]
+        goal_y = bbox_center[1]
+        goal_z = bbox_center[2] - self.approach_dist
         
         # Crea goal message
         goal = PoseStamped()

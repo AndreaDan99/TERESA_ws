@@ -15,10 +15,10 @@ spot_goal_navigator:
     linear_speed_max: 0.4     # m/s
 
     # Spot body TF frame (published by spot_driver, moves with robot)
-    robot_frame: "body"
+    robot_frame: "my_spot/body"
 
     # World-fixed frame (goal stored here between keypress and arrival)
-    odom_frame: "odom"
+    odom_frame: "my_spot/odom"
 
     # Control loop rate
     update_rate: 10.0    # Hz

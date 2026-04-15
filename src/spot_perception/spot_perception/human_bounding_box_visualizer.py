@@ -6,6 +6,7 @@ import rclpy
 from rclpy.node import Node
 
 from geometry_msgs.msg import PoseArray
+from std_msgs.msg import String
 from visualization_msgs.msg import Marker
 
 # Indici COCO torso
@@ -40,10 +41,19 @@ class HumanBoundingBoxVisualizer(Node):
         self.torso_width_scale = float(self.get_parameter("torso_width_scale").value)
         self.torso_depth_scale = float(self.get_parameter("torso_depth_scale").value)
 
+        self._is_lying = False
+
         self.sub = self.create_subscription(
             PoseArray,
             "/human_pose/points_3d",
             self.cb_points,
+            10
+        )
+
+        self.sub_posture = self.create_subscription(
+            String,
+            "/human_pose/posture",
+            self.cb_posture,
             10
         )
 
@@ -59,6 +69,9 @@ class HumanBoundingBoxVisualizer(Node):
             f"✅ Human Bounding Box Visualizer READY "
             f"(margin_body={self.margin_body}m, torso_scale=w:{self.torso_width_scale} d:{self.torso_depth_scale})"
         )
+
+    def cb_posture(self, msg: String):
+        self._is_lying = (msg.data == "LYING")
 
     def cb_points(self, msg: PoseArray):
         # 1) Corpo intero
@@ -146,9 +159,10 @@ class HumanBoundingBoxVisualizer(Node):
                     torso_depth * self.torso_depth_scale
                 ])
 
-        # 3) Pubblica
+        # 3) Pubblica — arancione se LYING, rosso altrimenti
+        body_color = (1.0, 0.5, 0.0, 0.4) if self._is_lying else (1.0, 0.0, 0.0, 0.25)
         self.publish_box(center_body, size_body, msg.header.stamp,
-                         "human_bounding", 0, (1.0, 0.0, 0.0, 0.25), self.pub_marker_body)
+                         "human_bounding", 0, body_color, self.pub_marker_body)
 
         if center_torso is not None:
             self.publish_box(center_torso, size_torso, msg.header.stamp,

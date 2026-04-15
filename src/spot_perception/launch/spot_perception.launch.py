@@ -69,7 +69,7 @@ def generate_launch_description():
         arguments=[
             '0.40', '0.0', '0.55',
             '0', '0', '0',
-            'body',
+            'my_spot/body',
             'camera_link'
         ]
     )
