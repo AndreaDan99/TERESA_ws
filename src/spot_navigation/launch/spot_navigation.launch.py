@@ -10,7 +10,7 @@ def generate_launch_description():
 
     cmd_vel_topic_arg = DeclareLaunchArgument(
         'cmd_vel_topic',
-        default_value='/cmd_vel',
+        default_value='/my_spot/cmd_vel',
         description=(
             'cmd_vel topic — must match spot_driver namespace. '
             'Use /my_spot/cmd_vel if spot_name="my_spot" in spot_driver config.'
