@@ -139,7 +139,17 @@ class LayingHumanDetector(Node):
         self.last_detection_time = self.get_clock().now()
         
         points = np.array(valid_points)
-        
+
+        # Controlla distanza minima: persona troppo vicina → approach point dietro camera
+        mean_depth = np.mean(points[:, 2])
+        if mean_depth < self.approach_dist + 0.2:
+            self.get_logger().warn(
+                f'Persona troppo vicina ({mean_depth:.2f}m < {self.approach_dist + 0.2:.2f}m) '
+                f'— approach point non valido, ignorato.',
+                throttle_duration_sec=2.0
+            )
+            return
+
         # Calcola bounding box 3D
         bbox_min = points.min(axis=0)
         bbox_max = points.max(axis=0)

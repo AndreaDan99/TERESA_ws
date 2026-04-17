@@ -3,8 +3,8 @@ z1_FSM:
 
     # ── Topic interface ────────────────────────────────────────────
     torso_locked_topic:            "/torso_target_ee_locked"
-    ik_enable_topic:               "/ik_enable"
-    ik_goal_topic:                 "/ik_goal_pose"
+    ik_enable_topic:               "/z1/ik_enable"
+    ik_goal_topic:                 "/z1/ik_goal_pose"
     ik_done_topic:                 "/ik_done"
     state_topic:                   "/z1_fsm/state"
     impedance_enable_topic:        "/impedance_enable"

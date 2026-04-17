@@ -1,6 +1,6 @@
 import math
 import pytest
-from spot_navigation.spot_goal_navigator import NavState, compute_cmd_vel
+from spot_control.spot_goal_navigator import NavState, compute_cmd_vel
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────

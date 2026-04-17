@@ -1,6 +1,6 @@
 % ============================================================
 %  TERESA Z1 — Diario di progresso e TODO list
-%  Aggiornato: 2026-04-11
+%  Aggiornato: 2026-04-17
 % ============================================================
 \documentclass[a4paper,11pt]{article}
 
@@ -45,7 +45,7 @@
 \pagestyle{fancy}
 \fancyhf{}
 \lhead{\textbf{TERESA Z1} — Braccio robotico Unitree Z1}
-\rhead{Aggiornato: 2026-04-11}
+\rhead{Aggiornato: 2026-04-17}
 \cfoot{\thepage}
 
 % ── Ambienti custom ───────────────────────────────────────
@@ -64,13 +64,13 @@
 \begin{document}
 
 \begin{center}
-  {\LARGE \textbf{TERESA — Braccio Unitree Z1}}\\[4pt]
+  {\LARGE \textbf{TERESA — Braccio Unitree Z1 + WBC Spot}}\\[4pt]
   {\large Diario di sviluppo, TODO list e guida di avvio}\\[2pt]
   {\small
     Branch attivo:
-    \textcolor{branchpurple}{\texttt{Z1\_realsense}}
-    \quad|\quad Repo: \texttt{TERESA\_ws/src/z1\_vision}}\\[2pt]
-  {\small Ultimo aggiornamento: \textbf{11 Aprile 2026}}
+    \textcolor{branchpurple}{\texttt{TERESA}}
+    \quad|\quad Repo: \texttt{TERESA\_ws/src/}}\\[2pt]
+  {\small Ultimo aggiornamento: \textbf{17 Aprile 2026}}
 \end{center}
 \vspace{0.5em}
 \hrule
@@ -80,29 +80,41 @@
 \section{Panoramica del sistema}
 % ============================================================
 
-Il sistema controlla il braccio \textbf{Unitree Z1} montato sul robot TERESA per
-avvicinarsi in modo autonomo al torso di un paziente.
+Il sistema controlla il braccio \textbf{Unitree Z1} montato su \textbf{Boston Dynamics Spot}
+per eseguire autonomamente il protocollo \textbf{FAST ultrasound} su un paziente sdraiato.
 Lo stack completo è composto da:
 
 \begin{itemize}
-  \item \textbf{Percezione}: YOLO11 pose estimation + Kalman 3D + lock tracker + body search scan
-  \item \textbf{Pianificazione}: Workspace checker (Pinocchio + L-BFGS-B)
-  \item \textbf{Controllo posizione}: IK Jacobiana pseudo-inversa smorzata + JointTrajectoryController
-  \item \textbf{Controllo forza}: Impedance controller in spazio cartesiano (500 Hz, torque control)
-  \item \textbf{Sicurezza}: keyboard safety node, stati HOMING/EMERGENCY, workspace clipping
-  \item \textbf{Orchestrazione}: FSM a 12 stati, launch files separati per controllo e percezione
-  \item \textbf{Integrazione Spot}: package \texttt{spot\_perception} su Jetson (Orbbec + YOLO skeleton + classificazione postura)
+  \item \textbf{Percezione Spot (Orbbec)}: YOLO11 skeleton + classificazione postura +
+        rilevamento persona sdraiata + approach point (\texttt{spot\_perception})
+  \item \textbf{Percezione Z1 (RealSense)}: YOLO11 torso tracker + Kalman 3D +
+        stima piano superficiale PCA (\texttt{z1\_vision})
+  \item \textbf{WBC — Whole Body Control} (\texttt{spot\_control}):
+        QP olistico Spot+Z1 durante l'approccio; FSM 6 stati; mux priorità arm goal
+  \item \textbf{Controllo posizione Z1}: IK Jacobiana pseudo-inversa + JointTrajectoryController
+  \item \textbf{Controllo forza Z1}: Impedance controller cartesiano (500 Hz, torque control)
+  \item \textbf{Sicurezza}: keyboard safety, stati HOMING/EMERGENCY, workspace clipping
 \end{itemize}
+
+\subsection*{Flusso della missione}
+\begin{enumerate}
+  \item \textbf{Approaching}: WBC QP coordina Spot (cmd\_vel) + Z1 (ik\_goal) simultaneamente;
+        braccio pre-punta il paziente mentre Spot cammina
+  \item \textbf{Handoff}: Orbbec cede a RealSense; z1\_FSM prende controllo del braccio
+  \item \textbf{FAST scan}: z1\_FSM esegue 5 punti anatomici (Hub, Subxiphoid, RUQ, LUQ, Suprapubic)
+        con impedance control; Spot fermo
+  \item \textbf{WS Extension}: se punto FAST irraggiungibile, WBC torna attivo per
+        micro-step Spot + compensazione braccio simultanea
+\end{enumerate}
 
 % ============================================================
 \section{Branch attivi}
 % ============================================================
 
 \begin{branchboxb}
-\textbf{\textcolor{branchpurple}{Branch \texttt{Z1\_realsense}}} — branch principale attivo (2026-04-11)\\
-Contiene l'intero stack: FAST protocol, body search scan 3 fasi,
-impedance controller, \texttt{spot\_perception} package.
-\texttt{FSM\_main} è la base stabile precedente (2026-03-15), da cui questo branch è stato esteso.
+\textbf{\textcolor{branchpurple}{Branch \texttt{TERESA}}} — branch principale attivo (2026-04-17)\\
+Contiene l'intero stack integrato: FAST protocol, body search scan 3 fasi,
+impedance controller, \texttt{spot\_perception}, \texttt{spot\_control} (WBC).
 \end{branchboxb}
 
 % ============================================================
@@ -111,458 +123,56 @@ impedance controller, \texttt{spot\_perception} package.
 
 \subsection*{Prerequisiti}
 \begin{itemize}[leftmargin=1.5em]
-  \item SpotCore (SpotROS2 driver) in esecuzione sulla macchina Spot
-  \item Jetson con ROS2 Humble, driver Z1, Pinocchio, YOLO11
-  \item ROS\_DOMAIN\_ID uguale su Jetson e SpotCore (per DDS)
-  \item \texttt{colcon build} eseguito in \texttt{\$TERESA\_WS}
+  \item SpotCore con \texttt{spot\_ros2} driver in esecuzione
+  \item Jetson con ROS2 Humble, Pinocchio, driver Z1, RealSense SDK, Orbbec SDK, YOLO11
+  \item \texttt{ROS\_DOMAIN\_ID} uguale su Jetson e SpotCore
+  \item Workspace compilato: \texttt{colcon build --packages-select z1\_vision spot\_perception spot\_control}
 \end{itemize}
 
-\subsection*{Launch sequence (4 terminali Jetson)}
+\subsection*{Sequenza di lancio completa (sistema integrato)}
 
 \begin{lstlisting}
-# PREREQUISITO: source su ogni terminale
-source /opt/ros/humble/setup.bash
-source ~/install/setup.bash
+# Su ogni terminale Jetson:
+source /opt/ros/humble/setup.bash && source ~/TERESA_ws/install/setup.bash
+export ROS_DOMAIN_ID=0
 \end{lstlisting}
 
 \begin{center}
-\begin{tabular}{|l|l|l|}
+\begin{tabular}{|c|l|p{7.5cm}|}
 \hline
-\textbf{Terminal} & \textbf{Machine} & \textbf{Comando Launch} \\
+\textbf{T} & \textbf{Macchina} & \textbf{Comando} \\
 \hline
 1 & SpotCore & \texttt{ros2 launch spot\_ros2 spot\_driver.launch.py} \\
 \hline
-2 (Jetson) & Jetson & \texttt{ros2 launch spot\_perception spot\_perception.launch.py} \\
-& & \texttt{test\_mode:=true} \\
+2 & Jetson & \texttt{ros2 launch spot\_perception spot\_perception.launch.py} \\
 \hline
-3 (Jetson) & Jetson & \texttt{ros2 launch z1\_vision z1\_realsense.launch.py} \\
-& & \texttt{use\_rviz:=true} \\
+3 & Jetson & \texttt{ros2 launch z1\_vision z1\_realsense.launch.py use\_rviz:=true} \\
 \hline
-4 (Jetson) & Jetson & \texttt{ros2 launch z1\_vision z1\_control.launch.py} \\
-& & \texttt{fsm\_delay:=5.0} \\
+4 & Jetson & \texttt{ros2 launch z1\_vision z1\_perception.launch.py} \\
+\hline
+5 & Jetson & \texttt{ros2 launch z1\_vision z1\_control.launch.py fsm\_delay:=5.0} \\
+\hline
+6 & Jetson & \texttt{ros2 launch spot\_control wbc.launch.py} \\
+\hline
+7 & Jetson & \texttt{ros2 run z1\_vision z1\_keyboard\_safety} \\
 \hline
 \end{tabular}
 \end{center}
 
-\subsection*{Parametri principali}
+\textbf{Nota}: il terminale 6 (WBC) va avviato dopo T1--T5.
+Il \texttt{wbc\_coordinator} parte in IDLE e inizia l'approccio solo
+quando \texttt{spot\_perception} rileva una persona sdraiata con confidenza sufficiente.
+
+\subsection*{Parametri utili}
 
 \begin{itemize}[leftmargin=1.5em]
-  \item \textbf{\texttt{test\_mode:=true}} (spot\_perception) — pubblica approach point ma NON invia comando navigazione
-  \item \textbf{\texttt{test\_mode:=false}} — abilita navigazione Spot verso target rilevato
-  \item \textbf{\texttt{use\_rviz:=true}} (z1\_realsense) — lancia RViz2 per visualizzazione
-  \item \textbf{\texttt{fsm\_delay:=5.0}} — secondi di attesa prima che FSM inizi (lascia tempo al setup)
+  \item \texttt{fsm\_delay:=5.0} — secondi prima che z1\_FSM inizi (lascia tempo al setup)
+  \item \texttt{use\_rviz:=true} — lancia RViz2 con la configurazione del sistema
+  \item \texttt{z1\_x:=0.30 z1\_z:=0.70} — offset TF \texttt{body}$\to$\texttt{link00}
+        (stimato; misurare dopo montaggio fisico)
 \end{itemize}
 
-\subsection*{Varianti di lancio}
-
-\textbf{Solo Z1 (senza Spot perception):}
-\begin{lstlisting}
-# Terminal 1: SpotCore (acceso prima)
-# Terminal 2: Jetson
-ros2 launch z1_vision z1_realsense.launch.py use_rviz:=true
-
-# Terminal 3: Jetson
-ros2 launch z1_vision z1_control.launch.py fsm_delay:=5.0
-\end{lstlisting}
-
-\textbf{Solo Perception (senza Z1):}
-\begin{lstlisting}
-# Terminal 1: SpotCore
-# Terminal 2: Jetson
-ros2 launch spot_perception spot_perception.launch.py test_mode:=true
-\end{lstlisting}
-
-% ============================================================
-\section{Architettura FSM (stato attuale — \texttt{Z1\_realsense})}
-% ============================================================
-
-\subsection*{Stati della FSM (\texttt{z1\_FSM.py})}
-
-\begin{center}
-\begin{tabular}{lp{9.5cm}}
-\toprule
-\textbf{Stato} & \textbf{Descrizione} \\
-\midrule
-\texttt{HOMING}              & Stato iniziale al boot. Porta il braccio in home pose via IK/JTC, poi WAITING \\
-\texttt{WAITING}             & Se \texttt{body\_scan\_on\_start=true} e scan non ancora fatto $\to$ BODY\_SCANNING; altrimenti aspetta target LOCKED \\
-\textcolor{branchpurple}{\texttt{BODY\_SCANNING}} & \textcolor{branchpurple}{Scansione a griglia per trovare la posizione ottimale di visione del torso} \\
-\texttt{CHECKING\_WORKSPACE} & Verifica raggiungibilità target (thread non bloccante, Pinocchio) \\
-\texttt{APPROACHING}         & Invia goal IK verso il target (latchato al momento del check) \\
-\texttt{WAIT\_IK\_DONE}      & Attende \texttt{/ik\_done=True} dal nodo IK \\
-\texttt{WRIST\_ALIGN}        & Riallinea il polso perpendicolare alla superficie torso \\
-\texttt{SWITCHING\_TO\_TORQUE} & Switch JTC $\to$ torque\_controller via safe\_controller\_switch \\
-\texttt{IMPEDANCE\_RUNNING}  & Impedance controller attivo: approach $\to$ hold $\to$ retract \\
-\texttt{SWITCHING\_TO\_JTC}  & Switch torque\_controller $\to$ JTC \\
-\texttt{EMERGENCY\_SWITCHING}& Forza switch a JTC se torque attivo, poi va in HOMING \\
-\texttt{EMERGENCY}           & Stato bloccante, aspetta solo comando \texttt{reset} da tastiera \\
-\texttt{FAULT}               & Errore fatale (switch fallito), nodo bloccato \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\subsection*{Topic principali (inclusi i nuovi di \texttt{Z1\_realsense})}
-\begin{center}
-\begin{tabular}{lll}
-\toprule
-\textbf{Topic} & \textbf{Tipo} & \textbf{Descrizione} \\
-\midrule
-\texttt{/torso\_target\_ee\_locked}     & PoseStamped         & Target EE quando tracker LOCKED \\
-\texttt{/torso\_target\_ee}             & PoseStamped         & Target EE interpolato continuo \\
-\texttt{/ik\_goal\_pose}                & PoseStamped         & Goal IK da FSM \\
-\texttt{/ik\_enable}                    & Bool                & Abilita nodo IK \\
-\texttt{/ik\_done}                      & Bool                & Conferma fine movimento JTC \\
-\texttt{/impedance\_enable}             & Bool                & Abilita impedance controller \\
-\texttt{/impedance\_done}               & Bool                & Fine ciclo impedance \\
-\texttt{/target\_out\_of\_workspace}    & Bool                & Target clippato dal workspace checker \\
-\texttt{/z1\_fsm/state}                 & String              & Stato corrente FSM \\
-\texttt{/z1\_keyboard\_cmd}             & String              & Comandi da tastiera \\
-\texttt{/torso\_surface\_frame}         & PoseStamped         & Piano superficie torso (PCA) \\
-\texttt{/surface\_signed\_distance}     & Float32             & Distanza TCP--superficie \\
-\textcolor{branchpurple}{\texttt{/tracker\_scan\_mode}}  & \textcolor{branchpurple}{Bool} & \textcolor{branchpurple}{Attiva/disattiva scan mode nel tracker} \\
-\textcolor{branchpurple}{\texttt{/tracker\_scan\_next}}  & \textcolor{branchpurple}{Bool} & \textcolor{branchpurple}{Avanza al punto successivo della griglia} \\
-\textcolor{branchpurple}{\texttt{/torso\_scan\_point}}   & \textcolor{branchpurple}{Float32MultiArray} & \textcolor{branchpurple}{Score/dati del frame corrente [score, n\_kp, conf, x, y, z]} \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-% ============================================================
-\section{DONE — Funzionalità implementate}
-% ============================================================
-
-\begin{donebox}
-\textbf{\color{donegreen} Aggiornato al 2026-04-11}
-
-\begin{itemize}[leftmargin=1.5em]
-  \item[\checkmark] Pipeline base: YOLO11 + Kalman 3D + FSM IDLE/ESTIMATING/LOCKED
-  \item[\checkmark] IK Jacobiana pseudo-inversa smorzata + smoothstep quintico + JTC
-  \item[\checkmark] \texttt{realsense\_surface\_node}: stima piano torso da depth ROI (PCA)
-  \item[\checkmark] Impedance controller (500 Hz): APPROACH $\to$ HOLD $\to$ RETRACT
-  \item[\checkmark] \texttt{safe\_controller\_switch}: switch JTC $\leftrightarrow$ torque come nodo persistente
-  \item[\checkmark] Workspace checker (Pinocchio + L-BFGS-B), clip target a max\_reach $-$ 30 cm
-  \item[\checkmark] HOMING, EMERGENCY\_SWITCHING, EMERGENCY, keyboard safety (H/ESC/R/Q)
-  \item[\checkmark] Launch files: \texttt{z1\_control}, \texttt{z1\_perception}, \texttt{z1\_realsense}
-  \item[\checkmark] \textbf{Fix orientamento EE}: \texttt{ik\_rot\_weight} portato da 0.5 a 0.8 per
-        garantire EE perpendicolare alla superficie durante il JTC approach
-\end{itemize}
-
-\subsection*{Body Search Scan 3 fasi — \texttt{body\_search\_scanner.py}}
-\begin{itemize}[leftmargin=1.5em]
-  \item[\checkmark] Classe \texttt{BodySearchScanner}: FSM interna 3 fasi
-        (wrist sweep in home $\to$ arco nel piano X$\times$Y a quota fissa $\to$ refinement adattivo)
-  \item[\checkmark] Score per punto: $\text{detection\_rate} \times \text{avg\_per\_frame\_score}$,
-        con per-keypoint confidence tracking e completeness-weighted fusion
-  \item[\checkmark] Stima 3D torso per triangolazione multi-vista con anchor-based outlier rejection
-  \item[\checkmark] Early stop: se score $\geq$ soglia interrompe la scansione anticipatamente;
-        fallback al miglior punto visto se nessuno supera la soglia
-  \item[\checkmark] Fase 3 fallback: se FAILED usa la stima di fase 2 invece di abortire
-  \item[\checkmark] Fase 3 pubblica sempre il seed al tracker anche se fallisce
-\end{itemize}
-
-\subsection*{Protocollo FAST — \texttt{z1\_scan\_manager.py} + \texttt{z1\_FSM.py}}
-\begin{itemize}[leftmargin=1.5em]
-  \item[\checkmark] Protocollo FAST implementato con punti anatomici derivati dai keypoint YOLO:
-        Centro hub $\to$ Sottoxifoidea (cardiaca) $\to$ RUQ Morrison's $\to$ LUQ Koller's $\to$ Sovrapubica
-  \item[\checkmark] Ridotto a \textbf{4 punti torso-only} (rimossa Pleurica Dx, troppo craniale):
-        tutti i punti clippati a $Y \in [\text{shoulder\_mid\_y},\, \text{hip\_mid\_y}]$
-        prima del calcolo dell'offset — il braccio non esce mai dal bounding box del torso
-  \item[\checkmark] \texttt{skip\_impedance} esegue il dry-run completo del FAST via SCAN\_PRELIFT:
-        centro hub $\to$ SCAN\_PAUSE $\to$ pt1 $\to$ PRELIFT $\to$ centro $\to$ \ldots $\to$ pt4 $\to$ WAITING
-  \item[\checkmark] \textbf{Fix}: \texttt{advance()} su center hub chiamato \emph{prima} di SCAN\_PAUSE
-        per evitare loop infinito hub $\to$ SCAN\_PAUSE $\to$ hub
-\end{itemize}
-
-\subsection*{Fix orientamento e stabilità}
-\begin{itemize}[leftmargin=1.5em]
-  \item[\checkmark] \textbf{Fix}: \texttt{\_orientation\_for\_xee} ripristinata a riferimento \texttt{Y\_home}
-        (Gram-Schmidt): un commit precedente aveva silenziato questa modifica
-        usando \texttt{Z\_world}, causando rotazione polso di 90° attorno all'asse di approccio
-  \item[\checkmark] \textbf{Fix}: rimossa doppia dichiarazione \texttt{scan\_pause\_s} in \texttt{\_\_init\_\_} della FSM
-  \item[\checkmark] Stima forza di contatto model-based (gravity + coriolis) senza sensore di forza esterno
-  \item[\checkmark] Look-at dinamico in fase 2: l'EE punta verso il torso stimato ad ogni posa dell'arco
-\end{itemize}
-
-\subsection*{Integrazione Spot + pulizia workspace}
-\begin{itemize}[leftmargin=1.5em]
-  \item[\checkmark] Creato package \texttt{src/spot\_perception} (ament\_python) per girare sulla Jetson
-  \item[\checkmark] Migrati da \texttt{ros2\_spot\_ws}: \texttt{yolo\_skeleton\_spot.py},
-        \texttt{posture\_classifier.py}, \texttt{laying\_human\_detector.py},
-        \texttt{depth\_processing.py}, \texttt{skeleton\_utils.py},
-        \texttt{kalman\_filter.py}, \texttt{visualization.py}
-  \item[\checkmark] Launch file \texttt{spot\_perception.launch.py} con parametri GPU Jetson
-        (\texttt{device: '0'}, \texttt{use\_half: true})
-  \item[\checkmark] Driver Orbbec (\texttt{src/orbbec\_camera}) già presente in \texttt{TERESA\_ws}
-\end{itemize}
-
-\subsection*{Pulizia workspace}
-\begin{itemize}[leftmargin=1.5em]
-  \item[\checkmark] Rimossi package obsoleti: \texttt{z1\_control} e \texttt{yolo\_pose\_ros}
-        (superseded da \texttt{z1\_vision} e \texttt{spot\_perception})
-\end{itemize}
-
-\subsection*{Decisione architetturale Jetson / SpotCore}
-\begin{itemize}[leftmargin=1.5em]
-  \item[\checkmark] \textbf{Jetson} (Orbbec USB + RealSense USB + Z1 USB):
-        \texttt{spot\_perception} + \texttt{z1\_vision} + driver camere + driver Z1
-  \item[\checkmark] \textbf{SpotCore}: solo \texttt{spot\_ros2} (driver hardware Spot) +
-        nodi navigazione (\texttt{target\_tracker}, \texttt{cmd\_vel\_controller}, \texttt{odom\_nav})
-  \item[\checkmark] Comunicazione Jetson $\leftrightarrow$ SpotCore via ROS2 DDS (stesso \texttt{ROS\_DOMAIN\_ID})
-  \item[\checkmark] Installazione nativa su Jetson (no Docker): motivazione latenza real-time 500 Hz +
-        accesso diretto USB + CUDA nativo L4T
-\end{itemize}
-
-\subsection*{Test su robot reale}
-\begin{itemize}[leftmargin=1.5em]
-  \item[\checkmark] \textbf{Ciclo FAST completo} testato e funzionante:
-        HOMING $\to$ BODY\_SCANNING $\to$ WAITING $\to$ CHECKING\_WORKSPACE
-        $\to$ APPROACHING $\to$ IMPEDANCE $\to$ SCAN\_PRELIFT $\to$ loop 4 punti
-  \item[\checkmark] \textbf{\texttt{body\_scan\_center}} e \texttt{body\_scan\_lookat\_distance}
-        calibrati sul robot reale
-  \item[\checkmark] \textbf{Orientamento look-at} verificato: EE ruota correttamente
-        spostandosi in alto/basso e lateralmente
-  \item[\checkmark] \textbf{\texttt{body\_scan\_min\_frames}}: 10 frame sufficienti per stima affidabile dello score
-\end{itemize}
-
-\subsection*{Package \texttt{teresa\_coordinator} — 11 aprile 2026}
-\begin{itemize}[leftmargin=1.5em]
-  \item[\checkmark] Creato package \texttt{src/teresa\_coordinator} (ament\_python)
-        per orchestrare la missione TERESA: navigazione Spot + futuro trigger Z1
-  \item[\checkmark] Nodo \texttt{teresa\_mission.py} — FSM a 5 stati:
-        \texttt{IDLE} $\to$ \texttt{COMPUTING\_GOAL} $\to$ \texttt{NAVIGATING}
-        $\to$ \texttt{ARRIVED} $\to$ \texttt{CROUCHING} $\to$ \texttt{READY\_FOR\_SCAN}
-  \item[\checkmark] \textbf{Geometria approccio laterale}: asse corpo calcolato da
-        keypoints COCO (piedi $\to$ testa); Spot si posiziona
-        perpendicolarmente all'asse, all'altezza del torso,
-        fuori dal bounding box (\texttt{approach\_margin} parametrizzabile)
-  \item[\checkmark] \textbf{Scelta automatica del lato}: candidate sinistro e destro,
-        si sceglie quello che richiede minor rotazione a Spot
-        (parametro \texttt{preferred\_side}: \texttt{auto} $|$ \texttt{left} $|$ \texttt{right})
-  \item[\checkmark] \textbf{Goal locking}: goal bloccato alla prima detection LYING ad alta
-        confidenza; se la detection si perde durante navigazione
-        (camera troppo vicina) il goal viene mantenuto;
-        si ricalcola solo se il paziente si sposta $>$ \texttt{goal\_relock\_threshold}
-  \item[\checkmark] \textbf{Crouch all'arrivo}: chiama \texttt{/spot/stand\_height}
-        (\texttt{spot\_msgs/srv/SetStandHeight}, range $[-0.15, +0.15]$\,m)
-        per abbassare Spot e avvicinare il braccio Z1 al torso
-  \item[\checkmark] \textbf{Parametro \texttt{dry\_run}} (default \texttt{true}):
-        calcola geometria e pubblica marker RViz senza muovere Spot;
-        necessario passare \texttt{dry\_run:=false} esplicitamente per muovere il robot
-  \item[\checkmark] \textbf{Visualizzazione RViz} — 5 marker pubblicati:
-        freccia azzurra (asse corpo), freccia gialla (direzione laterale),
-        freccia verde (goal Spot con orientamento), cubo rosso trasparente
-        (safe zone = bbox + margin), testo (stato FSM)
-  \item[\checkmark] \textbf{Trasformazione TF}: in modalità reale trasforma
-        \texttt{camera\_color\_optical\_frame} $\to$ \texttt{odom} via TF2;
-        in dry\_run visualizza in camera frame senza dipendenza da \texttt{spot\_ros2}
-  \item[\checkmark] \textbf{Separazione layer}: \texttt{spot\_perception} rimane
-        autonomo e testabile indipendentemente;
-        \texttt{teresa\_coordinator} è opzionale e si aggiunge sopra
-\end{itemize}
-
-\textbf{Modalità di test disponibili:}
-\begin{enumerate}
-  \item Solo perception: \texttt{ros2 launch spot\_perception spot\_perception.launch.py}
-  \item Perception + geometria dry run:
-        aggiungere \texttt{ros2 launch teresa\_coordinator teresa\_mission.launch.py}
-        (default \texttt{dry\_run:=true})
-  \item Sistema completo: \texttt{dry\_run:=false} (richiede \texttt{spot\_ros2} su SpotCore)
-\end{enumerate}
-\end{donebox}
-
-% ============================================================
-\section{TODO}
-% ============================================================
-
-\begin{todobox}
-\textbf{\color{todoorange} Alta priorità — Jetson setup \& integrazione}
-
-\begin{itemize}[leftmargin=1.5em]
-  \item[$\square$] \textbf{Jetson setup (installazione nativa)}: ROS2 Humble, Pinocchio,
-        driver Unitree Z1, RealSense SDK, Orbbec SDK, Ultralytics YOLO11
-  \item[$\square$] \textbf{Test \texttt{spot\_perception} su Jetson}: verificare che
-        \texttt{yolo\_skeleton}, \texttt{posture\_classifier} e \texttt{laying\_human\_detector}
-        girino correttamente con Orbbec reale
-  \item[\checkmark] \textbf{Nodo orchestratore \texttt{teresa\_mission}}: navigazione Spot
-        verso paziente sdraiato implementata (approccio laterale + crouch);
-        trigger Z1 FAST scan da aggiungere in seguito
-  \item[$\square$] \textbf{Configurare ROS\_DOMAIN\_ID} comune tra Jetson e SpotCore;
-        verificare che i topic attraversino la rete correttamente
-\end{itemize}
-
-\subsection*{Alta priorità — test su robot reale (Z1)}
-\begin{itemize}[leftmargin=1.5em]
-  \item[$\square$] \textbf{Verificare Y clipping FAST}: controllare che tutti i punti
-        rimangano entro il bounding box del torso nelle varie posture paziente
-\end{itemize}
-
-\subsection*{Media priorità}
-\begin{itemize}[leftmargin=1.5em]
-  \item[$\square$] \textbf{Unificare pipeline YOLO sulla Jetson}: singola istanza modello
-        YOLO11 per Orbbec (skeleton 17 joint) e RealSense (torso center),
-        evitando doppio caricamento pesi in VRAM
-  \item[$\square$] \textbf{Test comunicazione Jetson $\leftrightarrow$ SpotCore}: verificare
-        latenza e affidabilità dei topic ROS2 critici (\texttt{/laying\_human/approach\_point},
-        trigger orchestratore)
-  \item[$\square$] \textbf{Merge \texttt{Z1\_realsense} su \texttt{FSM\_main}} dopo validazione
-        sul robot reale
-  \item[$\square$] \textbf{Tuning griglia body scan}: valutare se \texttt{ext\_y} e
-        \texttt{ext\_z} coprono correttamente la zona torso sul robot reale
-\end{itemize}
-
-\subsection*{Bassa priorità / futuri miglioramenti}
-\begin{itemize}[leftmargin=1.5em]
-  \item[$\square$] \textbf{Usare \texttt{/target\_out\_of\_workspace}}: comandare a Spot
-        di avvicinarsi quando il target è fuori workspace Z1
-  \item[$\square$] \textbf{Logging}: ROS bag recording automatico al launch
-        con i topic principali (FSM state, torso target, scan point, impedance)
-  \item[$\square$] \textbf{Visualizzazione RViz}: marker per griglia scan, look-at target,
-        piano superficie, workspace reachability, skeleton Spot
-  \item[$\square$] \textbf{Multi-persona}: gestione del caso in cui YOLO rileva
-        più persone (attualmente prende la prima/più vicina)
-\end{itemize}
-\end{todobox}
-
-% ============================================================
-\section{Sequenza di avvio}
-% ============================================================
-
-\begin{warnbox}
-\textbf{Prerequisito}: workspace ROS2 compilato e sourced su Jetson.\\
-\texttt{cd \textasciitilde/Documents/GIT\_Repositories/TERESA\_ws}\\
-\texttt{colcon build --packages-select z1\_vision spot\_perception teresa\_coordinator}\\
-\texttt{source install/setup.bash}\\[4pt]
-\textbf{Variabile d'ambiente obbligatoria su tutte le macchine:}\\
-\texttt{export ROS\_DOMAIN\_ID=0}
-\end{warnbox}
-
-% -------------------------------------------------------
-\subsection*{Livello 0 — Test da PC sviluppo (senza Jetson, senza robot)}
-% -------------------------------------------------------
-Utile per sviluppo e debug sul proprio PC prima di portare il codice su Jetson.
-Non richiede hardware: il flusso è \texttt{git push} dal PC di sviluppo,
-\texttt{git pull} sul PC con ROS2 installato.
-
-\textbf{Prerequisito sul PC con ROS2:}
-\begin{lstlisting}
-git pull
-colcon build --packages-select z1_vision spot_perception teresa_coordinator
-source install/setup.bash
-export ROS_DOMAIN_ID=42   # qualsiasi numero, deve matchare su tutte le macchine
-\end{lstlisting}
-
-\textbf{Test z1\_vision standalone (senza Spot):}
-\begin{lstlisting}
-ros2 launch z1_vision z1_control.launch.py
-\end{lstlisting}
-
-\textbf{Test teresa\_coordinator in dry run (senza hardware Spot):}
-\begin{lstlisting}
-# Terminale 1 — percezione (usa bag o fake data se no Orbbec)
-ros2 launch spot_perception spot_perception.launch.py
-# Terminale 2 — coordinator senza movimento reale
-ros2 launch teresa_coordinator teresa_mission.launch.py dry_run:=true
-\end{lstlisting}
-
-\textbf{Test con SpotCore in rete (ROS2 DDS multicast):}\\
-Basta settare lo stesso \texttt{ROS\_DOMAIN\_ID} su PC e SpotCore.
-\texttt{spot\_perception} gira su SpotCore, \texttt{teresa\_coordinator} sul PC;
-i topic passano via rete automaticamente.
-\begin{lstlisting}
-# Su SpotCore
-export ROS_DOMAIN_ID=42
-ros2 launch spot_perception spot_perception.launch.py
-# Sul PC sviluppo
-export ROS_DOMAIN_ID=42
-ros2 launch teresa_coordinator teresa_mission.launch.py dry_run:=false
-\end{lstlisting}
-
-% -------------------------------------------------------
-\subsection*{Livello 1 — Solo percezione Spot (Orbbec, Spot spento)}
-% -------------------------------------------------------
-Utile per testare rilevamento scheletro, postura e bounding box con Orbbec reale,
-senza Spot acceso e senza braccio Z1.
-
-\textbf{Jetson — Terminale 1:}
-\begin{lstlisting}
-ros2 launch spot_perception spot_perception.launch.py
-\end{lstlisting}
-
-\textbf{Jetson — Terminale 2 (visualizzazione):}
-\begin{lstlisting}
-rviz2
-# Aggiungere topic: /human_pose/skeleton_markers, /human_pose/bounding_box,
-#                   /human_pose/torso_bounding_box, /laying_human/bbox
-\end{lstlisting}
-
-\textbf{Monitoraggio:}
-\begin{lstlisting}
-ros2 topic echo /human_pose/posture
-ros2 topic echo /human_pose/posture_confidence
-ros2 topic echo /laying_human/approach_point
-\end{lstlisting}
-
-% -------------------------------------------------------
-\subsection*{Livello 2 — Percezione + coordinator dry run (Spot spento)}
-% -------------------------------------------------------
-Verifica la geometria di approccio (asse corpo, goal laterale, safe zone)
-in RViz senza muovere Spot.
-
-\textbf{Jetson — Terminale 1:}
-\begin{lstlisting}
-ros2 launch spot_perception spot_perception.launch.py
-\end{lstlisting}
-
-\textbf{Jetson — Terminale 2:}
-\begin{lstlisting}
-# dry_run:=true e' il default — Spot non si muove
-ros2 launch teresa_coordinator teresa_mission.launch.py
-\end{lstlisting}
-
-\textbf{RViz — topic aggiuntivi del coordinator:}
-\begin{lstlisting}
-/teresa/body_axis       # freccia azzurra: asse testa-piedi
-/teresa/lateral_dir     # freccia gialla: direzione approccio laterale
-/teresa/approach_goal   # freccia verde: posizione+orientamento goal Spot
-/teresa/safe_zone       # cubo rosso trasparente: zona di sicurezza
-/teresa/fsm_state       # testo: stato FSM corrente
-\end{lstlisting}
-
-% -------------------------------------------------------
-\subsection*{Livello 3 — Sistema completo TERESA (Spot acceso)}
-% -------------------------------------------------------
-Spot naviga fino al fianco del paziente e si abbassa.
-Il braccio Z1 non parte ancora (da integrare).
-
-\textbf{SpotCore (SSH da Jetson):}
-\begin{lstlisting}
-ros2 launch spot_ros2 spot_driver.launch.py
-\end{lstlisting}
-
-\textbf{Jetson — Terminale 1 (percezione Spot):}
-\begin{lstlisting}
-ros2 launch spot_perception spot_perception.launch.py
-\end{lstlisting}
-
-\textbf{Jetson — Terminale 2 (coordinator — muove Spot):}
-\begin{lstlisting}
-ros2 launch teresa_coordinator teresa_mission.launch.py dry_run:=false
-# Opzioni aggiuntive:
-#   preferred_side:=left|right|auto  (default: auto)
-#   approach_margin:=0.5             (distanza oltre bbox, metri)
-#   crouch_height:=-0.10             (abbassamento Spot, range -0.15..+0.15)
-\end{lstlisting}
-
-% -------------------------------------------------------
-\subsection*{Livello 4 — Sistema completo + Z1 FAST scan (futuro)}
-% -------------------------------------------------------
-
-\textbf{Jetson — Terminali aggiuntivi (dopo aver avviato Livello 3):}
-\begin{lstlisting}
-ros2 launch z1_vision z1_realsense.launch.py    # HW Z1 + RealSense + TF
-ros2 launch z1_vision z1_perception.launch.py   # YOLO torso + surface
-ros2 launch z1_vision z1_control.launch.py      # FSM + IK + impedance
-ros2 run z1_vision z1_keyboard_safety           # safety interattivo
-\end{lstlisting}
-
+\subsection*{Comandi tastiera (z1\_keyboard\_safety)}
 \begin{center}
 \begin{tabular}{ll}
 \toprule
@@ -576,22 +186,288 @@ ros2 run z1_vision z1_keyboard_safety           # safety interattivo
 \end{tabular}
 \end{center}
 
-% -------------------------------------------------------
-\subsection*{Monitoraggio generale}
-% -------------------------------------------------------
+% ============================================================
+\section{Architettura}
+% ============================================================
+
+\subsection*{FSM z1\_FSM.py — stati}
+
+\begin{center}
+\begin{tabular}{lp{9.5cm}}
+\toprule
+\textbf{Stato} & \textbf{Descrizione} \\
+\midrule
+\texttt{HOMING}              & Stato iniziale. Porta il braccio in home pose via IK/JTC \\
+\texttt{WAITING}             & Aspetta target LOCKED da RealSense tracker \\
+\texttt{BODY\_SCANNING}      & Scansione a griglia per trovare posizione ottimale del torso \\
+\texttt{CHECKING\_WORKSPACE} & Verifica raggiungibilità target (Pinocchio, non bloccante) \\
+\texttt{APPROACHING}         & Invia goal IK verso il target \\
+\texttt{WAIT\_IK\_DONE}      & Attende \texttt{/ik\_done=True} dal nodo IK \\
+\texttt{SWITCHING\_TO\_TORQUE} & Switch JTC $\to$ torque\_controller \\
+\texttt{IMPEDANCE\_RUNNING}  & Impedance controller: approach $\to$ hold $\to$ retract \\
+\texttt{SWITCHING\_TO\_JTC}  & Switch torque\_controller $\to$ JTC \\
+\texttt{SCAN\_PRELIFT}       & Retrazione tra punti FAST \\
+\texttt{EMERGENCY}           & Stop bloccante, attende \texttt{reset} da tastiera \\
+\texttt{FAULT}               & Errore fatale (switch fallito) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection*{FSM wbc\_coordinator.py — stati}
+
+\begin{center}
+\begin{tabular}{lp{9.5cm}}
+\toprule
+\textbf{Stato} & \textbf{Descrizione} \\
+\midrule
+\texttt{IDLE}         & Attende rilevamento LYING con confidenza $\geq$ soglia \\
+\texttt{APPROACHING}  & QP attivo: Spot naviga + Z1 punta il paziente simultaneamente \\
+\texttt{CONFIRMING}   & Confidenza Orbbec scesa: braccio mantiene ultima stima \\
+\texttt{HANDOFF}      & Orbbec perso: WBC disabilitato, z1\_FSM prende controllo \\
+\texttt{SCANNING}     & z1\_FSM attivo, WBC dormiente, Spot fermo \\
+\texttt{WS\_EXTENSION}& Punto FAST irraggiungibile: QP micro-step Spot + arm compensation \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection*{Topic principali}
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Topic} & \textbf{Tipo} & \textbf{Descrizione} \\
+\midrule
+\texttt{/z1/ik\_goal\_pose}             & PoseStamped & Goal IK da z1\_FSM (entra nel mux) \\
+\texttt{/wbc/ik\_goal\_pose}            & PoseStamped & Goal IK da WBC QP (entra nel mux) \\
+\texttt{/ik\_goal\_pose}                & PoseStamped & Uscita mux $\to$ z1\_ik\_to\_jtc \\
+\texttt{/wbc/enable}                    & Bool        & Attiva priorità WBC nel mux \\
+\texttt{/ik\_enable}                    & Bool        & Abilita nodo IK \\
+\texttt{/ik\_done}                      & Bool        & Fine movimento JTC \\
+\texttt{/my\_spot/cmd\_vel}             & Twist       & Velocità base Spot (da WBC QP) \\
+\texttt{/wbc/ee\_goal}                  & PoseStamped & Goal EE da wbc\_coordinator a QP \\
+\texttt{/wbc/state}                     & String      & Stato FSM coordinator \\
+\texttt{/wbc/ws\_request}               & Bool        & z1\_FSM chiede WS extension \\
+\texttt{/z1\_fsm/state}                 & String      & Stato FSM z1 \\
+\texttt{/torso\_target\_ee\_locked}     & PoseStamped & Target EE quando tracker LOCKED \\
+\texttt{/torso\_surface\_frame}         & PoseStamped & Piano superficie torso (PCA) \\
+\texttt{/surface\_signed\_distance}     & Float32     & Distanza TCP--superficie \\
+\texttt{/laying\_human/approach\_point} & PoseStamped & Approach point da Orbbec \\
+\texttt{/human\_pose/posture}           & String      & STANDING / SITTING / LYING \\
+\texttt{/human\_pose/posture\_confidence} & Float32  & Confidenza classificatore postura \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ============================================================
+\section{DONE — Funzionalità implementate}
+% ============================================================
+
+\begin{donebox}
+\subsection*{Stack Z1 (z1\_vision)}
+\begin{itemize}[leftmargin=1.5em]
+  \item[\checkmark] Pipeline base: YOLO11 + Kalman 3D + FSM IDLE/ESTIMATING/LOCKED
+  \item[\checkmark] IK Jacobiana pseudo-inversa smorzata + smoothstep quintico + JTC
+  \item[\checkmark] \texttt{realsense\_surface\_node}: stima piano torso da depth ROI (PCA)
+  \item[\checkmark] Impedance controller (500 Hz): APPROACH $\to$ HOLD $\to$ RETRACT con
+        compensazione gravity+coriolis
+  \item[\checkmark] \texttt{safe\_controller\_switch}: switch JTC $\leftrightarrow$ torque
+  \item[\checkmark] Workspace checker (Pinocchio + L-BFGS-B), clip a max\_reach $-$ 30\,cm
+  \item[\checkmark] HOMING, EMERGENCY, keyboard safety (H/ESC/R/Q)
+  \item[\checkmark] Body Search Scan 3 fasi: wrist sweep $\to$ arco $\to$ refinement adattivo;
+        early stop, fallback, stima 3D multi-vista
+  \item[\checkmark] Protocollo FAST: Hub $\to$ Subxiphoid $\to$ RUQ $\to$ LUQ $\to$ Suprapubic;
+        punti calcolati da keypoint YOLO, clippati a bbox torso
+  \item[\checkmark] Test su robot reale: ciclo FAST completo funzionante
+\end{itemize}
+
+\subsection*{Stack Spot (spot\_perception)}
+\begin{itemize}[leftmargin=1.5em]
+  \item[\checkmark] Package \texttt{spot\_perception}: YOLO11 skeleton, posture classifier,
+        laying human detector, approach point
+  \item[\checkmark] Launch file con parametri GPU Jetson (\texttt{device: '0'}, \texttt{use\_half: true})
+  \item[\checkmark] Driver Orbbec (\texttt{src/orbbec\_camera}) presente in workspace
+\end{itemize}
+
+\subsection*{WBC Spot+Z1 (spot\_control) — aprile 2026}
+\begin{itemize}[leftmargin=1.5em]
+  \item[\checkmark] Refactoring: \texttt{teresa\_coordinator} + \texttt{spot\_navigation}
+        unificati in \texttt{spot\_control}
+  \item[\checkmark] \texttt{teresa\_mission.py}: geometria approccio laterale (asse corpo COCO,
+        scelta lato, goal locking, crouch); ora usato solo per calcolo geometria,
+        navigazione gestita da WBC
+  \item[\checkmark] \texttt{wbc\_math.py}: funzioni pure QP — \texttt{compute\_j\_base},
+        \texttt{compute\_j\_holistic}, \texttt{manipulability}, \texttt{wbc\_split}
+        (weighted damped least-squares); 14/14 test pytest
+  \item[\checkmark] \texttt{wbc\_qp\_controller.py}: nodo ROS2 — legge TF + joint\_states,
+        Jacobiano olistico (J\_arm Pinocchio + J\_base ruotato in odom), QP ogni 1.5\,s,
+        pubblica \texttt{/wbc/ik\_goal\_pose} + \texttt{/my\_spot/cmd\_vel}
+  \item[\checkmark] \texttt{wbc\_coordinator.py}: FSM 6 stati — gestisce fasi approccio,
+        handoff Orbbec$\to$RealSense, scanning, workspace extension
+  \item[\checkmark] \texttt{ik\_goal\_mux.py}: multiplexer con priorità —
+        WBC $>$ z1\_FSM su \texttt{/ik\_goal\_pose} quando \texttt{/wbc/enable=True}
+  \item[\checkmark] \texttt{wbc.launch.py}: TF statico \texttt{body}$\to$\texttt{link00}
+        (parametrizzabile) + mux + QP controller + coordinator
+\end{itemize}
+\end{donebox}
+
+% ============================================================
+\section{TODO}
+% ============================================================
+
+\begin{todobox}
+\subsection*{Alta priorità — Jetson setup \& integrazione}
+\begin{itemize}[leftmargin=1.5em]
+  \item[$\square$] \textbf{Jetson setup}: ROS2 Humble, Pinocchio, driver Z1,
+        RealSense SDK, Orbbec SDK, YOLO11
+  \item[$\square$] \textbf{Test \texttt{spot\_perception} su Jetson}: verificare
+        \texttt{yolo\_skeleton}, \texttt{posture\_classifier}, \texttt{laying\_human\_detector}
+        con Orbbec reale
+  \item[$\square$] \textbf{Configurare \texttt{ROS\_DOMAIN\_ID}} comune Jetson $\leftrightarrow$ SpotCore;
+        verificare che i topic critici attraversino la rete
+\end{itemize}
+
+\subsection*{Alta priorità — calibrazione hardware}
+\begin{itemize}[leftmargin=1.5em]
+  \item[$\square$] \textbf{Misurare offset fisico \texttt{body}$\to$\texttt{link00}}:
+        dopo montaggio Z1 su Spot, aggiornare \texttt{wbc.launch.py}
+        (\texttt{z1\_x}, \texttt{z1\_y}, \texttt{z1\_z})
+  \item[$\square$] \textbf{Verificare Y clipping FAST}: controllare che tutti i punti
+        rimangano entro il bounding box del torso nelle varie posture paziente
+\end{itemize}
+
+\subsection*{Alta priorità — test WBC}
+\begin{itemize}[leftmargin=1.5em]
+  \item[$\square$] \textbf{Test APPROACHING}: verificare che braccio si muova
+        simultaneamente a Spot; monitorare log \texttt{wbc\_qp\_controller}
+        (\texttt{m}, \texttt{vx}, \texttt{wz}, \texttt{|dp|})
+  \item[$\square$] \textbf{Tuning QP}: regolare \texttt{lam\_arm}, \texttt{lam\_base},
+        \texttt{kp\_pos} in \texttt{wbc\_params.yaml} dopo primi test reali
+\end{itemize}
+
+\subsection*{Media priorità}
+\begin{itemize}[leftmargin=1.5em]
+  \item[$\square$] \textbf{Unificare pipeline YOLO sulla Jetson}: singola istanza YOLO11
+        per Orbbec (skeleton 17 joint) e RealSense (torso center),
+        evitando doppio caricamento pesi in VRAM
+  \item[$\square$] \textbf{Tuning griglia body scan}: valutare se \texttt{ext\_y} e
+        \texttt{ext\_z} coprono correttamente la zona torso sul robot reale
+\end{itemize}
+
+\subsection*{Bassa priorità / futuri miglioramenti}
+\begin{itemize}[leftmargin=1.5em]
+  \item[$\square$] \textbf{Logging}: ROS bag recording automatico al launch
+        con i topic principali (FSM state, torso target, scan point, impedance)
+  \item[$\square$] \textbf{Visualizzazione RViz}: marker per WBC state, approach point,
+        workspace reachability, skeleton Spot
+  \item[$\square$] \textbf{Multi-persona}: gestione del caso in cui YOLO rileva
+        più persone (attualmente prende la prima/più vicina)
+\end{itemize}
+\end{todobox}
+
+% ============================================================
+\section{Sequenza di avvio dettagliata}
+% ============================================================
+
+\begin{warnbox}
+\textbf{Prerequisito}: workspace compilato e sourced su Jetson.
 \begin{lstlisting}
-# Percezione Spot
+cd ~/TERESA_ws
+colcon build --packages-select z1_vision spot_perception spot_control
+source install/setup.bash
+export ROS_DOMAIN_ID=0   # deve matchare su Jetson e SpotCore
+\end{lstlisting}
+\end{warnbox}
+
+% -------------------------------------------------------
+\subsection*{Livello 0 — Solo percezione Spot (Orbbec, Spot spento)}
+% -------------------------------------------------------
+Test rilevamento scheletro, postura, approach point con Orbbec reale,
+senza Spot e senza Z1.
+
+\begin{lstlisting}
+# Terminale 1 — Jetson
+ros2 launch spot_perception spot_perception.launch.py
+
+# Terminale 2 — monitoraggio
 ros2 topic echo /human_pose/posture
 ros2 topic echo /human_pose/posture_confidence
+ros2 topic echo /laying_human/approach_point
+\end{lstlisting}
 
-# Coordinator
-ros2 topic echo /teresa/fsm_state   # oppure vedere in RViz
+RViz — topic utili: \texttt{/human\_pose/skeleton\_markers},
+\texttt{/human\_pose/bounding\_box}, \texttt{/laying\_human/bbox}
 
-# Z1 (livello 4)
-ros2 topic echo /z1_fsm/state
-ros2 topic echo /torso_target_ee_locked
-ros2 topic echo /surface_signed_distance
-ros2 run z1_vision fk_reader
+% -------------------------------------------------------
+\subsection*{Livello 1 — Solo Z1 (senza Spot)}
+% -------------------------------------------------------
+Test braccio Z1 standalone: homing, body scan, FAST scan con RealSense.
+
+\begin{lstlisting}
+# Terminale 1 — hardware + TF
+ros2 launch z1_vision z1_realsense.launch.py use_rviz:=true
+
+# Terminale 2 — percezione RealSense
+ros2 launch z1_vision z1_perception.launch.py
+
+# Terminale 3 — FSM + IK + impedance
+ros2 launch z1_vision z1_control.launch.py fsm_delay:=5.0
+
+# Terminale 4 — safety
+ros2 run z1_vision z1_keyboard_safety
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection*{Livello 2 — Percezione + geometria approccio (Spot spento)}
+% -------------------------------------------------------
+Verifica la geometria di approccio in RViz senza muovere Spot.
+\texttt{teresa\_mission} calcola asse corpo, goal laterale, safe zone.
+
+\begin{lstlisting}
+# Terminale 1 — percezione Spot
+ros2 launch spot_perception spot_perception.launch.py
+
+# Terminale 2 — geometria approccio (dry_run = default true, Spot non si muove)
+ros2 launch spot_control teresa_mission.launch.py
+\end{lstlisting}
+
+RViz — topic coordinator: \texttt{/teresa/body\_axis}, \texttt{/teresa/approach\_goal},
+\texttt{/teresa/safe\_zone}, \texttt{/teresa/fsm\_state}
+
+% -------------------------------------------------------
+\subsection*{Livello 3 — Sistema completo TERESA (Spot + Z1 + WBC)}
+% -------------------------------------------------------
+Sistema integrato: WBC coordina approccio Spot+Z1, poi z1\_FSM esegue FAST scan.
+
+\begin{lstlisting}
+# Terminale 1 — SpotCore (SSH)
+ros2 launch spot_ros2 spot_driver.launch.py
+
+# Terminale 2 — Jetson: percezione Spot (Orbbec)
+ros2 launch spot_perception spot_perception.launch.py
+
+# Terminale 3 — Jetson: hardware Z1 + RealSense + TF
+ros2 launch z1_vision z1_realsense.launch.py use_rviz:=true
+
+# Terminale 4 — Jetson: percezione Z1 (YOLO torso + surface)
+ros2 launch z1_vision z1_perception.launch.py
+
+# Terminale 5 — Jetson: FSM + IK + impedance
+ros2 launch z1_vision z1_control.launch.py fsm_delay:=5.0
+
+# Terminale 6 — Jetson: WBC (mux + QP controller + coordinator)
+ros2 launch spot_control wbc.launch.py
+# dopo montaggio fisico Z1:
+# ros2 launch spot_control wbc.launch.py z1_x:=0.28 z1_z:=0.65
+
+# Terminale 7 — Jetson: safety
+ros2 run z1_vision z1_keyboard_safety
+\end{lstlisting}
+
+\textbf{Monitoraggio:}
+\begin{lstlisting}
+ros2 topic echo /wbc/state           # fase WBC corrente
+ros2 topic echo /z1_fsm/state        # fase Z1 corrente
+ros2 topic echo /human_pose/posture  # rilevamento paziente
+ros2 topic echo /laying_human/approach_point  # goal approccio
 \end{lstlisting}
 
 % ============================================================
@@ -604,47 +480,54 @@ ros2 run z1_vision fk_reader
 \textbf{File} & \textbf{Ruolo} \\
 \midrule
 \endhead
-\texttt{z1\_FSM.py}                        & FSM principale (12 stati, include BODY\_SCANNING) \\
-\textcolor{branchpurple}{\texttt{body\_search\_scanner.py}} & \textcolor{branchpurple}{Classe BodySearchScanner: FSM interna griglia scan} \\
+\multicolumn{2}{l}{\textit{Package \texttt{z1\_vision} (Jetson)}} \\
+\midrule
+\texttt{z1\_FSM.py}                        & FSM principale Z1 (12 stati, FAST protocol) \\
+\texttt{body\_search\_scanner.py}          & Scan a griglia 3 fasi per trovare torso \\
 \texttt{z1\_ik\_to\_jtc.py}                & IK Pinocchio $\to$ JTC action \\
-\texttt{impedance\_controller\_realsense.py}& Controllo impedenza cartesiana 500 Hz \\
-\texttt{safe\_controller\_switch.py}        & Switch JTC $\leftrightarrow$ torque (servizi ROS2) \\
+\texttt{impedance\_controller\_realsense.py}& Impedenza cartesiana 500\,Hz, torque control \\
+\texttt{safe\_controller\_switch.py}        & Switch JTC $\leftrightarrow$ torque controller \\
 \texttt{workspace\_checker.py}             & Raggiungibilità workspace (Pinocchio + scipy) \\
 \texttt{z1\_yolo\_torso\_tracker.py}        & YOLO11 + Kalman 3D + lock + scan mode \\
 \texttt{realsense\_surface\_node.py}        & Stima piano torso (PCA depth ROI) \\
-\texttt{z1\_keyboard\_safety.py}           & Safety node interattivo da terminale \\
-\texttt{kalman\_filter.py}                 & Filtro Kalman 3D [x,y,z,vx,vy,vz] \\
-\texttt{fk\_reader.py}                     & Utility: FK end-effector da joint\_states \\
+\texttt{z1\_keyboard\_safety.py}           & Safety node interattivo \\
 \midrule
 \multicolumn{2}{l}{\textit{Package \texttt{spot\_perception} (Jetson, Orbbec)}} \\
 \midrule
-\texttt{yolo\_skeleton\_spot.py}            & YOLO11 skeleton 17 joint + Kalman + TF $\to$ body frame \\
+\texttt{yolo\_skeleton\_spot.py}            & YOLO11 skeleton 17 joint + Kalman + TF \\
 \texttt{posture\_classifier.py}            & Classifica STANDING / SITTING / LYING \\
-\texttt{laying\_human\_detector.py}        & Rileva persona sdraiata $\to$ approach point (test/RViz) \\
-\texttt{human\_bounding\_box\_visualizer.py}& Bbox 3D corpo intero e torso (RViz) \\
+\texttt{laying\_human\_detector.py}        & Persona sdraiata $\to$ approach point \\
 \texttt{depth\_processing.py}              & Depth lookup con window mediana + outlier filter \\
-\texttt{skeleton\_utils.py}               & Constraint lunghezza torso, COCO edges, smoothing \\
 \midrule
-\multicolumn{2}{l}{\textit{Package \texttt{teresa\_coordinator} (Jetson)}} \\
+\multicolumn{2}{l}{\textit{Package \texttt{spot\_control} (Jetson)}} \\
 \midrule
-\texttt{teresa\_mission.py}                & FSM missione: geometria approccio laterale, navigazione
-                                             Spot, crouch; 5 stati: IDLE $\to$ COMPUTING\_GOAL
-                                             $\to$ NAVIGATING $\to$ ARRIVED $\to$ CROUCHING
-                                             $\to$ READY\_FOR\_SCAN \\
-\texttt{launch/teresa\_mission.launch.py}  & Launch con argomenti \texttt{dry\_run},
-                                             \texttt{preferred\_side}, \texttt{approach\_margin},
-                                             \texttt{crouch\_height} \\
+\texttt{wbc\_math.py}                      & Funzioni pure QP: J\_base, J\_holistic,
+                                             manipulability, wbc\_split \\
+\texttt{wbc\_qp\_controller.py}            & Nodo QP: TF+joints $\to$ WBC split $\to$
+                                             \texttt{/wbc/ik\_goal\_pose} + \texttt{cmd\_vel} \\
+\texttt{wbc\_coordinator.py}               & FSM 6 stati: IDLE/APPROACHING/CONFIRMING/
+                                             HANDOFF/SCANNING/WS\_EXTENSION \\
+\texttt{ik\_goal\_mux.py}                  & Mux priorità: WBC $>$ z1\_FSM su
+                                             \texttt{/ik\_goal\_pose} \\
+\texttt{teresa\_mission.py}                & Geometria approccio laterale Spot + crouch \\
 \midrule
-\texttt{config/z1\_fsm\_params.yaml}        & Parametri FSM (home pose, topic, workspace) \\
-\texttt{config/z1\_ik\_jtc\_params.yaml}    & Parametri IK/JTC (\texttt{ik\_rot\_weight: 0.8}) \\
-\texttt{config/z1\_yolo\_torso\_params.yaml}& Parametri YOLO/Kalman/lock \\
-\texttt{config/impedance\_control\_params.yaml} & Parametri impedance (guadagni, timing) \\
-\texttt{config/surface\_params.yaml}        & Parametri surface node \\
-\textcolor{branchpurple}{\texttt{config/body\_search\_params.yaml}} & \textcolor{branchpurple}{Parametri griglia scan (ny$\times$nz, lookat, timeout, early stop)} \\
+\multicolumn{2}{l}{\textit{Config files}} \\
 \midrule
-\texttt{launch/z1\_control.launch.py}       & Avvia stack controllo \\
-\texttt{launch/z1\_perception.launch.py}    & Avvia stack percezione \\
-\texttt{launch/z1\_realsense.launch.py}     & Avvia HW robot + camera + TF \\
+\texttt{z1\_fsm\_params.yaml}              & Parametri FSM Z1 (home, topic, workspace) \\
+\texttt{z1\_ik\_jtc\_params.yaml}          & IK/JTC (\texttt{ik\_rot\_weight: 0.8}) \\
+\texttt{z1\_yolo\_torso\_params.yaml}      & YOLO/Kalman/lock \\
+\texttt{impedance\_control\_params.yaml}   & Guadagni impedance, timing \\
+\texttt{body\_search\_params.yaml}         & Griglia scan (ny$\times$nz, lookat, early stop) \\
+\texttt{wbc\_params.yaml}                  & QP gains, update rate, TF frames,
+                                             velocity limits \\
+\midrule
+\multicolumn{2}{l}{\textit{Launch files}} \\
+\midrule
+\texttt{z1\_vision/z1\_control.launch.py}       & FSM + IK + impedance + safety \\
+\texttt{z1\_vision/z1\_perception.launch.py}    & YOLO torso + surface node \\
+\texttt{z1\_vision/z1\_realsense.launch.py}     & HW Z1 + RealSense + TF \\
+\texttt{spot\_control/wbc.launch.py}            & TF body$\to$link00 + mux + QP + coordinator \\
+\texttt{spot\_control/teresa\_mission.launch.py}& Geometria approccio (dry\_run default) \\
 \bottomrule
 \end{longtable}
 \end{center}
@@ -654,23 +537,27 @@ ros2 run z1_vision fk_reader
 % ============================================================
 
 \begin{itemize}
-  \item \textbf{IK}: Jacobiana pseudo-inversa smorzata (\emph{damped least squares}),
-        frame LOCAL, smoothstep quintico (zero velocità a inizio/fine),
+  \item \textbf{IK}: Jacobiana pseudo-inversa smorzata, frame LOCAL\_WORLD\_ALIGNED,
+        smoothstep quintico (zero velocità a inizio/fine),
         joint unwrap con \texttt{\_make\_target\_near}.
         \texttt{ik\_rot\_weight: 0.8} per EE perpendicolare alla superficie
-  \item \textbf{Kalman}: dt adattivo dal timestamp immagine,
-        \texttt{vel\_damping = 0.9}, covarianza noise configurabile da YAML
-  \item \textbf{Lock tracker}: varianza soglia su 20 frame + 5 check consecutivi sotto soglia
-  \item \textbf{Body scan look-at}: lookat $=$ home\_pos $+$ lookat\_dist $\times$ X\_ee\_home.
-        Rotazione per ogni punto griglia via \texttt{\_orientation\_for\_xee()} (Rodrigues,
-        rotazione minima da home). Errore angolare $< 5°$ per variazioni di distanza $\pm 50\%$
-  \item \textbf{Impedance}: 500 Hz, PID cartesiano + joint-space polso (J4--J6),
-        compensazione gravity+coriolis, Jacobiano LOCAL\_WORLD\_ALIGNED
-  \item \textbf{URDF path} (hardcoded): \\
+  \item \textbf{WBC QP}: weighted damped least-squares,
+        $w_{\text{arm}} = \lambda_{\text{arm}} / (m + \varepsilon)$,
+        $w_{\text{base}} = \lambda_{\text{base}}$;
+        alta manipolabilità $\Rightarrow$ braccio preferito, bassa $\Rightarrow$ base contribuisce di più.
+        Update ogni 1.5\,s (rispetta \texttt{traj\_min\_time=1.0\,s} di z1\_ik\_to\_jtc)
+  \item \textbf{IK Goal Mux}: z1\_FSM pubblica su \texttt{/z1/ik\_goal\_pose};
+        WBC pubblica su \texttt{/wbc/ik\_goal\_pose};
+        il mux seleziona in base a \texttt{/wbc/enable}
+  \item \textbf{TF body$\to$link00}: offset stimato $x=0.30$\,m, $z=0.70$\,m.
+        \textbf{Da misurare fisicamente dopo montaggio Z1 su Spot}
+  \item \textbf{URDF path} (hardcoded in yaml): \\
         \texttt{/home/andrea/Ros2\_repositories/unitree\_z1\_ws/install/}\\
         \texttt{z1\_description/share/z1\_description/urdf/z1.urdf}
-  \item \textbf{Branch}: \texttt{FSM\_main} (stabile) $\leftarrow$ base di \texttt{Z1\_realsense}
-        (feature body scan, da testare sul robot reale poi fare merge)
+  \item \textbf{Kalman}: dt adattivo dal timestamp immagine,
+        \texttt{vel\_damping = 0.9}
+  \item \textbf{Impedance}: 500\,Hz, PID cartesiano + joint-space polso (J4--J6),
+        compensazione gravity+coriolis
 \end{itemize}
 
 \end{document}

@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 import os
 from glob import glob
 
-package_name = 'teresa_coordinator'
+package_name = 'spot_control'
 
 setup(
     name=package_name,
@@ -14,17 +14,23 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'),
             glob('launch/*.py')),
+        (os.path.join('share', package_name, 'config'),
+            glob('config/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='andrea',
     maintainer_email='andrea.dantona@unife.it',
-    description='Mission coordinator for TERESA: Spot navigation + Z1 FAST scan orchestration',
+    description='Spot navigation, mission coordination and WBC orchestration for TERESA',
     license='TODO',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'teresa_mission = teresa_coordinator.teresa_mission:main',
+            'teresa_mission      = spot_control.teresa_mission:main',
+            'spot_goal_navigator = spot_control.spot_goal_navigator:main',
+            'wbc_qp_controller   = spot_control.wbc_qp_controller:main',
+            'wbc_coordinator     = spot_control.wbc_coordinator:main',
+            'ik_goal_mux         = spot_control.ik_goal_mux:main',
         ],
     },
 )

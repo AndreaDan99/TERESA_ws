@@ -1,0 +1,44 @@
+wbc_qp_controller:
+  ros__parameters:
+    urdf_path: '/home/andrea/Ros2_repositories/unitree_z1_ws/install/z1_description/share/z1_description/urdf/z1.urdf'
+
+    # TF frames
+    odom_frame:      'my_spot/odom'
+    body_frame:      'my_spot/body'
+    z1_base_frame:   'link00'
+    ee_frame:        'link06'
+
+    # QP weights
+    lam_arm:   1.0
+    lam_base:  1.0
+    damping:   1.0e-3
+
+    # Proportional gain EE error → desired velocity
+    kp_pos: 1.0    # [1/s]
+    kp_ang: 0.5    # [1/s]
+
+    # Velocity limits
+    vx_max:    0.4   # [m/s]
+    wz_max:    0.5   # [rad/s]
+    q_dot_max: 0.6   # [rad/s]
+
+    # Goal update period — must be >= traj_min_time in z1_ik_jtc_params.yaml (1.0s)
+    update_period: 1.5   # [s]
+
+    # Topics — output to mux, not directly to z1_ik_to_jtc
+    ik_goal_topic:      '/wbc/ik_goal_pose'
+    ik_enable_topic:    '/wbc/ik_enable'
+    cmd_vel_topic:      '/my_spot/cmd_vel'
+    joint_states_topic: '/joint_states'
+
+wbc_coordinator:
+  ros__parameters:
+    orbbec_confidence_threshold: 0.4
+    approach_done_distance: 0.8   # [m]
+
+    # Topics
+    posture_confidence_topic: '/human_pose/posture_confidence'
+    approach_point_topic:     '/laying_human/approach_point'
+    z1_fsm_state_topic:       '/z1_fsm/state'
+    wbc_goal_topic:           '/wbc/ee_goal'
+    wbc_enable_topic:         '/wbc/enable'

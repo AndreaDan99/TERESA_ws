@@ -18,13 +18,13 @@ def generate_launch_description():
     )
 
     params_file = PathJoinSubstitution([
-        FindPackageShare('spot_navigation'),
+        FindPackageShare('spot_control'),
         'config',
         'spot_nav_params.yaml',
     ])
 
     navigator_node = Node(
-        package='spot_navigation',
+        package='spot_control',
         executable='spot_goal_navigator',
         name='spot_goal_navigator',
         output='screen',

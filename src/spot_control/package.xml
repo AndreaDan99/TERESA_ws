@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>teresa_coordinator</name>
+  <name>spot_control</name>
   <version>0.0.0</version>
-  <description>Mission coordinator for TERESA: Spot navigation + Z1 FAST scan orchestration</description>
+  <description>Spot navigation, mission coordination and WBC orchestration for TERESA</description>
   <maintainer email="andrea.dantona@unife.it">andrea</maintainer>
   <license>TODO</license>
 

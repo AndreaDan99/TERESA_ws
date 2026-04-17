@@ -7,10 +7,10 @@ PREREQUISITO: spot_perception.launch.py già in esecuzione.
 
 Uso:
   # Test geometria senza muovere Spot
-  ros2 launch teresa_coordinator teresa_mission.launch.py dry_run:=true
+  ros2 launch spot_control teresa_mission.launch.py dry_run:=true
 
   # Movimento reale (richiede spot_ros2 su SpotCore)
-  ros2 launch teresa_coordinator teresa_mission.launch.py dry_run:=false
+  ros2 launch spot_control teresa_mission.launch.py dry_run:=false
 """
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo
@@ -42,7 +42,7 @@ def generate_launch_description():
     )
 
     mission_node = Node(
-        package='teresa_coordinator',
+        package='spot_control',
         executable='teresa_mission',
         name='teresa_mission',
         output='screen',
