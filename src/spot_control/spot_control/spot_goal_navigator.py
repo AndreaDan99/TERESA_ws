@@ -84,13 +84,13 @@ class SpotGoalNavigatorNode(Node):
         super().__init__('spot_goal_navigator')
 
         # ── Parameters ────────────────────────────────────────────────────────
-        self.declare_parameter('cmd_vel_topic',     '/cmd_vel')
+        self.declare_parameter('cmd_vel_topic',     '/my_spot/cmd_vel')
         self.declare_parameter('goal_tolerance',     0.3)
         self.declare_parameter('angular_speed_max',  0.5)
         self.declare_parameter('linear_speed_max',   0.4)
         self.declare_parameter('angle_threshold',    0.15)
-        self.declare_parameter('robot_frame',        'body')
-        self.declare_parameter('odom_frame',         'odom')
+        self.declare_parameter('robot_frame',        'my_spot/body')
+        self.declare_parameter('odom_frame',         'my_spot/odom')
         self.declare_parameter('update_rate',        10.0)
 
         self._p = _Params(self)
@@ -150,6 +150,9 @@ class SpotGoalNavigatorNode(Node):
                     self._on_start_key()
                 elif ch == '\x1b':  # ESC
                     self._on_estop_key()
+                elif ch == '\x03':  # Ctrl+C
+                    rclpy.shutdown()
+                    break
         except Exception:
             pass
         finally:
