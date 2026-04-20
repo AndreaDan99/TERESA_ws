@@ -1,6 +1,6 @@
 wbc_qp_controller:
   ros__parameters:
-    urdf_path: '/home/andrea/Ros2_repositories/unitree_z1_ws/install/z1_description/share/z1_description/urdf/z1.urdf'
+    urdf_path: ''   # auto-resolved via ament_index at runtime
 
     # TF frames
     odom_frame:      'my_spot/odom'
@@ -16,6 +16,15 @@ wbc_qp_controller:
     # Proportional gain EE error → desired velocity
     kp_pos: 1.0    # [1/s]
     kp_ang: 0.5    # [1/s]
+
+    # Chance-constraint dead zone: robot stops when inside uncertainty ball of radius
+    # z_delta * sigma_max.  z_delta = Gaussian quantile for confidence level 1-delta.
+    # z_delta=1.96 → 95% confidence, z_delta=1.645 → 90%, z_delta=2.576 → 99%.
+    z_delta: 1.96
+
+    # Yaw task gain: desired yaw rate = k_yaw * yaw_error [rad/s per rad]
+    # Trades off with EE position tracking via the extended 7×8 Jacobian.
+    k_yaw: 0.5
 
     # Velocity limits
     vx_max:    0.4   # [m/s]
@@ -34,7 +43,20 @@ wbc_qp_controller:
 wbc_coordinator:
   ros__parameters:
     orbbec_confidence_threshold: 0.4
-    approach_done_distance: 0.8   # [m]
+
+    # Handoff triggers when Spot body is within this distance of the approach_point [m].
+    # approach_point is published by laying_human_detector at approach_distance in front
+    # of the patient. Set handoff_distance to a small arrival tolerance (e.g. 0.3m).
+    handoff_distance: 0.05
+
+    # Kalman filter for approach point uncertainty estimation
+    approach_kf_process_noise: 1.0e-3   # [m²] patient lying still
+    approach_kf_meas_noise:    2.5e-3   # [m²] ~5cm std from Orbbec depth
+
+    # WS_EXTENSION bounding box (relative to Spot position at WS_EXTENSION entry)
+    ws_ext_fwd_limit: 0.20   # [m] max forward displacement
+    ws_ext_lat_limit: 0.20   # [m] max lateral displacement (±)
+    ws_ext_bwd_limit: 0.50   # [m] max backward displacement
 
     # Topics
     posture_confidence_topic: '/human_pose/posture_confidence'

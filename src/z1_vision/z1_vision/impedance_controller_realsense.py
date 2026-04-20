@@ -89,7 +89,11 @@ class ImpedanceController(Node):
         )
 
         # Carica parametri
-        urdf_path             = self.get_parameter('urdf_path').value
+        urdf_path = self.get_parameter('urdf_path').value
+        if not urdf_path:
+            import os
+            from ament_index_python.packages import get_package_share_directory
+            urdf_path = os.path.join(get_package_share_directory('z1_description'), 'urdf', 'z1.urdf')
         self.ee_frame_name    = self.get_parameter('end_effector_frame').value
         control_rate          = self.get_parameter('control_rate').value
         self.log_rate         = self.get_parameter('log_rate').value

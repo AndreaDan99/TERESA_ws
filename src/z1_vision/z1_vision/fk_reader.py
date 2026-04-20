@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 # leggi_posizione_fk.py
+import os
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 import pinocchio as pin
 import numpy as np
+from ament_index_python.packages import get_package_share_directory
 
-URDF_PATH = '/home/andrea/Ros2_repositories/unitree_z1_ws/install/z1_description/share/z1_description/urdf/z1.urdf'  # ← cambia questo
+URDF_PATH = os.path.join(get_package_share_directory('z1_description'), 'urdf', 'z1.urdf')
 EE_FRAME  = 'link06'
 
 class FKReader(Node):

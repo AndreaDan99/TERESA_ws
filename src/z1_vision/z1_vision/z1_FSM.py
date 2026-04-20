@@ -34,6 +34,7 @@ class Z1FSM(Node):
     FAULT                = "FAULT"
     BODY_SCANNING        = "BODY_SCANNING"
     SCAN_PAUSE           = "SCAN_PAUSE"
+    REQUESTING_WS_EXT    = "REQUESTING_WS_EXT"
 
     # States where the torque_controller may be active.
     # Any keyboard command arriving in these states must first switch to JTC.
@@ -48,8 +49,8 @@ class Z1FSM(Node):
 
         # ── Topic params ────────────────────────────────────────────────
         self.declare_parameter("torso_locked_topic",  "/torso_target_ee_locked")
-        self.declare_parameter("ik_enable_topic",     "/ik_enable")
-        self.declare_parameter("ik_goal_topic",       "/ik_goal_pose")
+        self.declare_parameter("ik_enable_topic",     "/z1/ik_enable")
+        self.declare_parameter("ik_goal_topic",       "/z1/ik_goal_pose")
         self.declare_parameter("ik_done_topic",       "/ik_done")
         self.declare_parameter("state_topic",         "/z1_fsm/state")
         self.declare_parameter("target_max_age_s",    0.5)
@@ -98,6 +99,13 @@ class Z1FSM(Node):
         self._wait_ik_timeout = float(self.get_parameter("wait_ik_timeout_s").value)
         self._scan_pause_s = float(self.get_parameter("scan_pause_s").value)
         self._wait_ik_start: float | None = None
+
+        # ── WBC workspace extension interface ───────────────────────────
+        self.declare_parameter('wbc_ws_request_topic', '/wbc/ws_request')
+        self.declare_parameter('wbc_ee_goal_topic',    '/wbc/ee_goal')
+        self.declare_parameter('wbc_state_topic',      '/wbc/state')
+        self.declare_parameter('ws_ext_max_retries',   3)
+        self._ws_ext_max_retries = int(self.get_parameter('ws_ext_max_retries').value)
 
         # ── Workspace out-of-range topic ────────────────────────────────
         self.declare_parameter("target_out_of_workspace_topic", "/target_out_of_workspace")
@@ -233,6 +241,11 @@ class Z1FSM(Node):
         #   la scan (da /torso_scan_point). Usata per look-at dinamico: quando
         #   il tracker inizia a vedere il torso, i goal IK successivi vengono
         #   riorientati verso la posizione reale invece del look-at fisso pre-calcolato.
+        # ── WS_EXTENSION state ───────────────────────────────────────────
+        self._wbc_state_str:      str                       = ''
+        self._ws_ext_retries:     int                       = 0
+        self._ws_ext_confirmed:   bool                      = False
+
         self._body_scan_done: bool                         = False
         self._body_scanner:   BodySearchScanner | None     = None
         self._scan_torso_estimate: np.ndarray | None       = None
@@ -259,6 +272,8 @@ class Z1FSM(Node):
         self.create_subscription(String,            self.keyboard_cmd_topic,   self._on_keyboard_cmd,  10)
         self.create_subscription(Float32MultiArray, '/torso_scan_point',       self._on_scan_point,    10)
         self.create_subscription(String,            '/torso_tracker_state',    self._on_tracker_state, 10)
+        self.create_subscription(String,
+            self.get_parameter('wbc_state_topic').value, self._on_wbc_state, 10)
 
         # ── Publishers ──────────────────────────────────────────────────
         self.pub_ik_enable        = self.create_publisher(Bool,        self.ik_enable_topic,              10)
@@ -274,6 +289,10 @@ class Z1FSM(Node):
         self.pub_torso_scan_seed     = self.create_publisher(PointStamped, '/torso_scan_seed',    10)
         self.pub_torso_scan_keypoints = self.create_publisher(
             Float32MultiArray, '/torso_scan_keypoints', 10)
+        self.pub_wbc_ws_request = self.create_publisher(
+            Bool, self.get_parameter('wbc_ws_request_topic').value, 10)
+        self.pub_wbc_ee_goal = self.create_publisher(
+            PoseStamped, self.get_parameter('wbc_ee_goal_topic').value, 10)
 
         # ── Service clients: switch controller ──────────────────────────
         self.switch_to_torque_client = self.create_client(Trigger, '/safe_switch/to_torque')
@@ -334,6 +353,9 @@ class Z1FSM(Node):
         if msg.data:
             self.impedance_done = True
 
+    def _on_wbc_state(self, msg: String):
+        self._wbc_state_str = msg.data
+
     def _on_keyboard_cmd(self, msg: String):
         """Riceve comandi da z1_keyboard_safety via /z1_keyboard_cmd."""
         cmd = msg.data.strip().lower()
@@ -355,6 +377,7 @@ class Z1FSM(Node):
         if s == self.WAITING:
             self.ik_done                = False
             self._approach_command_sent = False
+            self._ws_ext_retries        = 0
             self._scan_mgr.reset()   # reset indice scan ad ogni nuovo ciclo
 
         if s == self.CHECKING_WORKSPACE:
@@ -424,9 +447,14 @@ class Z1FSM(Node):
                 f'→ poi {next_pt}'
             )
 
+        if s == self.REQUESTING_WS_EXT:
+            self._ws_ext_confirmed = False
+            self._wbc_state_str    = ''
+
         if s == self.HOMING:
             self.ik_done              = False
             self._homing_command_sent = False
+            self._ws_ext_retries      = 0
             # NON resettare _body_scan_done qui: il reset va fatto solo su
             # comando esplicito 'home' / 'reset', non dopo il body scan.
 
@@ -1158,19 +1186,38 @@ class Z1FSM(Node):
             self._target_out_of_ws = was_clipped
             self.pub_out_of_workspace.publish(Bool(data=was_clipped))
 
+            self._clipped_target = self._make_clipped_pose(
+                self._checker_input_pose, clipped_pos
+            )
+
             if was_clipped:
                 self.get_logger().warn(
                     f"⚠️  Target fuori workspace → clippato a {max_safe:.3f} m dalla base "
                     f"(pubblicato /target_out_of_workspace=True)"
                 )
+                if self._ws_ext_retries < self._ws_ext_max_retries:
+                    approach_goal = self._make_approach_pose()
+                    if approach_goal is not None:
+                        self.pub_wbc_ee_goal.publish(approach_goal)
+                        self.pub_wbc_ws_request.publish(Bool(data=True))
+                        self.get_logger().info(
+                            f'🤖 WS_EXT request '
+                            f'[{self._ws_ext_retries + 1}/{self._ws_ext_max_retries}]: '
+                            f'Spot riposizionamento richiesto'
+                        )
+                        self.set_state(self.REQUESTING_WS_EXT)
+                        return
+                else:
+                    self.get_logger().warn(
+                        f'⚠️  WS_EXT max retries ({self._ws_ext_max_retries}) raggiunti '
+                        f'→ procedo con target clippato'
+                    )
             else:
                 self.get_logger().info(
                     f"✅ Target nel workspace (max_safe = {max_safe:.3f} m)"
                 )
+                self._ws_ext_retries = 0
 
-            self._clipped_target = self._make_clipped_pose(
-                self._checker_input_pose, clipped_pos
-            )
             self.set_state(self.APPROACHING)
 
         # ── APPROACHING ───────────────────────────────────────────────────
@@ -1563,6 +1610,20 @@ class Z1FSM(Node):
                         f'▶  SCAN_PAUSE terminata → APPROACHING {self._scan_mgr.current_name}'
                     )
                     self.set_state(self.APPROACHING)
+
+        # ── REQUESTING_WS_EXT ────────────────────────────────────────────
+        elif self.state == self.REQUESTING_WS_EXT:
+            # Wait for WBC coordinator to acknowledge (→ WS_EXTENSION) then complete (→ SCANNING).
+            # _ws_ext_confirmed prevents false trigger from stale SCANNING messages.
+            if not self._ws_ext_confirmed and self._wbc_state_str == 'WS_EXTENSION':
+                self._ws_ext_confirmed = True
+            if self._ws_ext_confirmed and self._wbc_state_str == 'SCANNING':
+                self._ws_ext_retries += 1
+                self.get_logger().info(
+                    f'✅ Spot riposizionato (WS_EXT retry {self._ws_ext_retries}) '
+                    f'→ CHECKING_WORKSPACE'
+                )
+                self.set_state(self.CHECKING_WORKSPACE)
 
         # ── HOMING ────────────────────────────────────────────────────────
         elif self.state == self.HOMING:

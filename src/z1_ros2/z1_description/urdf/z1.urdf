@@ -257,7 +257,7 @@
       <ros>
         <use_sim_time>true</use_sim_time>
       </ros>
-      <parameters>/home/andrea/Ros2_repositories/unitree_z1_ws/install/z1_bringup/share/z1_bringup/config/z1_controllers.yaml</parameters>
+      <parameters>/workspace/install/z1_bringup/share/z1_bringup/config/z1_controllers.yaml</parameters>
       <robot_param>robot_description</robot_param>
       <robot_param_node>robot_state_publisher</robot_param_node>
       <controller_manager_name>controller_manager</controller_manager_name>

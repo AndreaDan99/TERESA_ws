@@ -462,12 +462,23 @@ ros2 launch spot_control wbc.launch.py
 ros2 run z1_vision z1_keyboard_safety
 \end{lstlisting}
 
+\textbf{Note avvio:}
+\begin{itemize}[leftmargin=1.5em]
+  \item T6 (WBC) va avviato \emph{dopo} T1--T5
+  \item z1\_FSM pubblica su \texttt{/z1/ik\_goal\_pose} $\to$ IK Goal Mux $\to$ \texttt{/ik\_goal\_pose} $\to$ z1\_ik\_to\_jtc.
+        \textbf{Senza T6 attivo, il braccio non si muove}
+  \item Handoff: WBC $\to$ z1\_FSM automatico quando Spot $<0.05$\,m dall'approach\_point
+  \item WS\_EXTENSION: se punto FAST fuori workspace, Spot micro-step max $\pm20$\,cm (laterale/avanti), illimitato indietro fino a 50\,cm
+\end{itemize}
+
 \textbf{Monitoraggio:}
 \begin{lstlisting}
-ros2 topic echo /wbc/state           # fase WBC corrente
-ros2 topic echo /z1_fsm/state        # fase Z1 corrente
-ros2 topic echo /human_pose/posture  # rilevamento paziente
-ros2 topic echo /laying_human/approach_point  # goal approccio
+ros2 topic echo /wbc/state                  # fase WBC: IDLE/APPROACHING/HANDOFF/SCANNING/WS_EXTENSION
+ros2 topic echo /z1_fsm/state              # fase Z1 corrente
+ros2 topic echo /human_pose/posture        # rilevamento paziente (LYING/STANDING/...)
+ros2 topic echo /laying_human/approach_point  # goal approccio Spot
+ros2 topic echo /wbc/target_uncertainty    # sigma_max Kalman [m] — incertezza target
+ros2 topic echo /wbc/desired_yaw           # yaw desiderato Spot [rad] — perp. corpo paziente
 \end{lstlisting}
 
 % ============================================================
@@ -505,8 +516,9 @@ ros2 topic echo /laying_human/approach_point  # goal approccio
                                              manipulability, wbc\_split \\
 \texttt{wbc\_qp\_controller.py}            & Nodo QP: TF+joints $\to$ WBC split $\to$
                                              \texttt{/wbc/ik\_goal\_pose} + \texttt{cmd\_vel} \\
-\texttt{wbc\_coordinator.py}               & FSM 6 stati: IDLE/APPROACHING/CONFIRMING/
-                                             HANDOFF/SCANNING/WS\_EXTENSION \\
+\texttt{wbc\_coordinator.py}               & FSM 5 stati: IDLE/APPROACHING/HANDOFF/SCANNING/WS\_EXTENSION.
+                                             Kalman $\mathbf{P}_{\text{pos}}$ gestisce
+                                             l'incertezza implicita (CONFIRMING rimosso) \\
 \texttt{ik\_goal\_mux.py}                  & Mux priorità: WBC $>$ z1\_FSM su
                                              \texttt{/ik\_goal\_pose} \\
 \texttt{teresa\_mission.py}                & Geometria approccio laterale Spot + crouch \\
@@ -545,7 +557,12 @@ ros2 topic echo /laying_human/approach_point  # goal approccio
         $w_{\text{arm}} = \lambda_{\text{arm}} / (m + \varepsilon)$,
         $w_{\text{base}} = \lambda_{\text{base}}$;
         alta manipolabilità $\Rightarrow$ braccio preferito, bassa $\Rightarrow$ base contribuisce di più.
-        Update ogni 1.5\,s (rispetta \texttt{traj\_min\_time=1.0\,s} di z1\_ik\_to\_jtc)
+        Update ogni 1.5\,s (rispetta \texttt{traj\_min\_time=1.0\,s} di z1\_ik\_to\_jtc).
+        \textbf{Yaw task}: Jacobiana estesa $7\times8$ con riga
+        $[0,\ldots,0,1]$ per allineare Spot perpendicolare all'asse testa--piedi.
+        \textbf{Stochastic dead zone}: velocità nulla quando EE già dentro bolla
+        $r = z_\delta \cdot \sigma_{\max}(\mathbf{P}_{\text{pos}})$
+        ($z_\delta=1.96$ $\Rightarrow$ 95\,\% confidence, \texttt{z\_delta} in yaml)
   \item \textbf{IK Goal Mux}: z1\_FSM pubblica su \texttt{/z1/ik\_goal\_pose};
         WBC pubblica su \texttt{/wbc/ik\_goal\_pose};
         il mux seleziona in base a \texttt{/wbc/enable}
@@ -559,5 +576,287 @@ ros2 topic echo /laying_human/approach_point  # goal approccio
   \item \textbf{Impedance}: 500\,Hz, PID cartesiano + joint-space polso (J4--J6),
         compensazione gravity+coriolis
 \end{itemize}
+
+% ============================================================
+\section{Direzioni per pubblicazione IEEE T-MRB}
+% ============================================================
+
+\subsection*{Perché T-MRB}
+
+IEEE Transactions on Medical Robotics and Bionics (Q1) è il target ideale:
+accetta system papers completi con validazione clinica, senza richiedere
+dimostrazioni formali da journal di controllo puro.
+Il fit è naturale: primo sistema completamente autonomo per FAST scan
+su legged mobile manipulator, con pipeline perception $\to$ WBC $\to$ scan.
+
+\subsection*{Stato implementazione (aggiornato 2026-04-18)}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Contributo} & \textbf{Codice} & \textbf{Paper} \\
+\midrule
+WBC olistico Spot+Z1 (8 DOF, QP) & \checkmark & da scrivere \\
+Uncertainty-aware dead zone ($z_\delta \cdot \sigma_{\max}$) & \checkmark & da scrivere \\
+Yaw task: Spot $\perp$ asse testa--piedi paziente & \checkmark & da scrivere \\
+Autonomous WS extension + safety box & \checkmark & da scrivere \\
+Pipeline completa: detection $\to$ approach $\to$ FAST scan & \checkmark & da scrivere \\
+Esperimenti su hardware reale + ablation & --- & \textbf{da eseguire} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Tutto il codice è pronto. Mancano solo esperimenti e stesura.}
+
+\subsection*{Titolo proposto per T-MRB}
+\begin{quote}
+  \textit{Autonomous FAST Ultrasound Scanning on a Legged Mobile Manipulator
+  with Uncertainty-Aware Whole-Body Control}
+\end{quote}
+
+% ============================================================
+\section{Scaletta paper IEEE T-RO}
+% ============================================================
+
+Formato: 12--14 pagine two-column IEEE\@.
+Titolo proposto: \textit{Uncertainty-Aware Whole-Body Control for Autonomous
+FAST Ultrasound Scanning on a Legged Manipulator}.
+
+% ----
+\subsection*{I. Introduction ($\sim$1.5 pag)}
+\begin{itemize}
+  \item Motivazione clinica: FAST scan in emergenza, necessità di robot mobile
+  \item Gap: WBC esistente assume target deterministico, non gestisce incertezza percettiva
+  \item Contributions (lista numerata — T-RO la richiede esplicitamente):
+    \begin{enumerate}
+      \item Uncertainty-aware WBC: accoppiamento formale Kalman $\to$ QP
+      \item Workspace-gradient continuo (vs trigger binario)
+      \item Sistema completo validato su Spot+Z1 hardware reale
+    \end{enumerate}
+\end{itemize}
+
+% ----
+\subsection*{II. Related Work ($\sim$1.5 pag)}
+\begin{itemize}
+  \item Mobile manipulation WBC (Haviland 2022, Khatib, Bayle 2003)
+  \item Legged robot manipulation (ANYmal, Spot papers)
+  \item Perception-aware control (stochastic MPC, risk-aware planning)
+  \item FAST scan robotico (stato arte: arm fisso, base ferma)
+\end{itemize}
+
+% ----
+\subsection*{III. Problem Formulation ($\sim$0.8 pag)}
+\begin{itemize}
+  \item Sistema: Spot (2 DOF non-olonomo) + Z1 (6 DOF)
+  \item Notazione: TF chain, frames, decision variable
+        $\mathbf{x} = [\dot{\mathbf{q}}^\top, v_x, \omega_z]^\top \in \mathbb{R}^8$
+  \item Obiettivo formale: tracking EE con incertezza target bayesiana
+\end{itemize}
+
+% ----
+\subsection*{IV. Method ($\sim$3.5 pag) \textnormal{--- cuore del paper}}
+
+\textbf{A. Holistic Jacobian}
+\begin{itemize}
+  \item $\mathbf{J}_{\text{base}}$ analitico (vincolo non-olonomo Spot)
+  \item $\mathbf{J}_{\text{holistic}} = [\mathbf{J}_{\text{arm}} \mid \mathbf{J}_{\text{base}}] \in \mathbb{R}^{6\times8}$
+\end{itemize}
+
+\textbf{B. Standard WBC QP} (baseline di partenza)
+\begin{itemize}
+  \item Weighted damped least-squares
+  \item Manipulability weighting: $w_{\text{arm}} = \lambda_{\text{arm}}/(m+\varepsilon)$
+\end{itemize}
+
+\textbf{C. Perception-Uncertainty-Aware WBC} ← \textit{contributo principale}
+\begin{itemize}
+  \item Kalman3D: modello, propagazione covarianza $\mathbf{P}$
+  \item Accoppiamento formale:
+        $\mathbf{v}_{\text{des}} = k_p \,\mathbf{P}_{\text{pos}}^{-1}\,\mathbf{e}$
+  \item Analisi: $\mathbf{P}\to\infty \Rightarrow$ robot si ferma;
+        $\mathbf{P}\to 0 \Rightarrow$ guadagno massimo
+  \item \textbf{Proposizione/Lemma}: bounded control action sotto incertezza
+        illimitata (dimostrazione formale richiesta da T-RO)
+\end{itemize}
+
+\textbf{D. Continuous Workspace-Gradient} ← \textit{contributo secondario}
+\begin{itemize}
+  \item $w(\mathbf{q})$: distanza dal boundary workspace Z1
+  \item Termine addizionale nel QP:
+        $\lambda_{\text{ws}}\,\nabla w(\mathbf{q})^\top \dot{\mathbf{q}}$
+\end{itemize}
+
+% ----
+\subsection*{V. System Architecture ($\sim$1 pag)}
+\begin{itemize}
+  \item FSM 6 stati (diagramma): IDLE / APPROACHING / CONFIRMING /
+        HANDOFF / SCANNING / WS\_EXTENSION
+  \item IK Goal Mux (priorità WBC $>$ z1\_FSM)
+  \item Sensor handoff Orbbec $\to$ RealSense
+  \item ROS2 topic graph (figura)
+\end{itemize}
+
+% ----
+\subsection*{VI. Experiments ($\sim$2.5 pag)}
+Vedere sezione successiva per dettaglio completo.
+Setup: manichino + AprilTag, griglia 3$\times$3 configurazioni, 10 trial per cella.
+
+% ----
+\subsection*{VII. Results \& Discussion ($\sim$1.5 pag)}
+\begin{itemize}
+  \item Tabelle quantitative con intervalli di confidenza
+  \item Failure modes osservati
+  \item Limitazioni: update rate 1.5\,s, offset TF stimato body$\to$link00
+\end{itemize}
+
+% ----
+\subsection*{VIII. Conclusion ($\sim$0.5 pag)}
+
+% ----
+\subsection*{Figure chiave (obbligatorie)}
+\begin{enumerate}
+  \item System overview diagram (Spot + Z1 + sensori + nodi ROS2)
+  \item TF chain completa
+  \item $\mathrm{tr}(\mathbf{P}(t))$ vs velocità comandata vs errore tracking
+        sullo stesso asse temporale (figura chiave di IV.C)
+  \item Workspace reachability map Z1 con gradient field
+  \item Box plot mission time B0 vs B1 vs B2 per distanza
+\end{enumerate}
+
+% ============================================================
+\section{Design degli esperimenti per IEEE T-RO}
+% ============================================================
+
+\subsection*{Claim da dimostrare}
+\begin{enumerate}
+  \item \textbf{C1} --- L'uncertainty-aware WBC riduce l'errore di tracking quando
+        la detection è incerta
+  \item \textbf{C2} --- Il WBC (base+arm simultanei) riduce il tempo di missione
+        rispetto a baseline arm-only
+  \item \textbf{C3} --- Il workspace-gradient riduce i fallimenti di missione
+        rispetto al trigger binario
+\end{enumerate}
+
+\subsection*{Baseline}
+\begin{itemize}
+  \item \textbf{B0} --- Spot fermo, solo Z1 (approccio classico in letteratura)
+  \item \textbf{B1} --- WBC standard, guadagni fissi, nessuna uncertainty
+        (sistema attuale)
+  \item \textbf{B2} --- WBC uncertainty-aware (metodo proposto)
+\end{itemize}
+
+\subsection*{Setup fisico}
+\begin{itemize}
+  \item Manichino antropomorfico come paziente
+  \item AprilTag sul torso per ground truth posizione target
+        (via \texttt{apriltag\_ros} + TF esterna)
+  \item Ground truth EE: FK con Pinocchio da joint states
+        (oppure mocap se disponibile)
+  \item Griglia 3$\times$3: distanza $\{1.0, 1.5, 2.0\}$\,m
+        $\times$ angolo $\{-30°, 0°, +30°\}$ = 9 configurazioni
+  \item 10 trial per configurazione per baseline $\Rightarrow$ 270 trial totali
+  \item Logging: \texttt{rosbag} completo, analisi offline Python/matplotlib
+  \item Statistiche: t-test o Mann-Whitney tra B1 e B2
+\end{itemize}
+
+% ----
+\subsection*{E1 — Uncertainty vs Tracking Error \textnormal{(valida C1, cuore del paper)}}
+
+\textbf{Procedura}: avvio missione con visibilità normale ($\mathbf{P}$ piccola),
+occlusione parziale del manichino a metà approach ($\mathbf{P}$ sale),
+rimozione occlusione ($\mathbf{P}$ scende).
+
+\textbf{Misure}:
+\begin{itemize}
+  \item $\mathrm{tr}(\mathbf{P}_{\text{pos}}(t))$ nel tempo
+  \item $\|\mathbf{p}_{\text{EE}}(t) - \mathbf{p}_{\text{target}}\|$ nel tempo
+  \item $\|\mathbf{v}_{\text{cmd}}(t)\|$ (velocità comandata)
+\end{itemize}
+
+\textbf{Risultato atteso}: con B1 (guadagni fissi) il robot continua veloce
+durante l'occlusione $\Rightarrow$ errore alto. Con B2 il robot rallenta
+$\Rightarrow$ errore contenuto. Grafico a 3 curve temporali sincronizzate.
+
+% ----
+\subsection*{E2 — Mission Time \textnormal{(valida C2)}}
+
+\textbf{Procedura}: 9 configurazioni $\times$ 10 trial $\times$ 3 baseline = 270 trial.
+
+\textbf{Misure}:
+\begin{itemize}
+  \item $t_{\text{total}}$: start $\to$ \texttt{/scan\_done}
+  \item $t_{\text{approach}}$: start $\to$ HANDOFF
+  \item $t_{\text{scan}}$: HANDOFF $\to$ scan done
+  \item Percentuale missioni completate con successo
+\end{itemize}
+
+\textbf{Risultato atteso}: box plot per distanza (1.0/1.5/2.0\,m) separatamente.
+Il vantaggio di B2 su B0 cresce con la distanza.
+
+% ----
+\subsection*{E3 — Workspace Extension \textnormal{(valida C3)}}
+
+\textbf{Scenario}: manichino posizionato al boundary del workspace Z1
+(trigger binario fallisce spesso, gradient no).
+
+\textbf{Procedura}: 5 posizioni boundary $\times$ 10 trial
+$\times$ 2 metodi (trigger binario vs workspace-gradient) = 100 trial.
+
+\textbf{Misure}:
+\begin{itemize}
+  \item Percentuale trial completati
+  \item Numero di WS\_EXTENSION events per trial
+  \item Jitter EE durante WS\_EXTENSION:
+        $\sigma(\mathbf{p}_{\text{EE}})$
+\end{itemize}
+
+% ----
+\subsection*{E4 — EE Stability durante Approach \textnormal{(safety metric)}}
+
+\textbf{Motivazione}: durante APPROACHING Spot cammina e Z1 si muove
+simultaneamente $\Rightarrow$ rischio oscillazione EE, critico in contesto medico.
+
+\textbf{Misura}: $\sigma(\mathbf{p}_{\text{EE}})$ durante la fase APPROACHING.
+
+\textbf{Confronto}: B0 (Spot fermo = baseline zero jitter) vs B1 vs B2.
+
+% ----
+\subsection*{E5 — Ablation Study \textnormal{(richiesto da T-RO)}}
+
+Isola i contributi uno alla volta (5 configurazioni $\times$ 10 trial):
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+Configurazione & Uncertainty weight & Workspace gradient & \\
+\midrule
+Ablation-A (= B1) & \texttimes & \texttimes & \\
+Ablation-B        & \checkmark & \texttimes & \\
+Ablation-C        & \texttimes & \checkmark & \\
+Full (B2)         & \checkmark & \checkmark & \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Metriche}: $t_{\text{total}}$ e \% completamento per ogni combinazione.
+
+% ----
+\subsection*{Riepilogo effort sperimentale}
+
+\begin{center}
+\begin{tabular}{llrr}
+\toprule
+Esperimento & Claim & Trial & Durata stimata \\
+\midrule
+E1 occlusione     & C1       & $\sim$30  & 1 giorno \\
+E2 mission time   & C2       & 270       & 2--3 giorni \\
+E3 workspace      & C3       & 100       & 1 giorno \\
+E4 EE stability   & safety   & 90        & 1 giorno \\
+E5 ablation       & tutti    & 200       & 1--2 giorni \\
+\midrule
+\textbf{Totale}   &          & $\sim$690 & \textbf{6--8 giorni} \\
+\bottomrule
+\end{tabular}
+\end{center}
 
 \end{document}

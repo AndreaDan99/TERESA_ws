@@ -23,8 +23,7 @@ class Z1IKToJTC(Node):
         super().__init__("z1_ik_to_jtc")
 
         # ---------------- PARAMETERS ----------------
-        self.declare_parameter("urdf_path",
-            "/home/andrea/Ros2_repositories/unitree_z1_ws/install/z1_description/share/z1_description/urdf/z1.urdf")
+        self.declare_parameter("urdf_path", "")
         self.declare_parameter("base_frame", "world")
         self.declare_parameter("ee_frame", "link06")
 
@@ -46,6 +45,10 @@ class Z1IKToJTC(Node):
         self.declare_parameter("ik_rot_weight", 0.5)  # peso errore angolare (0=solo pos, 1=uguale a pos)
 
         urdf_path = self.get_parameter("urdf_path").value
+        if not urdf_path:
+            import os
+            from ament_index_python.packages import get_package_share_directory
+            urdf_path = os.path.join(get_package_share_directory('z1_description'), 'urdf', 'z1.urdf')
         self.base_frame = self.get_parameter("base_frame").value
         self.ee_frame = self.get_parameter("ee_frame").value
 

@@ -128,6 +128,12 @@ class Kalman3D:
         return self.x[3:].copy()
 
     # ──────────────────────────────────────────────────────────────
+    # ──────────────────────────────────────────────────────────────
+    def get_position_covariance(self) -> np.ndarray:
+        """Ritorna il blocco 3x3 della covarianza di posizione."""
+        return self.P[:3, :3].copy()
+
+    # ──────────────────────────────────────────────────────────────
     def reset(self):
         """Reset completo del filtro."""
         self.x           = np.zeros(6)

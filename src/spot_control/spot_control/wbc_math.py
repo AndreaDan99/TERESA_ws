@@ -150,3 +150,64 @@ def wbc_split(
     wz    = float(np.clip(x[7],  -wz_max,   wz_max))
 
     return q_dot, vx, wz
+
+
+# ── WBC split with yaw task ───────────────────────────────────────────────────
+
+def wbc_split_with_yaw(
+    J_holistic: np.ndarray,
+    v_des: np.ndarray,
+    m: float,
+    yaw_error: float,
+    k_yaw:      float = 0.5,
+    lam_arm:    float = 1.0,
+    lam_base:   float = 1.0,
+    damping:    float = 1e-3,
+    vx_max:     float = 0.4,
+    wz_max:     float = 0.5,
+    q_dot_max:  float = 0.6,
+) -> tuple[np.ndarray, float, float]:
+    """
+    WBC split with an additional base yaw task.
+
+    Extends J_holistic (6×8) with a 7th row that selects wz directly,
+    creating a 7×8 system. The QP balances EE position tracking (rows 1-6)
+    against base yaw tracking (row 7).
+
+    The yaw task row [0,0,0,0,0,0,0,1] maps u[7]=wz → desired yaw rate.
+    The desired yaw rate is k_yaw * yaw_error [rad/s].
+
+    Args:
+        J_holistic : shape (6, 8)
+        v_des      : desired EE spatial velocity [ang(3), lin(3)], shape (6,)
+        m          : current arm manipulability scalar
+        yaw_error  : θ_des - θ_current, wrapped to (-π, π) [rad]
+        k_yaw      : proportional gain for yaw task [rad/s per rad]
+        (other args same as wbc_split)
+
+    Returns:
+        q_dot, vx, wz  (same as wbc_split)
+    """
+    eps = 1e-4
+    w_arm  = lam_arm  / (m + eps)
+    w_base = lam_base
+
+    w_diag = np.array([w_arm] * 6 + [w_base, w_base])
+    W_inv  = np.diag(1.0 / w_diag)
+
+    # Extend Jacobian: add yaw selection row [0,0,0,0,0,0, 0, 1]
+    J_yaw_row = np.zeros((1, 8))
+    J_yaw_row[0, 7] = 1.0
+    J_ext = np.vstack([J_holistic, J_yaw_row])           # (7, 8)
+
+    v_des_ext = np.append(v_des, k_yaw * yaw_error)      # (7,)
+
+    # Weighted damped least-squares with 7×8 system
+    A = J_ext @ W_inv @ J_ext.T + damping * np.eye(7)
+    x = W_inv @ J_ext.T @ np.linalg.solve(A, v_des_ext)
+
+    q_dot = np.clip(x[:6], -q_dot_max,  q_dot_max)
+    vx    = float(np.clip(x[6],  -vx_max,   vx_max))
+    wz    = float(np.clip(x[7],  -wz_max,   wz_max))
+
+    return q_dot, vx, wz

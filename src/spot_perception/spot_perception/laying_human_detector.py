@@ -5,7 +5,7 @@ Rileva persone sdraiate e calcola approach point (NO navigazione per ora).
 """
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import PoseArray, PoseStamped
+from geometry_msgs.msg import PoseArray, PoseStamped, Vector3Stamped
 from visualization_msgs.msg import Marker
 from std_msgs.msg import String, Float32
 import numpy as np
@@ -19,7 +19,7 @@ class LayingHumanDetector(Node):
         # ============================================================
         # PARAMETRI
         # ============================================================
-        self.declare_parameter('approach_distance', 1.0)  # Metri da bbox (AUMENTATO da 0.8)
+        self.declare_parameter('approach_distance', 0.5)  # Metri davanti al paziente
         self.declare_parameter('min_detection_confidence', 0.5)
         self.declare_parameter('min_valid_keypoints', 4)
         self.declare_parameter('test_mode', True)  # DEFAULT: True (no navigation)
@@ -49,7 +49,10 @@ class LayingHumanDetector(Node):
         
         # Publishers
         self.goal_pub = self.create_publisher(
-            PoseStamped, '/laying_human/approach_point', 10  # RINOMINATO topic
+            PoseStamped, '/laying_human/approach_point', 10
+        )
+        self.body_axis_pub = self.create_publisher(
+            Vector3Stamped, '/laying_human/body_axis', 10
         )
         
         self.approach_marker_pub = self.create_publisher(
@@ -140,6 +143,9 @@ class LayingHumanDetector(Node):
         
         points = np.array(valid_points)
 
+        # Calcola e pubblica body axis (COCO: 5=spalla sx, 6=spalla dx, 11=fianco sx, 12=fianco dx)
+        self._try_publish_body_axis(msg)
+
         # Controlla distanza minima: persona troppo vicina → approach point dietro camera
         mean_depth = np.mean(points[:, 2])
         if mean_depth < self.approach_dist + 0.2:
@@ -174,6 +180,40 @@ class LayingHumanDetector(Node):
             # In test mode: pubblica approach point MA non invia goal navigazione
             self.publish_approach_point(bbox_center, bbox_size, msg.header, visualize_only=True)
             
+    def _try_publish_body_axis(self, msg):
+        """Estrae body axis (testa→piedi) dai keypoint COCO e lo pubblica."""
+        if len(msg.poses) < 13:
+            return
+
+        def _kp(idx):
+            p = msg.poses[idx].position
+            if math.isnan(p.x) or math.isnan(p.y) or math.isnan(p.z):
+                return None
+            return np.array([p.x, p.y, p.z])
+
+        kp5, kp6   = _kp(5),  _kp(6)   # spalle
+        kp11, kp12 = _kp(11), _kp(12)  # fianchi
+
+        if kp5 is None or kp6 is None or kp11 is None or kp12 is None:
+            return
+
+        shoulder_mid = (kp5 + kp6) / 2.0
+        hip_mid      = (kp11 + kp12) / 2.0
+        body_vec     = hip_mid - shoulder_mid
+        body_len     = float(np.linalg.norm(body_vec))
+
+        if body_len < 0.1:
+            return
+
+        axis = body_vec / body_len
+        v = Vector3Stamped()
+        v.header.stamp    = self.get_clock().now().to_msg()
+        v.header.frame_id = msg.header.frame_id
+        v.vector.x = float(axis[0])
+        v.vector.y = float(axis[1])
+        v.vector.z = float(axis[2])
+        self.body_axis_pub.publish(v)
+
     def publish_approach_point(self, bbox_center, bbox_size, header, visualize_only=False):
         """
         Calcola e pubblica approach point per Spot.

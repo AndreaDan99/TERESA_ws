@@ -9,6 +9,8 @@ solves holistic WBC split, publishes:
 Update rate: update_period (default 1.5s — respects z1_ik_to_jtc traj_min_time=1.0s).
 Enabled/disabled via /wbc/enable (Bool).
 """
+import math
+
 import numpy as np
 import pinocchio as pin
 
@@ -19,7 +21,7 @@ import rclpy.time
 
 from geometry_msgs.msg import PoseStamped, Twist
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float32
 
 from tf2_ros import Buffer, TransformListener, TransformException
 import tf2_geometry_msgs  # noqa: F401
@@ -29,6 +31,7 @@ from spot_control.wbc_math import (
     compute_j_holistic,
     manipulability,
     wbc_split,
+    wbc_split_with_yaw,
 )
 
 
@@ -51,6 +54,8 @@ class WBCQPControllerNode(Node):
         self.declare_parameter('damping',       1e-3)
         self.declare_parameter('kp_pos',        1.0)
         self.declare_parameter('kp_ang',        0.5)
+        self.declare_parameter('z_delta',        1.96)
+        self.declare_parameter('k_yaw',         0.5)
         self.declare_parameter('vx_max',        0.4)
         self.declare_parameter('wz_max',        0.5)
         self.declare_parameter('q_dot_max',     0.6)
@@ -68,6 +73,8 @@ class WBCQPControllerNode(Node):
         self._lam_base      = float(p('lam_base'))
         self._damping       = float(p('damping'))
         self._kp_pos        = float(p('kp_pos'))
+        self._z_delta       = float(p('z_delta'))
+        self._k_yaw         = float(p('k_yaw'))
         self._vx_max        = float(p('vx_max'))
         self._wz_max        = float(p('wz_max'))
         self._q_dot_max     = float(p('q_dot_max'))
@@ -88,11 +95,15 @@ class WBCQPControllerNode(Node):
         self._enabled        = False
         self._goal: PoseStamped | None = None
         self._q_meas: np.ndarray | None = None
+        self._sigma_max      = 0.0    # sqrt(lambda_max(P_pos)) from coordinator Kalman
+        self._desired_yaw: float | None = None  # target Spot yaw [rad, odom]
 
         # ── Sub / Pub ─────────────────────────────────────────────────
-        self.create_subscription(Bool,        '/wbc/enable',           self._cb_enable,  10)
-        self.create_subscription(PoseStamped, '/wbc/ee_goal',          self._cb_goal,    10)
-        self.create_subscription(JointState,  p('joint_states_topic'), self._cb_joints,  50)
+        self.create_subscription(Bool,        '/wbc/enable',               self._cb_enable,      10)
+        self.create_subscription(PoseStamped, '/wbc/ee_goal',              self._cb_goal,        10)
+        self.create_subscription(JointState,  p('joint_states_topic'),     self._cb_joints,      50)
+        self.create_subscription(Float32,     '/wbc/target_uncertainty',   self._cb_uncert,      10)
+        self.create_subscription(Float32,     '/wbc/desired_yaw',          self._cb_desired_yaw, 10)
 
         self._pub_ik  = self.create_publisher(PoseStamped, p('ik_goal_topic'),   10)
         self._pub_en  = self.create_publisher(Bool,        p('ik_enable_topic'), 10)
@@ -120,6 +131,12 @@ class WBCQPControllerNode(Node):
             self._q_meas = np.array([name_to_pos[j] for j in JOINT_ORDER])
         except KeyError:
             pass
+
+    def _cb_uncert(self, msg: Float32) -> None:
+        self._sigma_max = float(msg.data)
+
+    def _cb_desired_yaw(self, msg: Float32) -> None:
+        self._desired_yaw = float(msg.data)
 
     # ── Main update ───────────────────────────────────────────────────
 
@@ -168,8 +185,14 @@ class WBCQPControllerNode(Node):
             goal_odom.pose.position.y - ee_in_odom.transform.translation.y,
             goal_odom.pose.position.z - ee_in_odom.transform.translation.z,
         ])
+        # Chance-constraint dead zone: robot stops when EE is already inside the
+        # uncertainty ball (radius = z_delta * sigma_max) around the Kalman estimate.
+        # Prob(true target inside ball) >= 1 - delta  (delta = 0.05 for z_delta=1.96).
+        dp_norm = float(np.linalg.norm(dp))
+        r_ball  = self._z_delta * self._sigma_max
+        effective = max(dp_norm - r_ball, 0.0)
         v_des = np.zeros(6)
-        v_des[3:6] = self._kp_pos * dp
+        v_des[3:6] = self._kp_pos * (effective / (dp_norm + 1e-6)) * dp
 
         # 6. Pinocchio: J_arm in LOCAL_WORLD_ALIGNED (= odom-aligned)
         q = self._q_neutral.copy()
@@ -194,15 +217,35 @@ class WBCQPControllerNode(Node):
 
         J_hol = compute_j_holistic(J_arm, J_base_odom)
 
-        # 8. Manipulability + WBC split
+        # 8. Manipulability + WBC split (with yaw task if target yaw is known)
         m = manipulability(J_arm)
-        q_dot, vx, wz = wbc_split(
-            J_hol, v_des, m,
-            lam_arm=self._lam_arm, lam_base=self._lam_base,
-            damping=self._damping,
-            vx_max=self._vx_max, wz_max=self._wz_max,
-            q_dot_max=self._q_dot_max,
-        )
+        if self._desired_yaw is not None:
+            from tf_transformations import euler_from_quaternion
+            _, _, θ_cur = euler_from_quaternion([
+                body_in_odom.transform.rotation.x,
+                body_in_odom.transform.rotation.y,
+                body_in_odom.transform.rotation.z,
+                body_in_odom.transform.rotation.w,
+            ])
+            yaw_error = _normalize_angle(self._desired_yaw - θ_cur)
+            q_dot, vx, wz = wbc_split_with_yaw(
+                J_hol, v_des, m,
+                yaw_error=yaw_error,
+                k_yaw=self._k_yaw,
+                lam_arm=self._lam_arm, lam_base=self._lam_base,
+                damping=self._damping,
+                vx_max=self._vx_max, wz_max=self._wz_max,
+                q_dot_max=self._q_dot_max,
+            )
+        else:
+            yaw_error = 0.0
+            q_dot, vx, wz = wbc_split(
+                J_hol, v_des, m,
+                lam_arm=self._lam_arm, lam_base=self._lam_base,
+                damping=self._damping,
+                vx_max=self._vx_max, wz_max=self._wz_max,
+                q_dot_max=self._q_dot_max,
+            )
 
         # 9. Integrate q_dot → q_new → FK → new EE pose in Pinocchio world (= link00)
         q_new = q.copy()
@@ -239,11 +282,17 @@ class WBCQPControllerNode(Node):
         self._pub_vel.publish(twist)
 
         self.get_logger().info(
-            f'WBC: m={m:.3f} vx={vx:.3f} wz={wz:.3f} |dp|={np.linalg.norm(dp):.3f}',
+            f'WBC: m={m:.3f} vx={vx:.3f} wz={wz:.3f} '
+            f'|dp|={dp_norm:.3f} r_ball={r_ball:.3f} eff={effective:.3f} '
+            f'yaw_err={math.degrees(yaw_error):.1f}°',
             throttle_duration_sec=2.0)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _normalize_angle(a: float) -> float:
+    return float((a + math.pi) % (2 * math.pi) - math.pi)
+
 
 def _quat_to_rot(q) -> np.ndarray:
     """geometry_msgs Quaternion → 3x3 rotation matrix."""
