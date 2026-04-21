@@ -295,7 +295,8 @@ class YoloSkeletonNodeOrbbec(Node):
 
             if i == 14 and pts[12] is not None and pts[16] is not None:
                 if not self.knee_angle_ok(pts[12], meas, pts[16]):
-                    track.kf[i].Q *= 0.3
+                    track.kf[i].predict(damping)
+                    pts[i] = track.kf[i].get_position()
                     continue
 
             if track.kf[i].initialized:

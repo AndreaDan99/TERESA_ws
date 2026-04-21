@@ -5,16 +5,13 @@ WBC Coordinator — phase FSM
 States:
   IDLE           waiting for LYING detection
   APPROACHING    Spot navigates + Z1 look-at via WBC QP
-  CONFIRMING     arm moves for better Orbbec view angle
-  HANDOFF        Orbbec lost → switch to RealSense, WBC stops
+  HANDOFF        Spot reached patient → switch to RealSense, WBC stops
   SCANNING       z1_FSM active, WBC QP dormant, Spot stopped
   WS_EXTENSION   z1_FSM requested workspace help → QP micro-step
 
 Transitions:
   IDLE         → APPROACHING    posture=LYING and confidence >= threshold
-  APPROACHING  → CONFIRMING     confidence drops below threshold
-  CONFIRMING   → APPROACHING    confidence recovers
-  APPROACHING  → HANDOFF        confidence low AND Spot near patient
+  APPROACHING  → HANDOFF        Spot within handoff_distance of approach_point
   HANDOFF      → SCANNING       z1_FSM enters APPROACHING (took over)
   SCANNING     → WS_EXTENSION   /wbc/ws_request received
   WS_EXTENSION → SCANNING       /ik_done received
