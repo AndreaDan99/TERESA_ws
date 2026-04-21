@@ -18,6 +18,11 @@ PREREQUISITI:
 """
 
 import math
+import sys
+import termios
+import threading
+import tty
+
 import numpy as np
 
 import rclpy
@@ -67,7 +72,7 @@ class TeresaMission(Node):
         self.declare_parameter('crouch_height', -0.10)
         self.declare_parameter('preferred_side', 'auto')   # 'auto' | 'left' | 'right'
         self.declare_parameter('goal_frame', 'odom')
-        self.declare_parameter('dry_run', True)
+        self.declare_parameter('dry_run', False)
 
         self.approach_margin    = float(self.get_parameter('approach_margin').value)
         self.min_conf           = float(self.get_parameter('min_confidence').value)
@@ -143,6 +148,14 @@ class TeresaMission(Node):
         self._locked_goal    = None   # PoseStamped in goal_frame, bloccato durante nav
         self._nav_start_time = None
 
+        # Flag: 's' sblocca l'invio goal, ESC ferma tutto
+        self._go_authorized = False
+        self._estop          = False
+
+        # Keyboard thread
+        self._kb_thread = threading.Thread(target=self._keyboard_loop, daemon=True)
+        self._kb_thread.start()
+
         # Timer FSM a 5 Hz
         self.create_timer(0.2, self._fsm_tick)
 
@@ -152,7 +165,8 @@ class TeresaMission(Node):
             f'   approach_margin={self.approach_margin}m  '
             f'min_conf={self.min_conf}  '
             f'crouch={self.crouch_height}m  '
-            f'side={self.preferred_side}'
+            f'side={self.preferred_side}\n'
+            f'   Tasti: "s" = avvia navigazione | ESC = emergency stop | Ctrl+C = quit'
         )
 
     # ============================================================
@@ -221,10 +235,19 @@ class TeresaMission(Node):
     # ============================================================
 
     def _tick_idle(self):
-        if (self._posture == 'LYING'
-                and self._confidence >= self.min_conf
-                and self._keypoints is not None
-                and self._bbox_center is not None):
+        if self._estop:
+            return
+        ready = (self._posture == 'LYING'
+                 and self._confidence >= self.min_conf
+                 and self._keypoints is not None
+                 and self._bbox_center is not None)
+        if ready and not self._go_authorized:
+            self.get_logger().info(
+                'Paziente rilevato — premi "s" per avviare navigazione, ESC per stop.',
+                throttle_duration_sec=3.0
+            )
+        if ready and self._go_authorized:
+            self._go_authorized = False
             self._set_state(COMPUTING_GOAL)
 
     def _tick_computing(self):
@@ -254,6 +277,11 @@ class TeresaMission(Node):
             self._set_state(NAVIGATING)
 
     def _tick_navigating(self):
+        if self._estop:
+            self._cancel_trajectory()
+            self._set_state(IDLE)
+            return
+
         # Timeout
         elapsed = (self.get_clock().now() - self._nav_start_time).nanoseconds * 1e-9
         if elapsed > self.nav_timeout:
@@ -320,6 +348,33 @@ class TeresaMission(Node):
             throttle_duration_sec=5.0
         )
         # Qui in futuro: trigger z1_FSM
+
+    # ============================================================
+    # KEYBOARD
+    # ============================================================
+
+    def _keyboard_loop(self):
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            while rclpy.ok():
+                ch = sys.stdin.read(1)
+                if ch == 's':
+                    self._go_authorized = True
+                    self.get_logger().info('✅ Navigazione autorizzata da tastiera.')
+                elif ch == '\x1b':  # ESC
+                    self._estop = True
+                    self._cancel_trajectory()
+                    self.get_logger().warn('🛑 EMERGENCY STOP — missione annullata.')
+                    self._set_state(IDLE)
+                elif ch == '\x03':  # Ctrl+C
+                    rclpy.shutdown()
+                    break
+        except Exception:
+            pass
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
     # ============================================================
     # GEOMETRIA — calcolo approach point
