@@ -110,8 +110,9 @@ class HumanPostureAnalyzerSpot(Node):
             self.publish_torso_marker(origin, vec, msg.header.stamp)
 
         if conf > 0.5:
+            h_str = f"{height:.2f}m" if height is not None else "N/A"
             self.get_logger().info(
-                f"Posture: {posture} (conf: {conf:.2f}, height: {height:.2f}m, angle: {angle:.1f}°)",
+                f"Posture: {posture} (conf: {conf:.2f}, height: {h_str}, angle: {angle:.1f}°)",
                 throttle_duration_sec=2.0
             )
 
@@ -157,7 +158,7 @@ class HumanPostureAnalyzerSpot(Node):
             feet_mid = np.mean(feet, axis=0)
             height = abs(np.dot(sh_mid - feet_mid, up))
         else:
-            height = 0.0
+            height = None
 
         # --------------------------------------------------
         # Hip midpoint
@@ -235,7 +236,7 @@ class HumanPostureAnalyzerSpot(Node):
         score = 0.0
 
         # LYING
-        if torso_angle > self.torso_lying and height < 0.50:
+        if torso_angle > self.torso_lying and (height is None or height < 0.50):
             posture = "LYING"
             score = 0.85
             if avg_knee_angle is not None and avg_knee_angle < 140:
