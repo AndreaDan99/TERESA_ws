@@ -84,8 +84,14 @@ class WBCQPControllerNode(Node):
         urdf = p('urdf_path')
         if not urdf:
             import os
-            from ament_index_python.packages import get_package_share_directory
-            urdf = os.path.join(get_package_share_directory('z1_description'), 'urdf', 'z1.urdf')
+            try:
+                from ament_index_python.packages import get_package_share_directory
+                urdf = os.path.join(get_package_share_directory('z1_description'), 'urdf', 'z1.urdf')
+            except Exception:
+                urdf = os.path.expanduser(
+                    '~/Ros2_repositories/unitree_z1_ws/install/z1_description/share/z1_description/urdf/z1.urdf'
+                )
+        self.get_logger().info(f'URDF: {urdf}')
         self._model = pin.buildModelFromUrdf(urdf)
         self._data  = self._model.createData()
         self._ee_id = self._model.getFrameId(self._ee_frame)

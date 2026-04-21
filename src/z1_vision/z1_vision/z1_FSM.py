@@ -122,10 +122,15 @@ class Z1FSM(Node):
         urdf_path = self.get_parameter("urdf_path").value
         if not urdf_path:
             import os
-            from ament_index_python.packages import get_package_share_directory
-            urdf_path = os.path.join(
-                get_package_share_directory('z1_description'), 'urdf', 'z1.urdf'
-            )
+            try:
+                from ament_index_python.packages import get_package_share_directory
+                urdf_path = os.path.join(
+                    get_package_share_directory('z1_description'), 'urdf', 'z1.urdf'
+                )
+            except Exception:
+                urdf_path = os.path.expanduser(
+                    '~/Ros2_repositories/unitree_z1_ws/install/z1_description/share/z1_description/urdf/z1.urdf'
+                )
         ee_frame      = self.get_parameter("ee_frame").value
         safety_margin = float(self.get_parameter("workspace_safety_margin").value)
         self._arm_base = np.array(
