@@ -290,7 +290,15 @@ class TeresaMission(Node):
             self._set_state(IDLE)
             return
 
-        # Se detection torna e paziente si è spostato molto → ricalcola goal
+        # Confidence bassa (Orbbec perde il corpo da vicino) → freeze goal, no relock
+        if self._confidence < self.min_conf:
+            self.get_logger().info(
+                f'Confidence bassa ({self._confidence:.2f}) durante navigazione — goal congelato.',
+                throttle_duration_sec=3.0
+            )
+            return
+
+        # Se detection buona e paziente si è spostato molto → ricalcola goal
         if (self._keypoints is not None
                 and self._bbox_center is not None
                 and self._locked_goal is not None):
