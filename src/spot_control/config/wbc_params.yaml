@@ -58,6 +58,11 @@ wbc_coordinator:
     ws_ext_lat_limit: 0.20   # [m] max lateral displacement (±)
     ws_ext_bwd_limit: 0.50   # [m] max backward displacement
 
+    # Body height at handoff — lowers Spot so Z1 can reach the patient [m, offset from nominal]
+    handoff_body_height: -0.15   # abbassa Spot di 15 cm al handoff
+    min_body_height:     -0.20   # limite minimo di sicurezza
+    max_body_height:      0.0    # altezza nominale
+
     # Topics
     posture_confidence_topic: '/human_pose/posture_confidence'
     approach_point_topic:     '/laying_human/approach_point'

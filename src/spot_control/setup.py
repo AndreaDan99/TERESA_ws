@@ -26,7 +26,6 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'teresa_mission      = spot_control.teresa_mission:main',
             'spot_goal_navigator = spot_control.spot_goal_navigator:main',
             'wbc_qp_controller   = spot_control.wbc_qp_controller:main',
             'wbc_coordinator     = spot_control.wbc_coordinator:main',

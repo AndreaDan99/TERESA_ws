@@ -112,6 +112,9 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('ws_ext_fwd_limit',             0.20)
         self.declare_parameter('ws_ext_lat_limit',             0.20)
         self.declare_parameter('ws_ext_bwd_limit',             0.50)
+        self.declare_parameter('handoff_body_height',         -0.15)  # [m] offset from nominal
+        self.declare_parameter('min_body_height',             -0.20)
+        self.declare_parameter('max_body_height',              0.0)
 
         p = lambda n: self.get_parameter(n).value
         self._conf_thr        = float(p('orbbec_confidence_threshold'))
@@ -122,6 +125,19 @@ class WBCCoordinatorNode(Node):
         self._ws_ext_fwd_lim  = float(p('ws_ext_fwd_limit'))
         self._ws_ext_lat_lim  = float(p('ws_ext_lat_limit'))
         self._ws_ext_bwd_lim  = float(p('ws_ext_bwd_limit'))
+        self._handoff_body_height = float(p('handoff_body_height'))
+        self._min_body_height     = float(p('min_body_height'))
+        self._max_body_height     = float(p('max_body_height'))
+
+        # ── Body height client (optional — needs spot_msgs) ───────────
+        try:
+            from spot_msgs.srv import SetStandHeight
+            self._height_client = self.create_client(SetStandHeight, '/my_spot/set_stand_height')
+            self._SetStandHeight = SetStandHeight
+        except ImportError:
+            self._height_client = None
+            self._SetStandHeight = None
+            self.get_logger().warn('spot_msgs not found — body height control disabled')
 
         # ── Approach point Kalman filter ───────────────────────────────
         self._kf_approach = _PositionKalman(
@@ -363,6 +379,9 @@ class WBCCoordinatorNode(Node):
             self.get_logger().info(f'WBC FSM: {self._state} → {new_state}')
             if new_state == CoordState.IDLE:
                 self._kf_approach.reset()
+                self._set_body_height(0.0)   # ripristina altezza nominale
+            if new_state == CoordState.HANDOFF:
+                self._set_body_height(self._handoff_body_height)
             if new_state == CoordState.WS_EXTENSION:
                 self._save_ws_ext_anchor()
             self._state = new_state
@@ -386,6 +405,22 @@ class WBCCoordinatorNode(Node):
         except TransformException:
             self._ws_ext_anchor = None
             self.get_logger().warn('WS_EXT: could not save anchor (TF unavailable)')
+
+    def _set_body_height(self, height: float) -> None:
+        if self._height_client is None:
+            return
+        if not self._height_client.service_is_ready():
+            self.get_logger().warn('set_stand_height service not ready — skipping')
+            return
+        req = self._SetStandHeight.Request()
+        req.height = float(np.clip(height, self._min_body_height, self._max_body_height))
+        future = self._height_client.call_async(req)
+        future.add_done_callback(
+            lambda f: self.get_logger().info(
+                f'body height → {req.height:.2f}m: '
+                f'{"OK" if f.result() and f.result().success else "FAILED"}'
+            )
+        )
 
     def _set_wbc_enabled(self, enabled: bool) -> None:
         msg = Bool(); msg.data = enabled
