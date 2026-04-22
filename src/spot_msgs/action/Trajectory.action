@@ -1,0 +1,9 @@
+geometry_msgs/PoseStamped target_pose
+builtin_interfaces/Duration duration
+bool precise_positioning
+bool disable_obstacle_avoidance false
+---
+bool success
+string message
+---
+string feedback
