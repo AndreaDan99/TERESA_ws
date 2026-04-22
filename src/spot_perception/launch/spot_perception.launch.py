@@ -146,10 +146,11 @@ def generate_launch_description():
         name='laying_human_detector',
         output='screen',
         parameters=[{
-            'approach_distance': 1.0,
+            'approach_margin':          0.05,
+            'preferred_side':           'auto',
             'min_detection_confidence': 0.5,
-            'min_valid_keypoints': 4,
-            'test_mode': test_mode,
+            'min_valid_keypoints':      4,
+            'test_mode':                test_mode,
         }]
     )
 

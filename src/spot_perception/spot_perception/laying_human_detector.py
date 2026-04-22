@@ -1,187 +1,253 @@
 #!/usr/bin/env python3
 """
-Laying Human Detector - CORRETTO.
-Rileva persone sdraiate e calcola approach point (NO navigazione per ora).
+Laying Human Detector.
+Rileva persona sdraiata e calcola approach point LATERALE (lato del corpo),
+geometria identica a teresa_mission.
 """
+import math
+
+import numpy as np
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseArray, PoseStamped, Vector3Stamped
-from visualization_msgs.msg import Marker
 from std_msgs.msg import String, Float32
-import numpy as np
-import math
+from visualization_msgs.msg import Marker
+
+# COCO keypoint indices
+NOSE      = 0
+L_SHOULDER = 5
+R_SHOULDER = 6
+L_HIP      = 11
+R_HIP      = 12
+L_KNEE     = 13
+R_KNEE     = 14
+L_ANKLE    = 15
+R_ANKLE    = 16
 
 
 class LayingHumanDetector(Node):
     def __init__(self):
         super().__init__('laying_human_detector')
-        
+
         # ============================================================
         # PARAMETRI
         # ============================================================
-        self.declare_parameter('approach_distance', 0.5)  # Metri davanti al paziente
+        self.declare_parameter('approach_margin',          0.05)   # extra oltre bbox edge [m]
+        self.declare_parameter('preferred_side',           'auto') # 'auto'|'left'|'right'
         self.declare_parameter('min_detection_confidence', 0.5)
-        self.declare_parameter('min_valid_keypoints', 4)
-        self.declare_parameter('test_mode', True)  # DEFAULT: True (no navigation)
-        self.declare_parameter('detection_timeout', 2.0)  # Secondi senza detection per reset
+        self.declare_parameter('min_valid_keypoints',      4)
+        self.declare_parameter('test_mode',                True)
+        self.declare_parameter('detection_timeout',        2.0)
 
-        self.approach_dist = float(self.get_parameter('approach_distance').value)
-        self.min_conf = float(self.get_parameter('min_detection_confidence').value)
-        self.min_kp = int(self.get_parameter('min_valid_keypoints').value)
-        self.test_mode = bool(self.get_parameter('test_mode').value)
+        self.approach_margin   = float(self.get_parameter('approach_margin').value)
+        self.preferred_side    = str(self.get_parameter('preferred_side').value)
+        self.min_conf          = float(self.get_parameter('min_detection_confidence').value)
+        self.min_kp            = int(self.get_parameter('min_valid_keypoints').value)
+        self.test_mode         = bool(self.get_parameter('test_mode').value)
         self.detection_timeout = float(self.get_parameter('detection_timeout').value)
 
-        # Subscribers
+        # ============================================================
+        # SUBSCRIBERS
+        # ============================================================
         self.skeleton_sub = self.create_subscription(
-            PoseArray, '/human_pose/points_3d',
-            self.skeleton_callback, 10
-        )
-        
+            PoseArray, '/human_pose/points_3d', self.skeleton_callback, 10)
         self.posture_sub = self.create_subscription(
-            String, '/human_pose/posture',
-            self.posture_callback, 10
-        )
-        
+            String, '/human_pose/posture', self.posture_callback, 10)
         self.posture_conf_sub = self.create_subscription(
-            Float32, '/human_pose/posture_confidence',
-            self.confidence_callback, 10
-        )
-        
-        # Publishers
+            Float32, '/human_pose/posture_confidence', self.confidence_callback, 10)
+
+        # ============================================================
+        # PUBLISHERS
+        # ============================================================
         self.goal_pub = self.create_publisher(
-            PoseStamped, '/laying_human/approach_point', 10
-        )
+            PoseStamped, '/laying_human/approach_point', 10)
         self.body_axis_pub = self.create_publisher(
-            Vector3Stamped, '/laying_human/body_axis', 10
-        )
-        
+            Vector3Stamped, '/laying_human/body_axis', 10)
         self.approach_marker_pub = self.create_publisher(
-            Marker, '/laying_human/approach_marker', 10  # RINOMINATO per chiarezza
-        )
-        
-        # State
-        self.current_posture = "UNKNOWN"
+            Marker, '/laying_human/approach_marker', 10)
+
+        # ============================================================
+        # STATE
+        # ============================================================
+        self.current_posture    = 'UNKNOWN'
         self.current_confidence = 0.0
-        self.latest_skeleton = None
-        self.goal_sent = False
+        self.latest_skeleton    = None
+        self.goal_sent          = False
         self.last_detection_time = None
-        
-        # Timer per reset detection
+
         self.reset_timer = self.create_timer(1.0, self.check_detection_timeout)
-        
-        mode_str = "TEST MODE (no navigation)" if self.test_mode else "ACTIVE MODE (navigation enabled)"
+
+        mode_str = 'TEST MODE (pubblica sempre)' if self.test_mode else 'ACTIVE MODE (pubblica una volta)'
         self.get_logger().info(
-            f'✅ Laying Human Detector initialized\n'
-            f'   Mode: {mode_str}\n'
-            f'   Approach distance: {self.approach_dist}m\n'
-            f'   Min keypoints: {self.min_kp}\n'
-            f'   Min confidence: {self.min_conf}'
+            f'✅ LayingHumanDetector READY — {mode_str}\n'
+            f'   approach_margin={self.approach_margin}m  side={self.preferred_side}\n'
+            f'   min_conf={self.min_conf}  min_kp={self.min_kp}'
         )
-    
+
+    # ============================================================
+    # CALLBACKS
+    # ============================================================
+
     def confidence_callback(self, msg):
-        """Aggiorna confidence corrente."""
         self.current_confidence = msg.data
-    
+
     def posture_callback(self, msg):
-        """Aggiorna stato postura corrente."""
-        prev_posture = self.current_posture
+        prev = self.current_posture
         self.current_posture = msg.data
-        
-        # Reset flag se passa da LYING a altro stato
-        if prev_posture == "LYING" and self.current_posture != "LYING":
+        if prev == 'LYING' and self.current_posture != 'LYING':
             self.goal_sent = False
             self.get_logger().info('Detection LYING persa → flag reset')
-    
+
     def check_detection_timeout(self):
-        """Resetta detection se passa troppo tempo senza LYING."""
         if self.last_detection_time is None:
             return
-        
         elapsed = (self.get_clock().now() - self.last_detection_time).nanoseconds / 1e9
-        
         if elapsed > self.detection_timeout:
             if self.goal_sent:
                 self.goal_sent = False
-                self.get_logger().info(
-                    f'Detection timeout ({elapsed:.1f}s) → flag reset'
-                )
+                self.get_logger().info(f'Detection timeout ({elapsed:.1f}s) → flag reset')
             self.last_detection_time = None
-    
-    def skeleton_callback(self, msg):
-        """Processa skeleton e rileva persona sdraiata."""
+
+    def skeleton_callback(self, msg: PoseArray):
         self.latest_skeleton = msg
-        
-        # FILTRO 1: Check postura
-        if self.current_posture != "LYING":
+
+        if self.current_posture != 'LYING':
             return
-        
-        # FILTRO 2: Check confidence
         if self.current_confidence < self.min_conf:
             self.get_logger().warn(
-                f'LYING rilevato ma confidence bassa: {self.current_confidence:.2f} < {self.min_conf}',
-                throttle_duration_sec=2.0
-            )
+                f'LYING ma confidence bassa: {self.current_confidence:.2f}',
+                throttle_duration_sec=2.0)
             return
-        
-        # Estrai keypoints validi
+
         valid_points = []
         for pose in msg.poses:
             p = pose.position
             if not (math.isnan(p.x) or math.isnan(p.y) or math.isnan(p.z)):
                 valid_points.append([p.x, p.y, p.z])
-        
-        # FILTRO 3: Check qualità detection
+
         if len(valid_points) < self.min_kp:
             self.get_logger().warn(
-                f'LYING rilevato ma pochi keypoints: {len(valid_points)}/{self.min_kp}',
-                throttle_duration_sec=2.0
-            )
+                f'LYING ma pochi keypoints: {len(valid_points)}/{self.min_kp}',
+                throttle_duration_sec=2.0)
             return
-        
-        # Update detection time
-        self.last_detection_time = self.get_clock().now()
-        
-        points = np.array(valid_points)
 
-        # Calcola e pubblica body axis (COCO: 5=spalla sx, 6=spalla dx, 11=fianco sx, 12=fianco dx)
+        self.last_detection_time = self.get_clock().now()
+
         self._try_publish_body_axis(msg)
 
-        # Controlla distanza minima: persona troppo vicina → approach point dietro camera
-        mean_depth = np.mean(points[:, 2])
-        if mean_depth < self.approach_dist + 0.2:
-            self.get_logger().warn(
-                f'Persona troppo vicina ({mean_depth:.2f}m < {self.approach_dist + 0.2:.2f}m) '
-                f'— approach point non valido, ignorato.',
-                throttle_duration_sec=2.0
-            )
+        if not self.test_mode and not self.goal_sent:
+            self._publish_lateral_approach(msg)
+            self.goal_sent = True
+        elif self.test_mode:
+            self._publish_lateral_approach(msg)
+
+    # ============================================================
+    # GEOMETRIA LATERALE (identica a teresa_mission)
+    # ============================================================
+
+    def _extract_kp(self, msg: PoseArray):
+        """Ritorna lista di np.array o None per ogni keypoint COCO."""
+        kp = []
+        for p in msg.poses:
+            pos = p.position
+            if math.isnan(pos.x) or math.isnan(pos.y) or math.isnan(pos.z):
+                kp.append(None)
+            else:
+                kp.append(np.array([pos.x, pos.y, pos.z], dtype=np.float64))
+        return kp
+
+    def _publish_lateral_approach(self, msg: PoseArray):
+        """
+        Geometria:
+        - asse corpo: piedi → testa
+        - laterale: perpendicolare all'asse corpo nel piano XZ (camera optical frame)
+        - approach point: torso_center ± lateral * (bbox_half + approach_margin)
+        - orientamento: Spot guarda verso torso_center
+        """
+        kp = self._extract_kp(msg)
+        if len(kp) < 17:
             return
 
-        # Calcola bounding box 3D
-        bbox_min = points.min(axis=0)
-        bbox_max = points.max(axis=0)
-        bbox_center = (bbox_min + bbox_max) / 2.0
+        # --- Centro torso ---
+        torso_pts = [kp[i] for i in [L_SHOULDER, R_SHOULDER, L_HIP, R_HIP] if kp[i] is not None]
+        if len(torso_pts) < 2:
+            return
+        torso_center = np.mean(torso_pts, axis=0)
+
+        # --- Asse corpo (piedi → testa) ---
+        head_pts = [kp[i] for i in [NOSE, L_SHOULDER, R_SHOULDER] if kp[i] is not None]
+        feet_pts = [kp[i] for i in [L_ANKLE, R_ANKLE] if kp[i] is not None]
+        if len(feet_pts) == 0:
+            feet_pts = [kp[i] for i in [L_KNEE, R_KNEE] if kp[i] is not None]
+        if len(head_pts) == 0 or len(feet_pts) == 0:
+            return
+
+        head_center = np.mean(head_pts, axis=0)
+        feet_center = np.mean(feet_pts, axis=0)
+        body_axis   = head_center - feet_center
+        body_len    = np.linalg.norm(body_axis)
+        if body_len < 0.1:
+            return
+        body_axis_n = body_axis / body_len
+
+        # --- Direzione laterale nel piano XZ (camera optical: X=right, Y=down, Z=depth) ---
+        up_cam = np.array([0.0, -1.0, 0.0])
+        lateral = np.cross(body_axis_n, up_cam)
+        lat_norm = np.linalg.norm(lateral)
+        if lat_norm < 1e-6:
+            lateral = np.array([1.0, 0.0, 0.0])
+        else:
+            lateral = lateral / lat_norm
+
+        # --- Bbox half nella direzione laterale ---
+        all_pts = np.array([kp[i] for i in range(17) if kp[i] is not None])
+        bbox_min = all_pts.min(axis=0)
+        bbox_max = all_pts.max(axis=0)
         bbox_size = bbox_max - bbox_min
-        
-        # Log detection
+        bbox_half = float(np.abs(np.dot(bbox_size * 0.5, np.abs(lateral))))
+        bbox_half = max(bbox_half, 0.3)
+
+        dist = bbox_half + self.approach_margin
+
+        # --- Scelta lato ---
+        candidate_a = torso_center + lateral * dist
+        candidate_b = torso_center - lateral * dist
+
+        if self.preferred_side == 'auto':
+            approach_pos = candidate_a if candidate_a[2] < candidate_b[2] else candidate_b
+        elif self.preferred_side == 'left':
+            approach_pos = candidate_a
+        else:
+            approach_pos = candidate_b
+
+        # --- Orientamento: Spot guarda verso torso_center ---
+        dx = torso_center[0] - approach_pos[0]
+        dz = torso_center[2] - approach_pos[2]
+        yaw = math.atan2(dx, dz)
+        qz  = math.sin(yaw / 2.0)
+        qw  = math.cos(yaw / 2.0)
+
+        # --- Pubblica PoseStamped ---
+        goal = PoseStamped()
+        goal.header.stamp    = self.get_clock().now().to_msg()
+        goal.header.frame_id = msg.header.frame_id
+        goal.pose.position.x = float(approach_pos[0])
+        goal.pose.position.y = float(approach_pos[1])
+        goal.pose.position.z = float(approach_pos[2])
+        goal.pose.orientation.z = float(qz)
+        goal.pose.orientation.w = float(qw)
+        self.goal_pub.publish(goal)
+
+        # --- Marker RViz ---
+        self._publish_approach_marker(approach_pos, msg.header)
+
         self.get_logger().info(
-            f'✅ PERSONA SDRAIATA rilevata! '
-            f'Keypoints: {len(valid_points)}/17, '
-            f'Confidence: {self.current_confidence:.2f}, '
-            f'BBox center: ({bbox_center[0]:.2f}, {bbox_center[1]:.2f}, {bbox_center[2]:.2f})',
+            f'Approach laterale: ({approach_pos[0]:.2f}, {approach_pos[1]:.2f}, {approach_pos[2]:.2f}) '
+            f'[margin={self.approach_margin}m side={self.preferred_side}]',
             throttle_duration_sec=2.0
         )
-        
-        # Calcola e pubblica approach point
-        if not self.test_mode and not self.goal_sent:
-            self.publish_approach_point(bbox_center, bbox_size, msg.header)
-            self.goal_sent = True
-            self.get_logger().info('🎯 Approach point pubblicato (Spot pronto per avvicinarsi)')
-        elif self.test_mode:
-            # In test mode: pubblica approach point MA non invia goal navigazione
-            self.publish_approach_point(bbox_center, bbox_size, msg.header, visualize_only=True)
-            
-    def _try_publish_body_axis(self, msg):
-        """Estrae body axis (testa→piedi) dai keypoint COCO e lo pubblica."""
+
+    def _try_publish_body_axis(self, msg: PoseArray):
         if len(msg.poses) < 13:
             return
 
@@ -191,17 +257,15 @@ class LayingHumanDetector(Node):
                 return None
             return np.array([p.x, p.y, p.z])
 
-        kp5, kp6   = _kp(5),  _kp(6)   # spalle
-        kp11, kp12 = _kp(11), _kp(12)  # fianchi
-
-        if kp5 is None or kp6 is None or kp11 is None or kp12 is None:
+        kp5, kp6   = _kp(5),  _kp(6)
+        kp11, kp12 = _kp(11), _kp(12)
+        if any(x is None for x in [kp5, kp6, kp11, kp12]):
             return
 
         shoulder_mid = (kp5 + kp6) / 2.0
         hip_mid      = (kp11 + kp12) / 2.0
         body_vec     = hip_mid - shoulder_mid
         body_len     = float(np.linalg.norm(body_vec))
-
         if body_len < 0.1:
             return
 
@@ -214,77 +278,24 @@ class LayingHumanDetector(Node):
         v.vector.z = float(axis[2])
         self.body_axis_pub.publish(v)
 
-    def publish_approach_point(self, bbox_center, bbox_size, header, visualize_only=False):
-        """
-        Calcola e pubblica approach point per Spot.
-
-        Geometria: frame camera_color_optical_frame (Z=depth forward, X=right, Y=down).
-        Spot deve avvicinarsi lungo Z: goal_z = persona_z - approach_dist.
-        Il navigator trasforma poi odom→body tramite TF.
-        """
-        # Goal: camera_color_optical_frame — X=right, Y=down, Z=depth
-        # Approach along Z (depth): stay at same X/Y, move closer by approach_dist
-        goal_x = bbox_center[0]
-        goal_y = bbox_center[1]
-        goal_z = bbox_center[2] - self.approach_dist
-        
-        # Crea goal message
-        goal = PoseStamped()
-        goal.header.stamp = self.get_clock().now().to_msg()
-        goal.header.frame_id = header.frame_id
-        goal.pose.position.x = float(goal_x)
-        goal.pose.position.y = float(goal_y)
-        goal.pose.position.z = float(goal_z)
-        goal.pose.orientation.w = 1.0  # Orientamento neutro
-        
-        # Pubblica goal (anche in test mode per visualizzazione)
-        self.goal_pub.publish(goal)
-        
-        # Pubblica marker punto di approccio
-        self.publish_approach_marker(goal_x, goal_y, goal_z, header)
-        
-        if visualize_only:
-            self.get_logger().info(
-                f'📍 Approach point calcolato (VISUALIZZAZIONE): '
-                f'({goal_x:.2f}, {goal_y:.2f}, {goal_z:.2f}) '
-                f'[{self.approach_dist}m davanti a persona]',
-                throttle_duration_sec=2.0
-            )
-        else:
-            self.get_logger().info(
-                f'🎯 Approach point pubblicato: '
-                f'({goal_x:.2f}, {goal_y:.2f}, {goal_z:.2f}) '
-                f'[{self.approach_dist}m davanti a persona]'
-            )
-    
-    def publish_approach_marker(self, x, y, z, header):
-        """Visualizza punto di approccio target in RViz (sfera verde)."""
-        marker = Marker()
-        marker.header.frame_id = header.frame_id
-        marker.header.stamp = header.stamp
-        marker.ns = 'approach_point'
-        marker.id = 1
-        marker.type = Marker.SPHERE
-        marker.action = Marker.ADD
-        
-        marker.pose.position.x = float(x)
-        marker.pose.position.y = float(y)
-        marker.pose.position.z = float(z)
-        marker.pose.orientation.w = 1.0
-        
-        marker.scale.x = 0.2
-        marker.scale.y = 0.2
-        marker.scale.z = 0.2
-        
-        # Verde brillante
-        marker.color.r = 0.0
-        marker.color.g = 1.0
-        marker.color.b = 0.0
-        marker.color.a = 1.0
-        
-        marker.lifetime.sec = 0  # Permanente
-        
-        self.approach_marker_pub.publish(marker)
+    def _publish_approach_marker(self, pos: np.ndarray, header):
+        m = Marker()
+        m.header.frame_id = header.frame_id
+        m.header.stamp    = self.get_clock().now().to_msg()
+        m.ns     = 'approach_point'
+        m.id     = 1
+        m.type   = Marker.SPHERE
+        m.action = Marker.ADD
+        m.pose.position.x = float(pos[0])
+        m.pose.position.y = float(pos[1])
+        m.pose.position.z = float(pos[2])
+        m.pose.orientation.w = 1.0
+        m.scale.x = m.scale.y = m.scale.z = 0.2
+        m.color.r = 0.0
+        m.color.g = 1.0
+        m.color.b = 0.0
+        m.color.a = 1.0
+        self.approach_marker_pub.publish(m)
 
 
 def main():
