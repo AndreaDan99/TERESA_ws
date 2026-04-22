@@ -12,6 +12,7 @@ import rclpy.duration
 import rclpy.time
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped, Twist
+from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformListener, TransformException
 import tf2_geometry_msgs  # noqa: F401 — registers PoseStamped transform support
 
@@ -107,7 +108,9 @@ class SpotGoalNavigatorNode(Node):
             self._cb_goal,
             10,
         )
-        self._cmd_pub = self.create_publisher(Twist, self._p.cmd_vel_topic, 10)
+        self._cmd_pub    = self.create_publisher(Twist, self._p.cmd_vel_topic, 10)
+        self._sit_client = self.create_client(Trigger, '/my_spot/sit')
+        self._stand_client = self.create_client(Trigger, '/my_spot/stand')
 
         # ── State ──────────────────────────────────────────────────────────────
         # _latest_goal: raw approach point in camera frame (updated by sub)
@@ -131,7 +134,7 @@ class SpotGoalNavigatorNode(Node):
             f'SpotGoalNavigator ready.\n'
             f'  cmd_vel → {self._p.cmd_vel_topic}\n'
             f'  robot_frame: {self._p.robot_frame}\n'
-            f'Press "s" to navigate | "b" to return to start | ESC to EMERGENCY STOP.'
+            f'Press "s" = naviga | "b" = torna a start | "c" = siediti | "a" = alzati | ESC = stop'
         )
 
     # ── Callbacks ──────────────────────────────────────────────────────────────
@@ -159,6 +162,10 @@ class SpotGoalNavigatorNode(Node):
                     self._on_start_key()
                 elif ch == 'b':
                     self._on_return_key()
+                elif ch == 'c':
+                    self._call_trigger(self._sit_client, 'Sit')
+                elif ch == 'a':
+                    self._call_trigger(self._stand_client, 'Stand')
                 elif ch == '\x1b':  # ESC
                     self._on_estop_key()
                 elif ch == '\x03':  # Ctrl+C
@@ -300,6 +307,17 @@ class SpotGoalNavigatorNode(Node):
         # ── Publish velocity ───────────────────────────────────────────────────
         twist = compute_cmd_vel(dx, dy, state, self._p)
         self._cmd_pub.publish(twist)
+
+    def _call_trigger(self, client, name: str) -> None:
+        if not client.service_is_ready():
+            self.get_logger().warn(f'{name} service non disponibile')
+            return
+        future = client.call_async(Trigger.Request())
+        future.add_done_callback(
+            lambda f: self.get_logger().info(
+                f'{name}: {"OK" if f.result().success else "FALLITO — " + f.result().message}'
+            )
+        )
 
     def destroy_node(self) -> None:
         """Publish zero Twist on shutdown to stop Spot."""
