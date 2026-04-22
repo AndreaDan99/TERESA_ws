@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import math
+import os
 import sys
 import termios
 import threading
@@ -141,6 +142,12 @@ class SpotGoalNavigatorNode(Node):
     def _keyboard_loop(self) -> None:
         """Raw single-char stdin reader — runs on daemon thread."""
         fd = sys.stdin.fileno()
+        if not os.isatty(fd):
+            self.get_logger().warn(
+                'Keyboard non disponibile (stdin non è un TTY).\n'
+                '   Usa: ros2 run spot_control spot_goal_navigator'
+            )
+            return
         old_settings = termios.tcgetattr(fd)
         try:
             tty.setraw(fd)

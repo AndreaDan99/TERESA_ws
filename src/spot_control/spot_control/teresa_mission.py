@@ -18,6 +18,7 @@ PREREQUISITI:
 """
 
 import math
+import os
 import sys
 import termios
 import threading
@@ -436,6 +437,12 @@ class TeresaMission(Node):
 
     def _keyboard_loop(self):
         fd = sys.stdin.fileno()
+        if not os.isatty(fd):
+            self.get_logger().warn(
+                'Keyboard non disponibile (stdin non è un TTY — lanciato via ros2 launch?).\n'
+                '   Usa: ros2 run spot_control teresa_mission per il controllo da tastiera.'
+            )
+            return
         old_settings = termios.tcgetattr(fd)
         try:
             tty.setraw(fd)
