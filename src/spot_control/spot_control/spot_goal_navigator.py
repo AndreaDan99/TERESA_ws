@@ -25,21 +25,9 @@ class NavState(Enum):
 
 
 def compute_cmd_vel(dx: float, dy: float, state: NavState, params) -> Twist:
-    """Pure function: compute Twist from goal offset in body frame.
-
-    Args:
-        dx: goal x in body frame (forward = positive)
-        dy: goal y in body frame (left = positive)
-        state: current NavState
-        params: object with angular_speed_max, linear_speed_max, kp_ang, kp_lin
-
-    Returns:
-        geometry_msgs/Twist
-    """
     twist = Twist()
-
     if state not in (NavState.ROTATING, NavState.DRIVING):
-        return twist  # zero twist for IDLE / STOPPED
+        return twist
 
     angle_to_goal = math.atan2(dy, dx)
     dist          = math.hypot(dx, dy)
@@ -48,11 +36,9 @@ def compute_cmd_vel(dx: float, dy: float, state: NavState, params) -> Twist:
         raw_ang = params.kp_ang * angle_to_goal
         twist.angular.z = float(max(-params.angular_speed_max,
                                     min(params.angular_speed_max, raw_ang)))
-
     elif state == NavState.DRIVING:
         raw_lin = params.kp_lin * dist
         twist.linear.x = float(max(0.0, min(params.linear_speed_max, raw_lin)))
-
         raw_ang = params.kp_ang * angle_to_goal
         half    = params.angular_speed_max / 2.0
         twist.angular.z = float(max(-half, min(half, raw_ang)))
@@ -60,11 +46,7 @@ def compute_cmd_vel(dx: float, dy: float, state: NavState, params) -> Twist:
     return twist
 
 
-# ── ROS2 helpers ──────────────────────────────────────────────────────────────
-
 class _Params:
-    """Holds node parameters as plain attributes for use with compute_cmd_vel."""
-
     def __init__(self, node: Node):
         self.cmd_vel_topic     = node.get_parameter('cmd_vel_topic').value
         self.goal_tolerance    = float(node.get_parameter('goal_tolerance').value)
@@ -74,18 +56,16 @@ class _Params:
         self.robot_frame       = node.get_parameter('robot_frame').value
         self.odom_frame        = node.get_parameter('odom_frame').value
         self.update_rate       = float(node.get_parameter('update_rate').value)
+        self.crouch_height     = float(node.get_parameter('crouch_height').value)
         self.kp_ang            = 1.0
         self.kp_lin            = 0.5
 
-
-# ── ROS2 Node ─────────────────────────────────────────────────────────────────
 
 class SpotGoalNavigatorNode(Node):
 
     def __init__(self):
         super().__init__('spot_goal_navigator')
 
-        # ── Parameters ────────────────────────────────────────────────────────
         self.declare_parameter('cmd_vel_topic',     '/my_spot/cmd_vel')
         self.declare_parameter('goal_tolerance',     0.3)
         self.declare_parameter('angular_speed_max',  0.5)
@@ -94,63 +74,63 @@ class SpotGoalNavigatorNode(Node):
         self.declare_parameter('robot_frame',        'my_spot/body')
         self.declare_parameter('odom_frame',         'my_spot/odom')
         self.declare_parameter('update_rate',        10.0)
+        self.declare_parameter('crouch_height',     -0.10)  # metà altezza [m]
 
         self._p = _Params(self)
 
-        # ── TF ────────────────────────────────────────────────────────────────
         self._tf_buffer   = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
 
-        # ── Sub / Pub ──────────────────────────────────────────────────────────
         self._goal_sub = self.create_subscription(
-            PoseStamped,
-            '/laying_human/approach_point',
-            self._cb_goal,
-            10,
-        )
-        self._cmd_pub    = self.create_publisher(Twist, self._p.cmd_vel_topic, 10)
-        self._sit_client = self.create_client(Trigger, '/my_spot/sit')
+            PoseStamped, '/laying_human/approach_point', self._cb_goal, 10)
+
+        self._cmd_pub      = self.create_publisher(Twist, self._p.cmd_vel_topic, 10)
+        self._sit_client   = self.create_client(Trigger, '/my_spot/sit')
         self._stand_client = self.create_client(Trigger, '/my_spot/stand')
 
-        # ── State ──────────────────────────────────────────────────────────────
-        # _latest_goal: raw approach point in camera frame (updated by sub)
-        # _goal_odom:   goal transformed to odom frame at press of 's' (world-fixed)
-        # _start_odom:  Spot position at press of 's' (for return-to-start)
-        self._state: NavState                  = NavState.IDLE
-        self._latest_goal: PoseStamped | None  = None
-        self._goal_odom:   PoseStamped | None  = None
-        self._start_odom:  PoseStamped | None  = None
+        # SetStandHeight per altezza intermedia
+        try:
+            from spot_msgs.srv import SetStandHeight
+            self._height_client = self.create_client(SetStandHeight, '/my_spot/set_stand_height')
+            self._SetStandHeight = SetStandHeight
+        except ImportError:
+            self._height_client = None
+            self._SetStandHeight = None
+            self.get_logger().warn('spot_msgs non trovato — tasto h disabilitato')
+
+        self._state: NavState                 = NavState.IDLE
+        self._latest_goal: PoseStamped | None = None
+        self._goal_odom:   PoseStamped | None = None
+        self._start_odom:  PoseStamped | None = None
+        self._is_returning: bool              = False  # True durante ritorno a start
         self._lock = threading.Lock()
 
-        # ── Control loop timer ─────────────────────────────────────────────────
         period = 1.0 / self._p.update_rate
         self._timer = self.create_timer(period, self._control_loop)
 
-        # ── Keyboard thread ────────────────────────────────────────────────────
         self._kb_thread = threading.Thread(target=self._keyboard_loop, daemon=True)
         self._kb_thread.start()
 
         self.get_logger().info(
-            f'SpotGoalNavigator ready.\n'
-            f'  cmd_vel → {self._p.cmd_vel_topic}\n'
-            f'  robot_frame: {self._p.robot_frame}\n'
-            f'Press "s" = naviga | "b" = torna a start | "c" = siediti | "a" = alzati | ESC = stop'
+            f'SpotGoalNavigator ready — crouch_height={self._p.crouch_height}m\n'
+            f'  "s" = naviga | "b" = alzati+torna | "h" = metà altezza | '
+            f'"c" = siediti | "a" = alzati | ESC = stop'
         )
 
-    # ── Callbacks ──────────────────────────────────────────────────────────────
+    # ── Callbacks ─────────────────────────────────────────────────────────────
 
     def _cb_goal(self, msg: PoseStamped) -> None:
-        """Store latest approach point (raw camera frame)."""
         with self._lock:
             self._latest_goal = msg
 
+    # ── Keyboard ──────────────────────────────────────────────────────────────
+
     def _keyboard_loop(self) -> None:
-        """Raw single-char stdin reader — runs on daemon thread."""
         fd = sys.stdin.fileno()
         if not os.isatty(fd):
             self.get_logger().warn(
-                'Keyboard non disponibile (stdin non è un TTY).\n'
-                '   Usa: ros2 run spot_control spot_goal_navigator'
+                'Keyboard non disponibile (stdin non è TTY). '
+                'Usa: ros2 run spot_control spot_goal_navigator'
             )
             return
         old_settings = termios.tcgetattr(fd)
@@ -162,6 +142,8 @@ class SpotGoalNavigatorNode(Node):
                     self._on_start_key()
                 elif ch == 'b':
                     self._on_return_key()
+                elif ch == 'h':
+                    self._set_height(self._p.crouch_height)
                 elif ch == 'c':
                     self._call_trigger(self._sit_client, 'Sit')
                 elif ch == 'a':
@@ -178,7 +160,7 @@ class SpotGoalNavigatorNode(Node):
 
     def _on_estop_key(self) -> None:
         with self._lock:
-            self._state     = NavState.STOPPED
+            self._state     = NavState.IDLE
             self._goal_odom = None
         self._cmd_pub.publish(Twist())
         self.get_logger().warn('EMERGENCY STOP — Spot fermato.')
@@ -188,11 +170,9 @@ class SpotGoalNavigatorNode(Node):
             goal_raw = self._latest_goal
 
         if goal_raw is None:
-            self.get_logger().warn('No approach point received yet — cannot start.')
+            self.get_logger().warn('Nessun approach point ricevuto — avvia prima la percezione.')
             return
 
-        # Transform to odom (world-fixed) frame at press time.
-        # Use stamp=Time() (zero) to request latest available TF.
         goal_stamped = PoseStamped()
         goal_stamped.header.frame_id = goal_raw.header.frame_id
         goal_stamped.header.stamp    = rclpy.time.Time().to_msg()
@@ -200,58 +180,66 @@ class SpotGoalNavigatorNode(Node):
 
         try:
             goal_odom = self._tf_buffer.transform(
-                goal_stamped,
-                self._p.odom_frame,
-                timeout=rclpy.duration.Duration(seconds=0.5),
-            )
+                goal_stamped, self._p.odom_frame,
+                timeout=rclpy.duration.Duration(seconds=0.5))
         except TransformException as e:
-            self.get_logger().warn(f'TF lookup failed: {e} — navigation not started.')
+            self.get_logger().warn(f'TF fallita: {e} — navigazione non avviata.')
             return
 
-        # Save start pose (current Spot position in odom)
+        # Salva start pose
         try:
             t = self._tf_buffer.lookup_transform(
                 self._p.odom_frame, self._p.robot_frame,
-                rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=0.5)
-            )
+                rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=0.5))
             start = PoseStamped()
-            start.header.frame_id    = self._p.odom_frame
-            start.header.stamp       = self.get_clock().now().to_msg()
-            start.pose.position.x    = t.transform.translation.x
-            start.pose.position.y    = t.transform.translation.y
-            start.pose.position.z    = 0.0
-            start.pose.orientation   = t.transform.rotation
+            start.header.frame_id  = self._p.odom_frame
+            start.header.stamp     = self.get_clock().now().to_msg()
+            start.pose.position.x  = t.transform.translation.x
+            start.pose.position.y  = t.transform.translation.y
+            start.pose.position.z  = 0.0
+            start.pose.orientation = t.transform.rotation
             with self._lock:
                 self._start_odom = start
             self.get_logger().info(
-                f'Start pose salvata: ({start.pose.position.x:.2f}, {start.pose.position.y:.2f})'
-            )
+                f'Start pose salvata: ({start.pose.position.x:.2f}, {start.pose.position.y:.2f})')
         except TransformException as e:
             self.get_logger().warn(f'Impossibile salvare start pose: {e}')
 
         with self._lock:
-            self._goal_odom = goal_odom
-            self._state     = NavState.ROTATING
+            self._goal_odom    = goal_odom
+            self._is_returning = False
+            self._state        = NavState.ROTATING
 
         self.get_logger().info(
-            f'Navigation started → '
-            f'({goal_odom.pose.position.x:.2f}, {goal_odom.pose.position.y:.2f}) [odom]'
-        )
+            f'Navigazione → ({goal_odom.pose.position.x:.2f}, {goal_odom.pose.position.y:.2f})')
 
     def _on_return_key(self) -> None:
         with self._lock:
             start = self._start_odom
         if start is None:
-            self.get_logger().warn('Nessuna start pose salvata — premi prima "s".')
+            self.get_logger().warn('Nessuna start pose — premi prima "s".')
             return
-        with self._lock:
-            self._goal_odom = start
-            self._state     = NavState.ROTATING
-        self.get_logger().info(
-            f'Ritorno a start: ({start.pose.position.x:.2f}, {start.pose.position.y:.2f}) [odom]'
-        )
+        self.get_logger().info('b: alzati poi torno a start...')
+        # Prima si alza, poi quando il callback è done naviga indietro
+        self._stand_then_return(start)
 
-    # ── Control loop ───────────────────────────────────────────────────────────
+    def _stand_then_return(self, start: PoseStamped) -> None:
+        if not self._stand_client.service_is_ready():
+            self.get_logger().warn('Stand service non disponibile — torno comunque')
+            self._start_return_nav(start)
+            return
+        future = self._stand_client.call_async(Trigger.Request())
+        future.add_done_callback(lambda f: self._start_return_nav(start))
+
+    def _start_return_nav(self, start: PoseStamped) -> None:
+        with self._lock:
+            self._goal_odom    = start
+            self._is_returning = True
+            self._state        = NavState.ROTATING
+        self.get_logger().info(
+            f'Ritorno a start: ({start.pose.position.x:.2f}, {start.pose.position.y:.2f})')
+
+    # ── Control loop ──────────────────────────────────────────────────────────
 
     def _control_loop(self) -> None:
         with self._lock:
@@ -261,8 +249,6 @@ class SpotGoalNavigatorNode(Node):
         if state == NavState.IDLE or goal_odom is None:
             return
 
-        # Re-transform goal from odom → body each tick so dx/dy reflect
-        # current robot position (body frame moves with Spot).
         goal_body_stamped = PoseStamped()
         goal_body_stamped.header.frame_id = self._p.odom_frame
         goal_body_stamped.header.stamp    = rclpy.time.Time().to_msg()
@@ -270,43 +256,41 @@ class SpotGoalNavigatorNode(Node):
 
         try:
             goal_body = self._tf_buffer.transform(
-                goal_body_stamped,
-                self._p.robot_frame,
-                timeout=rclpy.duration.Duration(seconds=0.1),
-            )
+                goal_body_stamped, self._p.robot_frame,
+                timeout=rclpy.duration.Duration(seconds=0.1))
         except TransformException as e:
-            self.get_logger().warn(f'TF error in control loop: {e}')
+            self.get_logger().warn(f'TF error: {e}')
             return
 
-        dx = goal_body.pose.position.x
-        dy = goal_body.pose.position.y
+        dx            = goal_body.pose.position.x
+        dy            = goal_body.pose.position.y
         dist          = math.hypot(dx, dy)
         angle_to_goal = math.atan2(dy, dx)
 
-        # ── State transitions ──────────────────────────────────────────────────
         if state == NavState.ROTATING:
             if abs(angle_to_goal) < self._p.angle_threshold:
                 with self._lock:
                     self._state = NavState.DRIVING
-                self.get_logger().info('Phase 2: DRIVING')
+                self.get_logger().info('DRIVING')
                 state = NavState.DRIVING
 
         if state == NavState.DRIVING:
             if dist < self._p.goal_tolerance:
                 with self._lock:
-                    self._state = NavState.STOPPED
+                    is_ret = self._is_returning
+                    self._state = NavState.IDLE
                 self._cmd_pub.publish(Twist())
-                self.get_logger().info('Goal reached — STOPPED. Press "s" for next goal.')
+                if not is_ret:
+                    self.get_logger().info('Arrivato — abbasso Spot a metà altezza')
+                    self._set_height(self._p.crouch_height)
+                else:
+                    self.get_logger().info('Tornato a start — premi "s" per nuova missione')
                 return
 
-        if state == NavState.STOPPED:
-            with self._lock:
-                self._state = NavState.IDLE
-            return
-
-        # ── Publish velocity ───────────────────────────────────────────────────
         twist = compute_cmd_vel(dx, dy, state, self._p)
         self._cmd_pub.publish(twist)
+
+    # ── Service helpers ───────────────────────────────────────────────────────
 
     def _call_trigger(self, client, name: str) -> None:
         if not client.service_is_ready():
@@ -319,8 +303,23 @@ class SpotGoalNavigatorNode(Node):
             )
         )
 
+    def _set_height(self, height: float) -> None:
+        if self._height_client is None:
+            self.get_logger().warn('set_stand_height non disponibile')
+            return
+        if not self._height_client.service_is_ready():
+            self.get_logger().warn('set_stand_height service non pronto')
+            return
+        req = self._SetStandHeight.Request()
+        req.height = float(height)
+        future = self._height_client.call_async(req)
+        future.add_done_callback(
+            lambda f: self.get_logger().info(
+                f'set_stand_height({height}m): {"OK" if f.result().success else "FALLITO"}'
+            )
+        )
+
     def destroy_node(self) -> None:
-        """Publish zero Twist on shutdown to stop Spot."""
         self._cmd_pub.publish(Twist())
         super().destroy_node()
 
