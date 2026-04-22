@@ -14,14 +14,16 @@ from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped, Twist
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformListener, TransformException
-import tf2_geometry_msgs  # noqa: F401 — registers PoseStamped transform support
+import tf2_geometry_msgs  # noqa: F401
+from tf_transformations import euler_from_quaternion
 
 
 class NavState(Enum):
-    IDLE     = auto()
-    ROTATING = auto()
-    DRIVING  = auto()
-    STOPPED  = auto()
+    IDLE       = auto()
+    ROTATING   = auto()
+    DRIVING    = auto()
+    STOPPED    = auto()
+    REALIGNING = auto()  # riallinea orientamento dopo ritorno a start
 
 
 def compute_cmd_vel(dx: float, dy: float, state: NavState, params) -> Twist:
@@ -102,7 +104,8 @@ class SpotGoalNavigatorNode(Node):
         self._latest_goal: PoseStamped | None = None
         self._goal_odom:   PoseStamped | None = None
         self._start_odom:  PoseStamped | None = None
-        self._is_returning: bool              = False  # True durante ritorno a start
+        self._start_yaw:   float              = 0.0   # orientamento originale [rad]
+        self._is_returning: bool              = False
         self._lock = threading.Lock()
 
         period = 1.0 / self._p.update_rate
@@ -198,10 +201,14 @@ class SpotGoalNavigatorNode(Node):
             start.pose.position.y  = t.transform.translation.y
             start.pose.position.z  = 0.0
             start.pose.orientation = t.transform.rotation
+            q = t.transform.rotation
+            _, _, yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
             with self._lock:
                 self._start_odom = start
+                self._start_yaw  = yaw
             self.get_logger().info(
-                f'Start pose salvata: ({start.pose.position.x:.2f}, {start.pose.position.y:.2f})')
+                f'Start pose salvata: ({start.pose.position.x:.2f}, {start.pose.position.y:.2f}) '
+                f'yaw={math.degrees(yaw):.1f}°')
         except TransformException as e:
             self.get_logger().warn(f'Impossibile salvare start pose: {e}')
 
@@ -278,14 +285,49 @@ class SpotGoalNavigatorNode(Node):
             if dist < self._p.goal_tolerance:
                 with self._lock:
                     is_ret = self._is_returning
-                    self._state = NavState.IDLE
                 self._cmd_pub.publish(Twist())
                 if not is_ret:
                     self.get_logger().info('Arrivato — abbasso Spot a metà altezza')
                     self._set_height(self._p.crouch_height)
+                    with self._lock:
+                        self._state = NavState.IDLE
                 else:
-                    self.get_logger().info('Tornato a start — premi "s" per nuova missione')
+                    self.get_logger().info('Posizione start raggiunta — riallineo orientamento...')
+                    with self._lock:
+                        self._state = NavState.REALIGNING
                 return
+
+        if state == NavState.REALIGNING:
+            # Leggi yaw corrente
+            try:
+                t = self._tf_buffer.lookup_transform(
+                    self._p.odom_frame, self._p.robot_frame,
+                    rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=0.1))
+                q = t.transform.rotation
+                _, _, current_yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
+            except TransformException:
+                return
+
+            with self._lock:
+                target_yaw = self._start_yaw
+
+            yaw_err = target_yaw - current_yaw
+            # Normalizza in [-π, π]
+            yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
+
+            if abs(yaw_err) < self._p.angle_threshold:
+                self._cmd_pub.publish(Twist())
+                with self._lock:
+                    self._state = NavState.IDLE
+                self.get_logger().info('Riallineamento completato — pronto per nuova missione')
+                return
+
+            twist = Twist()
+            raw_ang = self._p.kp_ang * yaw_err
+            twist.angular.z = float(max(-self._p.angular_speed_max,
+                                        min(self._p.angular_speed_max, raw_ang)))
+            self._cmd_pub.publish(twist)
+            return
 
         twist = compute_cmd_vel(dx, dy, state, self._p)
         self._cmd_pub.publish(twist)
