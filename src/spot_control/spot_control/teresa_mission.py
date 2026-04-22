@@ -55,6 +55,8 @@ NAVIGATING     = 'NAVIGATING'
 ARRIVED        = 'ARRIVED'
 CROUCHING      = 'CROUCHING'
 READY_FOR_SCAN = 'READY_FOR_SCAN'
+STANDING_UP    = 'STANDING_UP'
+RETURNING      = 'RETURNING'
 
 
 class TeresaMission(Node):
@@ -152,6 +154,12 @@ class TeresaMission(Node):
         self._go_authorized = False
         self._estop          = False
 
+        # Return-to-start
+        self._start_pose     = None   # PoseStamped odom, salvata prima di navigare
+        self._standing_done  = False  # True quando SetStandHeight(0) completato
+        self._standing_sent  = False  # evita invii multipli
+        self._returning_sent = False  # evita invii multipli
+
         # Keyboard thread
         self._kb_thread = threading.Thread(target=self._keyboard_loop, daemon=True)
         self._kb_thread.start()
@@ -166,7 +174,7 @@ class TeresaMission(Node):
             f'min_conf={self.min_conf}  '
             f'crouch={self.crouch_height}m  '
             f'side={self.preferred_side}\n'
-            f'   Tasti: "s" = avvia navigazione | ESC = emergency stop | Ctrl+C = quit'
+            f'   Tasti: "s" = avvia | "a" = alza Spot | "b" = torna a start | ESC = stop | Ctrl+C = quit'
         )
 
     # ============================================================
@@ -221,6 +229,10 @@ class TeresaMission(Node):
             self._tick_crouching()
         elif self._state == READY_FOR_SCAN:
             self._tick_ready()
+        elif self._state == STANDING_UP:
+            self._tick_standing_up()
+        elif self._state == RETURNING:
+            self._tick_returning()
 
         # Pubblica sempre stato FSM in RViz
         self._publish_fsm_label()
@@ -272,6 +284,7 @@ class TeresaMission(Node):
             self.get_logger().info('DRY RUN: goal calcolato, Spot non si muove')
             self._set_state(READY_FOR_SCAN)
         else:
+            self._save_start_pose()
             self._send_trajectory(goal)
             self._nav_start_time = self.get_clock().now()
             self._set_state(NAVIGATING)
@@ -357,6 +370,80 @@ class TeresaMission(Node):
         )
         # Qui in futuro: trigger z1_FSM
 
+    def _tick_standing_up(self):
+        if self.dry_run or self._stand_client is None:
+            self._standing_done = True
+            self.get_logger().info('DRY RUN: Spot in piedi — premi B per tornare')
+            return
+        if not self._stand_client.service_is_ready():
+            self.get_logger().warn('SetStandHeight non disponibile', throttle_duration_sec=2.0)
+            return
+        if not self._standing_sent:
+            self._standing_sent = True
+            try:
+                from spot_msgs.srv import SetStandHeight
+                req = SetStandHeight.Request()
+                req.height = 0.0  # altezza neutra (in piedi)
+                future = self._stand_client.call_async(req)
+                future.add_done_callback(self._cb_stand_done)
+            except Exception as e:
+                self.get_logger().error(f'Errore SetStandHeight stand-up: {e}')
+                self._standing_done = True
+                self._standing_sent = False
+
+    def _cb_stand_done(self, future):
+        try:
+            result = future.result()
+            if result.success:
+                self.get_logger().info('✅ Spot in piedi — premi B per tornare alla posizione iniziale')
+            else:
+                self.get_logger().warn(f'Stand-up fallito: {result.message}')
+        except Exception as e:
+            self.get_logger().error(f'Stand-up exception: {e}')
+        self._standing_done = True
+        self._standing_sent = False
+
+    def _tick_returning(self):
+        if self._estop:
+            self._cancel_trajectory()
+            self._set_state(IDLE)
+            return
+        if self._start_pose is None:
+            self.get_logger().warn('Nessuna start pose salvata — torno a IDLE')
+            self._set_state(IDLE)
+            return
+        if not self._returning_sent:
+            self._returning_sent = True
+            self._nav_start_time = self.get_clock().now()
+            self._send_trajectory(self._start_pose)
+            return
+        elapsed = (self.get_clock().now() - self._nav_start_time).nanoseconds * 1e-9
+        if elapsed > self.nav_timeout:
+            self.get_logger().warn(f'RETURNING: timeout {self.nav_timeout}s → IDLE')
+            self._cancel_trajectory()
+            self._returning_sent = False
+            self._set_state(IDLE)
+
+    def _save_start_pose(self):
+        try:
+            t = self.tf_buffer.lookup_transform(
+                self.goal_frame, 'my_spot/body',
+                rclpy.time.Time(), timeout=Duration(seconds=0.5)
+            )
+            ps = PoseStamped()
+            ps.header.frame_id = self.goal_frame
+            ps.header.stamp    = self.get_clock().now().to_msg()
+            ps.pose.position.x = t.transform.translation.x
+            ps.pose.position.y = t.transform.translation.y
+            ps.pose.position.z = 0.0
+            ps.pose.orientation = t.transform.rotation
+            self._start_pose = ps
+            self.get_logger().info(
+                f'Start pose salvata: ({ps.pose.position.x:.2f}, {ps.pose.position.y:.2f}) [{self.goal_frame}]'
+            )
+        except TransformException as e:
+            self.get_logger().warn(f'Impossibile salvare start pose: {e}')
+
     # ============================================================
     # KEYBOARD
     # ============================================================
@@ -371,6 +458,27 @@ class TeresaMission(Node):
                 if ch == 's':
                     self._go_authorized = True
                     self.get_logger().info('✅ Navigazione autorizzata da tastiera.')
+                elif ch == 'a':
+                    if self._state == READY_FOR_SCAN:
+                        self._standing_done = False
+                        self._standing_sent = False
+                        self._set_state(STANDING_UP)
+                        self.get_logger().info('A: Spot si alza...')
+                    else:
+                        self.get_logger().warn(
+                            f'A ignorato — valido solo da READY_FOR_SCAN (stato attuale: {self._state})'
+                        )
+                elif ch == 'b':
+                    if self._state == STANDING_UP and self._standing_done:
+                        self._returning_sent = False
+                        self._set_state(RETURNING)
+                        self.get_logger().info('B: Spot torna alla posizione iniziale...')
+                    elif self._state == STANDING_UP:
+                        self.get_logger().warn('B: attendi che Spot finisca di alzarsi (A ancora in corso)...')
+                    else:
+                        self.get_logger().warn(
+                            f'B ignorato — premi prima A da READY_FOR_SCAN (stato attuale: {self._state})'
+                        )
                 elif ch == '\x1b':  # ESC
                     self._estop = True
                     self._cancel_trajectory()
@@ -571,12 +679,20 @@ class TeresaMission(Node):
 
     def _cb_traj_result(self, future):
         result = future.result().result
-        if result.success:
-            self.get_logger().info('✅ Spot ARRIVATO al goal')
-            self._set_state(ARRIVED)
-        else:
-            self.get_logger().warn(f'Trajectory fallita: {result.message} → IDLE')
+        if self._state == RETURNING:
+            self._returning_sent = False
+            if result.success:
+                self.get_logger().info('✅ Spot tornato alla posizione iniziale')
+            else:
+                self.get_logger().warn(f'Return trajectory fallita: {result.message}')
             self._set_state(IDLE)
+        else:
+            if result.success:
+                self.get_logger().info('✅ Spot ARRIVATO al goal')
+                self._set_state(ARRIVED)
+            else:
+                self.get_logger().warn(f'Trajectory fallita: {result.message} → IDLE')
+                self._set_state(IDLE)
 
     def _cancel_trajectory(self):
         if self._traj_goal_handle is not None:
