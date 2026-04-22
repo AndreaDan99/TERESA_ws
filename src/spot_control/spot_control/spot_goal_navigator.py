@@ -112,9 +112,11 @@ class SpotGoalNavigatorNode(Node):
         # ── State ──────────────────────────────────────────────────────────────
         # _latest_goal: raw approach point in camera frame (updated by sub)
         # _goal_odom:   goal transformed to odom frame at press of 's' (world-fixed)
-        self._state: NavState                 = NavState.IDLE
-        self._latest_goal: PoseStamped | None = None
-        self._goal_odom:   PoseStamped | None = None
+        # _start_odom:  Spot position at press of 's' (for return-to-start)
+        self._state: NavState                  = NavState.IDLE
+        self._latest_goal: PoseStamped | None  = None
+        self._goal_odom:   PoseStamped | None  = None
+        self._start_odom:  PoseStamped | None  = None
         self._lock = threading.Lock()
 
         # ── Control loop timer ─────────────────────────────────────────────────
@@ -129,7 +131,7 @@ class SpotGoalNavigatorNode(Node):
             f'SpotGoalNavigator ready.\n'
             f'  cmd_vel → {self._p.cmd_vel_topic}\n'
             f'  robot_frame: {self._p.robot_frame}\n'
-            f'Press "s" to navigate | ESC to EMERGENCY STOP.'
+            f'Press "s" to navigate | "b" to return to start | ESC to EMERGENCY STOP.'
         )
 
     # ── Callbacks ──────────────────────────────────────────────────────────────
@@ -155,6 +157,8 @@ class SpotGoalNavigatorNode(Node):
                 ch = sys.stdin.read(1)
                 if ch == 's':
                     self._on_start_key()
+                elif ch == 'b':
+                    self._on_return_key()
                 elif ch == '\x1b':  # ESC
                     self._on_estop_key()
                 elif ch == '\x03':  # Ctrl+C
@@ -197,6 +201,27 @@ class SpotGoalNavigatorNode(Node):
             self.get_logger().warn(f'TF lookup failed: {e} — navigation not started.')
             return
 
+        # Save start pose (current Spot position in odom)
+        try:
+            t = self._tf_buffer.lookup_transform(
+                self._p.odom_frame, self._p.robot_frame,
+                rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=0.5)
+            )
+            start = PoseStamped()
+            start.header.frame_id    = self._p.odom_frame
+            start.header.stamp       = self.get_clock().now().to_msg()
+            start.pose.position.x    = t.transform.translation.x
+            start.pose.position.y    = t.transform.translation.y
+            start.pose.position.z    = 0.0
+            start.pose.orientation   = t.transform.rotation
+            with self._lock:
+                self._start_odom = start
+            self.get_logger().info(
+                f'Start pose salvata: ({start.pose.position.x:.2f}, {start.pose.position.y:.2f})'
+            )
+        except TransformException as e:
+            self.get_logger().warn(f'Impossibile salvare start pose: {e}')
+
         with self._lock:
             self._goal_odom = goal_odom
             self._state     = NavState.ROTATING
@@ -204,6 +229,19 @@ class SpotGoalNavigatorNode(Node):
         self.get_logger().info(
             f'Navigation started → '
             f'({goal_odom.pose.position.x:.2f}, {goal_odom.pose.position.y:.2f}) [odom]'
+        )
+
+    def _on_return_key(self) -> None:
+        with self._lock:
+            start = self._start_odom
+        if start is None:
+            self.get_logger().warn('Nessuna start pose salvata — premi prima "s".')
+            return
+        with self._lock:
+            self._goal_odom = start
+            self._state     = NavState.ROTATING
+        self.get_logger().info(
+            f'Ritorno a start: ({start.pose.position.x:.2f}, {start.pose.position.y:.2f}) [odom]'
         )
 
     # ── Control loop ───────────────────────────────────────────────────────────
