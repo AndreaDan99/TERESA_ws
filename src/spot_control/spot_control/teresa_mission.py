@@ -73,7 +73,7 @@ class TeresaMission(Node):
         self.declare_parameter('nav_timeout', 30.0)
         self.declare_parameter('crouch_height', -0.10)
         self.declare_parameter('preferred_side', 'auto')   # 'auto' | 'left' | 'right'
-        self.declare_parameter('goal_frame', 'odom')
+        self.declare_parameter('goal_frame', 'my_spot/odom')
         self.declare_parameter('dry_run', False)
 
         self.approach_margin    = float(self.get_parameter('approach_margin').value)

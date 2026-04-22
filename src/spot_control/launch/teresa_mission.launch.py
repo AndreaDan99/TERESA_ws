@@ -54,7 +54,7 @@ def generate_launch_description():
             'min_confidence':   0.6,
             'goal_relock_threshold': 0.3,
             'nav_timeout':      30.0,
-            'goal_frame':       'odom',
+            'goal_frame':       'my_spot/odom',
         }]
     )
 
