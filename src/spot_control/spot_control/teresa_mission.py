@@ -69,7 +69,6 @@ class TeresaMission(Node):
         # ============================================================
         self.declare_parameter('approach_margin', 0.5)
         self.declare_parameter('min_confidence', 0.6)
-        self.declare_parameter('goal_relock_threshold', 0.3)
         self.declare_parameter('nav_timeout', 30.0)
         self.declare_parameter('crouch_height', -0.10)
         self.declare_parameter('preferred_side', 'auto')   # 'auto' | 'left' | 'right'
@@ -78,7 +77,6 @@ class TeresaMission(Node):
 
         self.approach_margin    = float(self.get_parameter('approach_margin').value)
         self.min_conf           = float(self.get_parameter('min_confidence').value)
-        self.relock_thr         = float(self.get_parameter('goal_relock_threshold').value)
         self.nav_timeout        = float(self.get_parameter('nav_timeout').value)
         self.crouch_height      = float(self.get_parameter('crouch_height').value)
         self.preferred_side     = str(self.get_parameter('preferred_side').value)
@@ -311,18 +309,6 @@ class TeresaMission(Node):
             )
             return
 
-        # Se detection buona e paziente si è spostato molto → ricalcola goal
-        if (self._keypoints is not None
-                and self._bbox_center is not None
-                and self._locked_goal is not None):
-            new_goal = self._compute_approach_goal()
-            if new_goal is not None:
-                dx = new_goal.pose.position.x - self._locked_goal.pose.position.x
-                dy = new_goal.pose.position.y - self._locked_goal.pose.position.y
-                if math.sqrt(dx**2 + dy**2) > self.relock_thr:
-                    self.get_logger().info('Paziente spostato → ricalcolo goal')
-                    self._locked_goal = new_goal
-                    self._send_trajectory(new_goal)
 
     def _tick_arrived(self):
         self._set_state(CROUCHING)

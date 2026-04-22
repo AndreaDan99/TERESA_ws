@@ -52,7 +52,6 @@ def generate_launch_description():
             'approach_margin':  LaunchConfiguration('approach_margin'),
             'crouch_height':    LaunchConfiguration('crouch_height'),
             'min_confidence':   0.6,
-            'goal_relock_threshold': 0.3,
             'nav_timeout':      30.0,
             'goal_frame':       'my_spot/odom',
         }]
