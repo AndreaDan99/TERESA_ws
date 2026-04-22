@@ -22,7 +22,7 @@ def generate_launch_description():
 
     dry_run_arg = DeclareLaunchArgument(
         'dry_run',
-        default_value='true',
+        default_value='false',
         description='Se true calcola goal e pubblica RViz ma non muove Spot'
     )
     preferred_side_arg = DeclareLaunchArgument(
@@ -32,7 +32,7 @@ def generate_launch_description():
     )
     approach_margin_arg = DeclareLaunchArgument(
         'approach_margin',
-        default_value='0.5',
+        default_value='0.05',
         description='Distanza di sicurezza oltre il bordo bbox (metri)'
     )
     crouch_height_arg = DeclareLaunchArgument(
