@@ -147,6 +147,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'approach_margin':          0.05,
+            'spot_front_offset':        0.50,
             'preferred_side':           'auto',
             'min_detection_confidence': 0.5,
             'min_valid_keypoints':      4,

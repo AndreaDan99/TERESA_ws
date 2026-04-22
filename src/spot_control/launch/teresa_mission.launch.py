@@ -51,6 +51,7 @@ def generate_launch_description():
             'preferred_side':   LaunchConfiguration('preferred_side'),
             'approach_margin':  LaunchConfiguration('approach_margin'),
             'crouch_height':    LaunchConfiguration('crouch_height'),
+            'spot_front_offset': 0.50,
             'min_confidence':   0.6,
             'nav_timeout':      30.0,
             'goal_frame':       'my_spot/odom',

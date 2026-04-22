@@ -33,14 +33,16 @@ class LayingHumanDetector(Node):
         # PARAMETRI
         # ============================================================
         self.declare_parameter('approach_margin',          0.05)   # extra oltre bbox edge [m]
+        self.declare_parameter('spot_front_offset',        0.50)   # body center → muso Spot [m]
         self.declare_parameter('preferred_side',           'auto') # 'auto'|'left'|'right'
         self.declare_parameter('min_detection_confidence', 0.5)
         self.declare_parameter('min_valid_keypoints',      4)
         self.declare_parameter('test_mode',                True)
         self.declare_parameter('detection_timeout',        2.0)
 
-        self.approach_margin   = float(self.get_parameter('approach_margin').value)
-        self.preferred_side    = str(self.get_parameter('preferred_side').value)
+        self.approach_margin    = float(self.get_parameter('approach_margin').value)
+        self.spot_front_offset  = float(self.get_parameter('spot_front_offset').value)
+        self.preferred_side     = str(self.get_parameter('preferred_side').value)
         self.min_conf          = float(self.get_parameter('min_detection_confidence').value)
         self.min_kp            = int(self.get_parameter('min_valid_keypoints').value)
         self.test_mode         = bool(self.get_parameter('test_mode').value)
@@ -207,7 +209,7 @@ class LayingHumanDetector(Node):
         bbox_half = float(np.abs(np.dot(bbox_size * 0.5, np.abs(lateral))))
         bbox_half = max(bbox_half, 0.3)
 
-        dist = bbox_half + self.approach_margin
+        dist = bbox_half + self.approach_margin + self.spot_front_offset
 
         # --- Scelta lato ---
         candidate_a = torso_center + lateral * dist

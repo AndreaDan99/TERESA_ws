@@ -68,7 +68,8 @@ class TeresaMission(Node):
         # ============================================================
         # PARAMETRI
         # ============================================================
-        self.declare_parameter('approach_margin', 0.5)
+        self.declare_parameter('approach_margin',   0.05)
+        self.declare_parameter('spot_front_offset', 0.50)
         self.declare_parameter('min_confidence', 0.6)
         self.declare_parameter('nav_timeout', 30.0)
         self.declare_parameter('crouch_height', -0.10)
@@ -77,6 +78,7 @@ class TeresaMission(Node):
         self.declare_parameter('dry_run', False)
 
         self.approach_margin    = float(self.get_parameter('approach_margin').value)
+        self.spot_front_offset  = float(self.get_parameter('spot_front_offset').value)
         self.min_conf           = float(self.get_parameter('min_confidence').value)
         self.nav_timeout        = float(self.get_parameter('nav_timeout').value)
         self.crouch_height      = float(self.get_parameter('crouch_height').value)
@@ -565,7 +567,7 @@ class TeresaMission(Node):
         else:
             bbox_half = 0.4   # fallback
 
-        dist = bbox_half + self.approach_margin
+        dist = bbox_half + self.approach_margin + self.spot_front_offset
 
         # --- Scelta del lato ---
         candidate_a = torso_center + lateral * dist   # lato +lateral
