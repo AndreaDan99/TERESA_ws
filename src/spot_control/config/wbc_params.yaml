@@ -2,6 +2,8 @@ wbc_qp_controller:
   ros__parameters:
     urdf_path: ''   # auto-resolved via ament_index at runtime
 
+    dry_run: false     # true → debug topics, no robot movement
+
     # TF frames
     odom_frame:      'my_spot/odom'
     body_frame:      'my_spot/body'

@@ -29,6 +29,9 @@ def generate_launch_description():
     z1_z_arg = DeclareLaunchArgument('z1_z', default_value='0.70',
         description='Z1 link00 Z from my_spot/body [m] (up)')
 
+    dry_run_arg = DeclareLaunchArgument('dry_run', default_value='false',
+        description='Dry run: publish debug topics only, no robot movement')
+
     params_file = PathJoinSubstitution([
         FindPackageShare('spot_control'), 'config', 'wbc_params.yaml'
     ])
@@ -60,7 +63,8 @@ def generate_launch_description():
         executable='wbc_qp_controller',
         name='wbc_qp_controller',
         output='screen',
-        parameters=[params_file],
+        parameters=[params_file,
+                    {'dry_run': LaunchConfiguration('dry_run')}],
     )
 
     coord_node = Node(
@@ -72,7 +76,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        z1_x_arg, z1_y_arg, z1_z_arg,
+        z1_x_arg, z1_y_arg, z1_z_arg, dry_run_arg,
         LogInfo(msg=['WBC — Spot+Z1 holistic control']),
         LogInfo(msg=['TF my_spot/body → link00 (ESTIMATED — misurare dopo montaggio)']),
         static_tf_z1_mount,

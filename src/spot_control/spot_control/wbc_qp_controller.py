@@ -44,6 +44,7 @@ class WBCQPControllerNode(Node):
         super().__init__('wbc_qp_controller')
 
         # ── Parameters ────────────────────────────────────────────────
+        self.declare_parameter('dry_run',        False)
         self.declare_parameter('urdf_path', '')
         self.declare_parameter('odom_frame',    'my_spot/odom')
         self.declare_parameter('body_frame',    'my_spot/body')
@@ -66,6 +67,7 @@ class WBCQPControllerNode(Node):
         self.declare_parameter('joint_states_topic', '/joint_states')
 
         p = lambda n: self.get_parameter(n).value
+        self._dry_run       = bool(p('dry_run'))
         self._odom_frame    = p('odom_frame')
         self._body_frame    = p('body_frame')
         self._ee_frame      = p('ee_frame')
@@ -115,9 +117,16 @@ class WBCQPControllerNode(Node):
         self.create_subscription(Float32,     '/wbc/target_uncertainty',   self._cb_uncert,      10)
         self.create_subscription(Float32,     '/wbc/desired_yaw',          self._cb_desired_yaw, 10)
 
-        self._pub_ik  = self.create_publisher(PoseStamped, p('ik_goal_topic'),   10)
-        self._pub_en  = self.create_publisher(Bool,        p('ik_enable_topic'), 10)
-        self._pub_vel = self.create_publisher(Twist,       p('cmd_vel_topic'),   10)
+        if self._dry_run:
+            self._pub_ik  = self.create_publisher(PoseStamped, '/wbc/ik_goal_pose_debug',  10)
+            self._pub_en  = self.create_publisher(Bool,        '/wbc/ik_enable_debug',     10)
+            self._pub_vel = self.create_publisher(Twist,       '/wbc/cmd_vel_debug',       10)
+            self.get_logger().warn(
+                'DRY_RUN mode — output on /wbc/*_debug topics, no robot movement')
+        else:
+            self._pub_ik  = self.create_publisher(PoseStamped, p('ik_goal_topic'),   10)
+            self._pub_en  = self.create_publisher(Bool,        p('ik_enable_topic'), 10)
+            self._pub_vel = self.create_publisher(Twist,       p('cmd_vel_topic'),   10)
 
         # ── Timer ─────────────────────────────────────────────────────
         self.create_timer(self._update_period, self._update)
@@ -291,8 +300,9 @@ class WBCQPControllerNode(Node):
         twist.angular.z = float(wz)
         self._pub_vel.publish(twist)
 
+        prefix = '[DRY_RUN] ' if self._dry_run else ''
         self.get_logger().info(
-            f'WBC: m={m:.3f} vx={vx:.3f} wz={wz:.3f} '
+            f'{prefix}WBC: m={m:.3f} vx={vx:.3f} wz={wz:.3f} '
             f'|dp|={dp_norm:.3f} r_ball={r_ball:.3f} eff={effective:.3f} '
             f'yaw_err={math.degrees(yaw_error):.1f}°',
             throttle_duration_sec=2.0)
