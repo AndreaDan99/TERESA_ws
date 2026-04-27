@@ -97,7 +97,7 @@ class WBCCoordinatorNode(Node):
         super().__init__('wbc_coordinator')
 
         # ── Parameters ────────────────────────────────────────────────
-        self.declare_parameter('orbbec_confidence_threshold',  0.4)
+        self.declare_parameter('orbbec_confidence_threshold',  0.5)
         self.declare_parameter('handoff_distance',            0.05)
         self.declare_parameter('odom_frame',                   'my_spot/odom')
         self.declare_parameter('body_frame',                   'my_spot/body')

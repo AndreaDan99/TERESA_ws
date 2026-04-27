@@ -44,7 +44,7 @@ wbc_qp_controller:
 
 wbc_coordinator:
   ros__parameters:
-    orbbec_confidence_threshold: 0.4
+    orbbec_confidence_threshold: 0.5
 
     # Handoff triggers when Spot body is within this distance of the approach_point [m].
     # approach_point is published by laying_human_detector at approach_distance in front
