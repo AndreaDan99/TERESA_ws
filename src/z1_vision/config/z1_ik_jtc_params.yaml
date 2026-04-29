@@ -19,7 +19,7 @@ z1_ik_to_jtc:
     ik_rot_weight:  0.3         # basso: privilegia posizione su orientamento (più facile raggiungere pose arco)
 
     # ── Traiettoria JTC (smoothstep quintica) ──────────────────────
-    max_joint_vel: 0.6          # [rad/s] velocità massima joint
+    max_joint_vel: 0.2          # [rad/s] velocità massima joint (ridotta per evitare vibrazioni su Spot)
     traj_min_time: 1.0          # [s]    durata minima traiettoria
-    traj_max_time: 10.0         # [s]    durata massima traiettoria
+    traj_max_time: 15.0         # [s]    durata massima traiettoria
     traj_points:   25           # numero di waypoint (>= 3)
