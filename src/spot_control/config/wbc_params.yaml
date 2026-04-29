@@ -36,6 +36,11 @@ wbc_qp_controller:
     # Goal update period — must be >= traj_min_time in z1_ik_jtc_params.yaml (1.0s)
     update_period: 1.5   # [s]
 
+    # Workspace safety margin [m] — keep in sync with z1_fsm_params.yaml
+    # Uses the same WorkspaceChecker class (z1_vision.workspace_checker).
+    # EE goals are clipped to max_reach - safety_margin.
+    workspace_safety_margin: 0.30
+
     # Topics — output to mux, not directly to z1_ik_to_jtc
     ik_goal_topic:      '/wbc/ik_goal_pose'
     ik_enable_topic:    '/wbc/ik_enable'

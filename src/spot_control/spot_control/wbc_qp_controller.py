@@ -33,6 +33,7 @@ from spot_control.wbc_math import (
     wbc_split,
     wbc_split_with_yaw,
 )
+from z1_vision.workspace_checker import WorkspaceChecker
 
 
 JOINT_ORDER = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']
@@ -61,6 +62,7 @@ class WBCQPControllerNode(Node):
         self.declare_parameter('wz_max',        0.5)
         self.declare_parameter('q_dot_max',     0.6)
         self.declare_parameter('update_period', 1.5)
+        self.declare_parameter('workspace_safety_margin', 0.30)
         self.declare_parameter('ik_goal_topic',      '/wbc/ik_goal_pose')
         self.declare_parameter('ik_enable_topic',    '/wbc/ik_enable')
         self.declare_parameter('cmd_vel_topic',      '/my_spot/cmd_vel')
@@ -98,6 +100,12 @@ class WBCQPControllerNode(Node):
         self._data  = self._model.createData()
         self._ee_id = self._model.getFrameId(self._ee_frame)
         self._q_neutral = pin.neutral(self._model)
+
+        self._ws_checker = WorkspaceChecker(
+            urdf,
+            ee_frame=self._ee_frame,
+            safety_margin=float(p('workspace_safety_margin')),
+        )
 
         # ── TF ────────────────────────────────────────────────────────
         self._tf = Buffer()
@@ -277,13 +285,25 @@ class WBCQPControllerNode(Node):
         pin.updateFramePlacements(self._model, self._data)
         T_new = self._data.oMf[self._ee_id]
 
+        # 9.5. Clip EE goal to safe workspace (max_reach - safety_margin)
+        ws_pos = np.array([T_new.translation[0],
+                           T_new.translation[1],
+                           T_new.translation[2]])
+        clipped_pos, was_clipped, _ = self._ws_checker.clip_target(ws_pos)
+        if was_clipped:
+            self.get_logger().warn(
+                f'WBC goal clipped to workspace (safety_margin={self._ws_checker.safety_margin:.2f}m): '
+                f'raw=[{ws_pos[0]:.3f},{ws_pos[1]:.3f},{ws_pos[2]:.3f}] → '
+                f'clipped=[{clipped_pos[0]:.3f},{clipped_pos[1]:.3f},{clipped_pos[2]:.3f}]',
+                throttle_duration_sec=3.0)
+
         # 10. Publish EE goal — T_new is already in link00 frame ('world' for z1_ik_to_jtc)
         goal_msg = PoseStamped()
         goal_msg.header.stamp    = self.get_clock().now().to_msg()
         goal_msg.header.frame_id = 'world'
-        goal_msg.pose.position.x = float(T_new.translation[0])
-        goal_msg.pose.position.y = float(T_new.translation[1])
-        goal_msg.pose.position.z = float(T_new.translation[2])
+        goal_msg.pose.position.x = float(clipped_pos[0])
+        goal_msg.pose.position.y = float(clipped_pos[1])
+        goal_msg.pose.position.z = float(clipped_pos[2])
         quat = _rot_to_quat(T_new.rotation)
         goal_msg.pose.orientation.x = float(quat[0])
         goal_msg.pose.orientation.y = float(quat[1])

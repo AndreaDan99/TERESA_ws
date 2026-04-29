@@ -22,7 +22,8 @@ z1_FSM:
     ee_frame:  'link06'
 
     # Margine di sicurezza dal limite massimo di raggiungibilità:
-    # il robot si ferma a (max_reach - workspace_safety_margin) dalla base
+    # il robot si ferma a (max_reach - workspace_safety_margin) dalla base.
+    # Keep in sync with wbc_params.yaml — both use the same WorkspaceChecker class.
     workspace_safety_margin: 0.30  # [m]
 
     # Posizione della base del braccio in world frame.
