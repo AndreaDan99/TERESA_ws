@@ -1137,6 +1137,11 @@ class Z1FSM(Node):
                             '(nessun messaggio su /torso_tracker_state)...'
                         )
                     return
+                # Se WBC è attivo, attendere che il coordinatore entri in SCANNING
+                # (Spot ha raggiunto il paziente e ha passato il controllo al FSM).
+                # Se WBC non è presente (_wbc_state_str vuota), modalità standalone.
+                if self._wbc_state_str and self._wbc_state_str != 'SCANNING':
+                    return
                 self.set_state(self.BODY_SCANNING)
                 return
             if self.torso_target_fresh():

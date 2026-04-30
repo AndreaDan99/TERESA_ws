@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """
-WBC Coordinator — phase FSM
+WBC Coordinator — phase FSM (WBC is master, Z1 FSM waits for SCANNING)
 
 States:
   IDLE           waiting for LYING detection
   APPROACHING    Spot navigates + Z1 look-at via WBC QP
-  HANDOFF        Spot reached patient → switch to RealSense, WBC stops
-  SCANNING       z1_FSM active, WBC QP dormant, Spot stopped
+  SCANNING       Spot reached patient → WBC disables, z1_FSM takes over
   WS_EXTENSION   z1_FSM requested workspace help → QP micro-step
 
 Transitions:
   IDLE         → APPROACHING    posture=LYING and confidence >= threshold
-  APPROACHING  → HANDOFF        Spot within handoff_distance of approach_point
-  HANDOFF      → SCANNING       z1_FSM enters APPROACHING (took over)
+  APPROACHING  → SCANNING       Spot within handoff_distance of approach_point
   SCANNING     → WS_EXTENSION   /wbc/ws_request received
   WS_EXTENSION → SCANNING       /ik_done received
   any          → IDLE           posture != LYING for > lying_timeout
@@ -238,9 +236,7 @@ class WBCCoordinatorNode(Node):
         self._kf_approach.update(z)
 
     def _cb_z1_state(self, msg: String) -> None:
-        if self._state == CoordState.HANDOFF and 'APPROACHING' in msg.data:
-            self._set_state(CoordState.SCANNING)
-            self._set_wbc_enabled(False)
+        pass
 
     def _cb_ik_done(self, msg: Bool) -> None:
         if self._state == CoordState.WS_EXTENSION and msg.data:
@@ -275,9 +271,8 @@ class WBCCoordinatorNode(Node):
     def _check_lying_timeout(self) -> None:
         # Once committed (handoff done), don't abort on Orbbec loss — RealSense is in charge.
         if self._state in (CoordState.IDLE,
-                           CoordState.HANDOFF,
-                           CoordState.SCANNING,
-                           CoordState.WS_EXTENSION):
+                            CoordState.SCANNING,
+                            CoordState.WS_EXTENSION):
             return
         if self._posture != 'LYING' and self._last_lying_time is not None:
             elapsed = (self.get_clock().now() - self._last_lying_time).nanoseconds * 1e-9
@@ -305,8 +300,8 @@ class WBCCoordinatorNode(Node):
         dist = self._distance_to_patient()
         if dist is not None and dist < self._handoff_dist:
             self.get_logger().info(
-                f'Handoff: dist={dist:.2f}m < {self._handoff_dist:.2f}m → HANDOFF')
-            self._set_state(CoordState.HANDOFF)
+                f'Handoff: dist={dist:.2f}m < {self._handoff_dist:.2f}m → SCANNING')
+            self._set_state(CoordState.SCANNING)
             self._set_wbc_enabled(False)
 
     def _tick_ws_extension(self) -> None:
@@ -380,7 +375,7 @@ class WBCCoordinatorNode(Node):
             if new_state == CoordState.IDLE:
                 self._kf_approach.reset()
                 self._set_body_height(0.0)   # ripristina altezza nominale
-            if new_state == CoordState.HANDOFF:
+            if new_state == CoordState.SCANNING:
                 self._set_body_height(self._handoff_body_height)
             if new_state == CoordState.WS_EXTENSION:
                 self._save_ws_ext_anchor()

@@ -128,7 +128,7 @@ Orbbec Femto Bolt (Jetson → PC)
                     └─► /human_pose/posture, /human_pose/posture_confidence
 
 /laying_human/approach_point
-  └─► wbc_coordinator  (FSM: IDLE → APPROACHING → HANDOFF → SCANNING → WS_EXTENSION)
+  └─► wbc_coordinator  (FSM: IDLE → APPROACHING → SCANNING → WS_EXTENSION)
         ├─► /wbc/ee_goal  (filtered approach point via Kalman)
         ├─► /wbc/enable   (True = WBC takes over from Z1 FSM)
         └─► /wbc/desired_yaw  (Spot ⊥ patient body axis)
@@ -150,12 +150,14 @@ ik_goal_mux:
 
 ```
 IDLE ──(posture=LYING & confidence≥0.5)──► APPROACHING
-APPROACHING ──(dist<handoff_distance)──► HANDOFF
-HANDOFF ──(z1_FSM enters APPROACHING)──► SCANNING
+APPROACHING ──(dist<handoff_distance)──► SCANNING
 SCANNING ──(/wbc/ws_request)──► WS_EXTENSION
 WS_EXTENSION ──(/ik_done)──► SCANNING
 any ──(posture≠LYING for >lying_timeout)──► IDLE
 ```
+
+**Handoff logic (updated):** WBC is the master. When Spot reaches the approach point, it transitions directly `APPROACHING → SCANNING`, disables WBC control (`/wbc/enable=False`), and signals the Z1 FSM to begin its body scan. The Z1 FSM gate in `WAITING` state waits for `/wbc/state == 'SCANNING'` before starting `BODY_SCANNING` (standalone mode is unchanged: if no WBC is present, body scan starts immediately).
+
 
 ### Dry-run mode
 
@@ -200,7 +202,7 @@ When `dry_run:=true` on WBC launch, all outputs go to debug topics:
 
 | Module | Role |
 |--------|------|
-| `wbc_coordinator.py` | Phase FSM for Spot+Z1: parses posture, triggers handoff |
+| `wbc_coordinator.py` | Phase FSM for Spot+Z1: parses posture, triggers SCANNING handoff |
 | `wbc_qp_controller.py` | Holistic WBC: damped pseudo-inverse split of arm joints + base velocity |
 | `wbc_math.py` | Pure math: J_base, J_holistic, manipulability, WBC split, WBC split with yaw |
 | `ik_goal_mux.py` | Priority mux: WBC goals override Z1 FSM goals |
