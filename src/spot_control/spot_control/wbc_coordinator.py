@@ -241,6 +241,7 @@ class WBCCoordinatorNode(Node):
     def _cb_ik_done(self, msg: Bool) -> None:
         if self._state == CoordState.WS_EXTENSION and msg.data:
             self._set_state(CoordState.SCANNING)
+            self._set_wbc_enabled(False)
 
     def _cb_ws_req(self, msg: Bool) -> None:
         if self._state == CoordState.SCANNING and msg.data:
