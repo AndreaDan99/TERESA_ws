@@ -121,6 +121,8 @@ private:
         Vec6 tau = Vec6::Zero();
     } _arm_state;
 
+    Vec6 _joint_offset = Vec6::Zero();
+
     struct {
         double q   = 0;
         double qd  = 0;

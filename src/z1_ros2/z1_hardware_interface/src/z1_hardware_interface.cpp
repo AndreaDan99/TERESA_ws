@@ -20,6 +20,7 @@
 #include <ctime>
 #include <fmt/format.h>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <unitree_arm_sdk/control/unitreeArm.h>
 #include <unitree_arm_sdk/message/arm_common.h>
@@ -71,6 +72,18 @@ HardwareInterface::on_configure(const rclcpp_lifecycle::State& prev_state) {
     if (with_gripper()) RCLCPP_INFO(get_logger(), "Gripper is enabled");
     else RCLCPP_INFO(get_logger(), "Gripper is disabled");
 
+    // Read joint offset from URDF parameter (defaults to zeros if not set)
+    if (info_.hardware_parameters.count("joint_offset")) {
+        std::istringstream iss(info_.hardware_parameters.at("joint_offset"));
+        for (int i = 0; i < 6; i++) {
+            double val;
+            if (iss >> val) {
+                _joint_offset(i) = val;
+            }
+        }
+        RCLCPP_INFO(get_logger(), "Joint offset: %s", pretty_vector(_joint_offset).c_str());
+    }
+
     // TODO: load torque limits from URDF
     RCLCPP_INFO(
             get_logger(),
@@ -99,7 +112,7 @@ HardwareInterface::on_configure(const rclcpp_lifecycle::State& prev_state) {
     _arm_cmd.qd     = _arm_state.qd;
     _gripper_cmd.q  = _gripper_state.q;
     _gripper_cmd.qd = _gripper_state.qd;
-    _arm->setArmCmd(_arm_state.q, _arm_state.qd);
+    _arm->setArmCmd(_arm_state.q - _joint_offset, _arm_state.qd);
     _arm->setFsm(UNITREE_ARM::ArmFSMState::LOWCMD);
     RCLCPP_INFO(get_logger(), "SDK switch to low-level control!");
 
@@ -239,7 +252,7 @@ HardwareInterface::
         read(const rclcpp::Time& /* time */, const rclcpp::Duration& /* period */) {
     _arm->sendRecv();
     for (long i = 0; i < 6; ++i) {
-        _arm_state.q(i)   = _arm->lowstate->q[i];
+        _arm_state.q(i)   = _arm->lowstate->q[i] + _joint_offset(i);
         _arm_state.qd(i)  = _arm->lowstate->dq[i];
         _arm_state.tau(i) = _arm->lowstate->tau[i];
     }
@@ -255,7 +268,7 @@ hardware_interface::return_type
 HardwareInterface::
         write(const rclcpp::Time& /* time */, const rclcpp::Duration& /* period */) {
     saturate_torque();
-    _arm->setArmCmd(_arm_cmd.q, _arm_cmd.qd, _arm_cmd.tau);
+    _arm->setArmCmd(_arm_cmd.q - _joint_offset, _arm_cmd.qd, _arm_cmd.tau);
     _arm->setGripperCmd(_gripper_cmd.q, _gripper_cmd.qd, _gripper_cmd.tau);
     _arm->sendRecv();
     return hardware_interface::return_type::OK;

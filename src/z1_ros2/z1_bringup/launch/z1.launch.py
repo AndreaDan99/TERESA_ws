@@ -34,6 +34,7 @@ def launch_setup(context, *args, **kwargs):
     controller_config = LaunchConfiguration("controller_config")
     starting_controller = LaunchConfiguration("starting_controller")
     sim_ignition = LaunchConfiguration("sim_ignition")
+    joint_offset = LaunchConfiguration("joint_offset")
 
     is_simulation = IfCondition(sim_ignition)
     is_real = UnlessCondition(sim_ignition)
@@ -69,6 +70,7 @@ def launch_setup(context, *args, **kwargs):
             "with_gripper": with_gripper.perform(context),
             "controllers": controller_config.perform(context),
             "sim_ignition": sim_ignition.perform(context),
+            "joint_offset": joint_offset.perform(context),
         }
     )
     robot_description = {"robot_description": robot_description_content}
@@ -230,6 +232,7 @@ def generate_launch_description():
         DeclareLaunchArgument("controller_config", default_value=controller_config_default),
         DeclareLaunchArgument("with_gripper", default_value="true"),
         DeclareLaunchArgument("starting_controller", default_value="torque_controller"),
+    DeclareLaunchArgument("joint_offset", default_value="0.0 0.0 0.0 0.0 0.0 0.0"),
         DeclareLaunchArgument("sim_ignition", default_value="true"),
         DeclareLaunchArgument("rviz", default_value="false"),
         DeclareLaunchArgument("rviz_config", default_value=rviz_config_default),

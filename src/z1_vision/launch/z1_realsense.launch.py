@@ -19,6 +19,7 @@ def generate_launch_description():
     camera_qz = LaunchConfiguration('camera_qz')
     camera_qw = LaunchConfiguration('camera_qw')
     parent_frame = LaunchConfiguration('parent_frame')
+    joint_offset = LaunchConfiguration('joint_offset')
     #use_surface_node = LaunchConfiguration('use_surface_node')
     use_rviz = LaunchConfiguration('use_rviz')
     
@@ -80,6 +81,11 @@ def generate_launch_description():
             default_value='true',
             description='Launch RViz with custom config'
         ),
+        DeclareLaunchArgument(
+            'joint_offset',
+            default_value='0.0 0.0 0.0 0.0 0.0 0.0',
+            description='Joint encoder offset [rad] — added to raw encoder readings at boot'
+        ),
         
         # ============== Z1 ROBOT (RViz DISABILITATO) ==============
         IncludeLaunchDescription(
@@ -93,6 +99,7 @@ def generate_launch_description():
                 'starting_controller': 'joint_trajectory_controller',
                 'with_gripper': 'false',
                 'rviz': 'false',
+                'joint_offset': joint_offset,
             }.items()
         ),
         

@@ -7,6 +7,7 @@
     <xacro:arg name="controllers" default="$(find z1_bringup)/config/z1_controllers.yaml" />
     <xacro:arg name="sim_ignition" default="true" />
     <xacro:arg name="with_gripper" default="true" />
+    <xacro:arg name="joint_offset" default="0.0 0.0 0.0 0.0 0.0 0.0" />
 
     <xacro:include filename="$(find z1_description)/urdf/const.xacro" />
     <xacro:include filename="$(find z1_description)/urdf/z1.ros2_control.xacro" />
@@ -351,6 +352,7 @@
         name="$(arg name)"
         prefix="$(arg prefix)"
         sim_ignition="$(arg sim_ignition)"
-        with_gripper="$(arg with_gripper)" />
+        with_gripper="$(arg with_gripper)"
+        joint_offset="$(arg joint_offset)" />
 
 </robot>
