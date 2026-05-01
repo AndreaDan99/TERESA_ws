@@ -1,0 +1,141 @@
+% ============================================================
+%  V. SYSTEM ARCHITECTURE
+% ============================================================
+\section{System Architecture}
+\label{sec:system_architecture}
+
+Fig.~\ref{fig:system_block} gives an overview of the full \ac{TERESA}
+system. The architecture is organised into four layers: sensors,
+perception, mission management, and control. All components communicate
+over \ac{ROS}~2 with \ac{DDS}, distributed across two compute units:
+a NVIDIA Jetson (perception and arm control) and the Spot onboard
+computer SpotCore (base control and locomotion).
+
+\begin{figure*}[t]
+  \centering
+  \resizebox{\textwidth}{!}{\input{figures/system_block}}
+  \caption{Block diagram of the \ac{TERESA} system. Arrows indicate
+           the main data flows. The \ac{FSM} acts as the central
+           orchestrator, enabling and disabling the \ac{WBC} \ac{QP}
+           and impedance controller based on mission phase.}
+  \label{fig:system_block}
+\end{figure*}
+
+% ------------------------------------------------------------
+\subsection{Hardware Platform}
+
+The \ac{TERESA} platform consists of three main hardware components.
+The \textbf{Boston Dynamics Spot} quadruped provides mobile navigation
+on unstructured terrain. It is commanded via its onboard \ac{ROS}~2
+driver (\texttt{spot\_ros2}) through high-level velocity commands
+$[v_x, \omega_z]$ on the \texttt{/cmd\_vel} topic. The \textbf{Unitree
+Z1} is a six-\ac{DOF} serial manipulator with a payload of
+\SI{2}{\kilogram}, mounted rigidly on Spot's back. It is controlled at
+the torque level through a \ac{JTC} interface running on the Jetson.
+The \textbf{ultrasound probe} is attached to the Z1 flange
+(\ac{EE} frame $\mathcal{F}_{EE}$) and serves as the sensing element
+for the \ac{FAST} scan.
+
+\subsection{Sensor Suite}
+
+Two depth cameras cover complementary fields of view:
+
+\begin{itemize}
+  \item \textbf{Orbbec RGB-D}: mounted on the Spot body, provides a
+        wide field of view for patient detection at distances up to
+        \SI{3}{\metre}. It feeds the \ac{YOLO}+\ac{KF} perception
+        pipeline during the approach phase.
+
+  \item \textbf{Intel RealSense D435}: mounted at the Z1 \ac{EE},
+        provides close-range depth and colour for surface normal
+        estimation. It is active during the scanning phase once the
+        probe is within \SI{30}{\centi\metre} of the patient.
+\end{itemize}
+
+The static transform between the Spot body frame $\mathcal{F}_B$ and
+the arm base frame $\mathcal{F}_0$ is a calibrated rigid offset
+published as a static \ac{TF} at system startup.
+
+\subsection{Perception Pipeline}
+
+\subsubsection{Wide-field patient localisation (Orbbec)}
+During the approach phase, \ac{YOLO}11-pose~\cite{maji2022} runs on
+the Orbbec \ac{RGBD} stream at \SI{30}{\hertz} and detects the
+skeleton of the patient. The torso position is computed as the
+centroid of four \ac{COCO} keypoints---left shoulder, right shoulder,
+left hip, right hip---by back-projecting their image coordinates
+through the calibrated depth map. The resulting 3D measurement feeds
+the \texttt{Kalman3D} filter (state: position + velocity,
+$\mathbf{x}_{KF} \in \mathbb{R}^6$), which predicts the torso
+position at every frame and updates only when a valid detection is
+available. The filtered estimate $\hat{\mathbf{p}}(t)$ is published
+to the \ac{WBC} as the approach target.
+
+\subsubsection{Close-range surface estimation (RealSense)}
+Once the \ac{FSM} transitions to the HANDOFF state, the RealSense
+becomes the primary sensor. A surface estimation node fits a plane to
+the depth point cloud in a region of interest around the detected
+torso, and publishes the surface centroid $\mathbf{p}_s$ and outward
+normal $\mathbf{n}_s$ as a \texttt{PoseStamped} message. These are
+used by the impedance controller to compute the desired probe position
+via~\eqref{eq:surface_target}.
+
+\subsection{Mission FSM}
+
+The mission is orchestrated by a six-state \ac{FSM} implemented in the
+\texttt{wbc\_coordinator} node. Fig.~\ref{fig:fsm} shows the state
+diagram.
+
+\begin{figure}[t]
+  \centering
+  \resizebox{\columnwidth}{!}{\input{figures/fsm}}
+  \caption{Mission \ac{FSM}. Blue states have the \ac{WBC} \ac{QP}
+           active; the green state uses the impedance controller.
+           APPR.~=~APPROACHING, CONF.~=~CONFIRMING,
+           WS\_EXT~=~WS\_EXTENSION.}
+  \label{fig:fsm}
+\end{figure}
+
+\begin{itemize}
+  \item \textbf{IDLE}: system inactive, waiting for a valid patient
+        detection from the Orbbec pipeline.
+
+  \item \textbf{APPROACHING}: \ac{WBC} \ac{QP} active. Spot navigates
+        toward the patient while the Z1 arm pre-positions the probe
+        in the direction of $\hat{\mathbf{p}}(t)$. The \ac{QP} target
+        is updated every \SI{1.5}{\second} to respect the minimum
+        trajectory time of the arm \ac{JTC}.
+
+  \item \textbf{CONFIRMING}: Orbbec detection confidence drops below
+        threshold. The arm holds its last estimate; the \ac{WBC}
+        remains active but the goal is frozen. If confidence recovers,
+        the \ac{FSM} returns to APPROACHING; if the patient is
+        completely lost, it transitions to HANDOFF.
+
+  \item \textbf{HANDOFF}: Orbbec loses the patient entirely. Spot
+        halts. Control is transferred to the RealSense pipeline, which
+        must lock onto the torso surface before the \ac{FSM} can
+        advance.
+
+  \item \textbf{SCANNING}: \ac{WBC} \ac{QP} dormant. The impedance
+        controller drives the probe through the \ac{FAST} scan
+        sequence using the surface frame from the RealSense. If a
+        target is reported unreachable, the \ac{FSM} triggers a
+        workspace extension.
+
+  \item \textbf{WS\_EXTENSION}: the \ac{WBC} \ac{QP} reactivates to
+        execute a micro-step that repositions Spot so that the target
+        re-enters the Z1 workspace. Once the arm \ac{IK} confirms
+        success (\texttt{/ik\_done}), the \ac{FSM} returns to
+        SCANNING.
+\end{itemize}
+
+\subsection{IK Goal Multiplexer}
+
+The Z1 arm \ac{IK}-to-\ac{JTC} node receives a single
+\texttt{/ik\_goal\_pose} topic. Since both the \ac{WBC} \ac{QP} and
+the z1\_FSM scan controller publish arm targets, an \texttt{ik\_goal\_mux}
+node arbitrates between them based on a binary enable signal
+(\texttt{/wbc/enable}) from the \ac{FSM}: when \ac{WBC} is active its
+target takes priority; otherwise the z1\_FSM target is forwarded.
+This design preserves the existing arm control stack unchanged.

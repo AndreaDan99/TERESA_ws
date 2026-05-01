@@ -1,0 +1,56 @@
+% ============================================================
+%  FSM DIAGRAM — 6 states
+%  Requires: tikz, automata library
+% ============================================================
+\begin{tikzpicture}[
+    node distance  = 3.2cm,
+    auto,
+    >=stealth,
+    state/.style   = {circle, draw, minimum size=1.6cm, font=\small\bfseries,
+                      fill=white, thick},
+    wbc/.style     = {state, draw=blue!70, fill=blue!8},
+    scan/.style    = {state, draw=green!60!black, fill=green!8},
+    idle/.style    = {state, draw=gray!70, fill=gray!8},
+    trans/.style   = {->, thick, font=\scriptsize},
+    every label/.style = {font=\scriptsize}
+  ]
+
+  % ── Nodes ───────────────────────────────────────────────────
+  \node[idle]  (idle)                          {IDLE};
+  \node[wbc]   (app)  [right=of idle]          {APPR.};
+  \node[wbc]   (conf) [above=2.0cm of app]     {CONF.};
+  \node[wbc]   (hand) [right=of app]           {HANDOFF};
+  \node[scan]  (scan) [right=of hand]          {SCANNING};
+  \node[wbc]   (wse)  [below=2.0cm of scan]    {WS\_EXT};
+
+  % ── Transitions ─────────────────────────────────────────────
+  \draw[trans] (idle) -- node[above]{\scriptsize patient det.} (app);
+
+  \draw[trans] (app)  to[bend left=20]
+               node[right]{\scriptsize conf.$\downarrow$}    (conf);
+  \draw[trans] (conf) to[bend left=20]
+               node[left]{\scriptsize conf. rec.}           (app);
+
+  \draw[trans] (conf) to[out=0,in=150]
+               node[above,sloped]{\scriptsize patient lost}  (hand);
+  \draw[trans] (app)  -- node[above]{\scriptsize dist. thr.} (hand);
+
+  \draw[trans] (hand) -- node[above]{\scriptsize RS locked}  (scan);
+
+  \draw[trans] (scan) to[bend left=20]
+               node[right]{\scriptsize unreachable}          (wse);
+  \draw[trans] (wse)  to[bend left=20]
+               node[left]{\scriptsize ik\_done}              (scan);
+
+  \draw[trans] (scan) to[out=200,in=340]
+               node[below]{\scriptsize scan done}            (idle);
+
+  % ── Legend ──────────────────────────────────────────────────
+  \node[wbc,  minimum size=0.55cm, font=\scriptsize] at (0.0,-2.6) {};
+  \node[right, font=\scriptsize] at (0.4,-2.6) {WBC active};
+  \node[scan, minimum size=0.55cm, font=\scriptsize] at (2.4,-2.6) {};
+  \node[right, font=\scriptsize] at (2.8,-2.6) {Impedance active};
+  \node[idle, minimum size=0.55cm, font=\scriptsize] at (5.2,-2.6) {};
+  \node[right, font=\scriptsize] at (5.6,-2.6) {Idle};
+
+\end{tikzpicture}

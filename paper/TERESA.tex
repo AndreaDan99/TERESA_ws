@@ -1,0 +1,84 @@
+% ============================================================
+%  Uncertainty-Aware Whole-Body Control for Autonomous FAST
+%  Ultrasound Scanning on a Legged Manipulator
+%
+%  IEEE Transactions on Medical Robotics and Bionics — submission draft
+% ============================================================
+\documentclass[journal]{IEEEtran}
+
+% ── Packages ────────────────────────────────────────────────
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{cite}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{bm}           % bold math symbols
+\usepackage{siunitx}      % \SI{}{} units
+\usepackage{acronym}      % \ac{}, \acf{}, \acp{}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.15}
+\usetikzlibrary{arrows.meta, automata, positioning, shapes.geometric,
+                fit, calc, backgrounds}
+
+% ── Macros ──────────────────────────────────────────────────
+\newcommand{\R}[1]{\mathbb{R}^{#1}}
+\newcommand{\vdes}{\mathbf{v}_{\mathrm{des}}}
+\newcommand{\Jh}{\mathbf{J}_{\mathrm{h}}}
+\newcommand{\Jarm}{\mathbf{J}_{\mathrm{arm}}}
+\newcommand{\Jbase}{\mathbf{J}_{\mathrm{base}}}
+\newcommand{\Ppos}{\mathbf{P}_{\mathrm{pos}}}
+\newcommand{\TODO}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
+\newcommand{\XX}{\textcolor{red}{\textbf{XX}}}
+
+% ── Title / Authors ─────────────────────────────────────────
+\title{Whole-Body Control for Autonomous FAST Ultrasound Scanning
+       on a Legged Manipulator}
+
+\author{Andrea~D'Antona,~\IEEEmembership{}
+        % add co-authors here
+                \thanks{A.~D'Antona is with the Department of Engineering,
+                University of Ferrara, 44122 Ferrara, Italy
+                (e-mail: dntndr1@unife.it).}}
+
+% ============================================================
+\begin{document}
+
+\maketitle
+
+% ── Abstract ────────────────────────────────────────────────
+\input{sections/abstract}
+
+% ── Keywords ────────────────────────────────────────────────
+\begin{IEEEkeywords}
+Whole-body control, legged manipulation, medical robotics,
+FAST ultrasound, mobile manipulation, Kalman filtering,
+quadratic programming.
+\end{IEEEkeywords}
+
+% ── Acronym definitions (invisible) ─────────────────────────
+\input{sections/acronyms}
+
+% ── Sections ────────────────────────────────────────────────
+\input{sections/introduction}
+\input{sections/related_work}
+\input{sections/problem_formulation}
+\input{sections/method}
+\input{sections/system_architecture}
+\input{sections/experiments}
+\input{sections/results}
+\input{sections/conclusion}
+
+% ── Bibliography ────────────────────────────────────────────
+\nocite{*}   % include all bib entries even without \cite — remove when paper is complete
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

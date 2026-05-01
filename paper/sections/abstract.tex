@@ -1,0 +1,39 @@
+% ============================================================
+%  ABSTRACT
+% ============================================================
+\begin{abstract}
+
+\ac{FAST} is a rapid bedside ultrasound protocol that is critical in
+emergency medicine for detecting life-threatening internal injuries.
+Performing \ac{FAST} scans autonomously with a mobile robot could extend
+emergency care to mass-casualty events, disaster sites, and scenarios where
+trained sonographers are unavailable. However, autonomous \ac{FAST} scanning
+on a mobile platform poses two fundamental challenges: the robot must navigate
+to an unknown patient location using uncertain visual detection, and must
+simultaneously position the ultrasound probe with millimetre-level accuracy
+over the target anatomy.
+
+This paper presents an integrated system for autonomous \ac{FAST} scanning
+mounted on a Boston Dynamics Spot legged robot equipped with a Unitree Z1
+manipulator arm. We formulate \ac{WBC} as a single \ac{QP} that
+simultaneously drives the non-holonomic Spot base and the six-\ac{DOF} Z1
+arm, avoiding the sequential stop-then-manipulate paradigm common in existing
+mobile manipulation literature. The holistic Jacobian couples base and arm
+velocities through a manipulability-weighted damped least-squares formulation,
+automatically redistributing effort from the arm to the base near singular
+configurations. Patient localisation relies on a dual-camera pipeline: an
+Orbbec \ac{RGBD} camera provides wide-field \ac{YOLO}-based skeleton
+detection with \ac{KF}-filtered 3D torso tracking during navigation, while
+an Intel RealSense camera mounted at the \ac{EE} takes over for fine-grained
+surface estimation during scanning. A six-state \ac{FSM} orchestrates the
+mission phases---approach, sensor handoff, scanning, and reactive workspace
+extension---ensuring safe and reliable operation across a variety of patient
+positions and orientations.
+
+Experiments on a physical Spot+Z1 platform demonstrate that the proposed
+\ac{WBC} reduces mission completion time by \XX\,\% compared to a
+stop-and-manipulate baseline, while maintaining a probe positioning error
+below \XX\,mm. To the best of our knowledge, this is the first system to
+demonstrate fully autonomous \ac{FAST} scanning on a legged mobile manipulator.
+
+\end{abstract}

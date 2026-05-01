@@ -1,0 +1,94 @@
+% ============================================================
+%  II. RELATED WORK
+% ============================================================
+\section{Related Work}
+\label{sec:related_work}
+
+\subsection{Robotic Ultrasound Systems}
+
+Robot-assisted ultrasound has been an active research area for over two
+decades, driven by the need to reduce operator variability, enable remote
+diagnostics, and automate repetitive scanning procedures. Early systems
+focused on teleoperation, using robotic arms to replicate the hand movements
+of a remote sonographer~\cite{li2021overview}. More recent work has moved
+toward increasing levels of autonomy, with robots capable of autonomously
+positioning and maintaining contact of the probe on the patient's body.
+
+A fundamental challenge in autonomous ultrasound is probe--skin contact
+control. Gilbertson and Anthony~\cite{gilbertson2015} proposed a force and
+position control system for freehand ultrasound that decouples normal contact
+force from lateral probe positioning, establishing a framework widely adopted
+by subsequent systems. Building on this, Dyck et al.~\cite{dyck2022} extended
+impedance control to arbitrary curved surfaces using discrete differential
+geometry, enabling consistent probe orientation on non-planar anatomy---a
+capability directly relevant to abdominal scanning.
+
+Autonomous scan planning has been tackled from multiple angles. Suligoj
+et al.~\cite{suligoj2021} presented RobUSt, a system that autonomously
+acquires medical images using a pre-defined anatomical protocol, while Duan
+et al.~\cite{duan2022} demonstrated optimisation-based control for scoliosis
+assessment with variable impedance. A comprehensive overview of techniques for
+autonomous robotic ultrasound acquisitions is provided by Li et
+al.~\cite{li2021overview}, and a broader review of robot-assisted ultrasound
+systems is given in~\cite{du2024review}.
+
+All of the above systems rely on fixed-base manipulators and require the
+patient to be positioned within the arm's reachable workspace. In our own
+prior work~\cite{farsoni2025autonomous}, we demonstrated that a fixed
+collaborative robot arm can autonomously screen the abdominal aorta using
+impedance control and deep learning segmentation. The present paper extends
+this line of work to a fully mobile legged platform, removing the
+pre-positioning requirement and enabling operation in unstructured environments.
+
+\subsection{Whole-Body Control for Legged Manipulators}
+
+\ac{WBC} has emerged as the dominant paradigm for coordinating locomotion and
+manipulation on legged robots. Khatib~\cite{khatib1987} introduced the
+operational space formulation that underpins most modern \ac{WBC} approaches,
+enabling task-space control through the robot's full kinematic chain.
+Yoshikawa's manipulability measure~\cite{yoshikawa1985} provides a scalar
+index of arm dexterity that has been widely used to avoid singular
+configurations.
+
+For mobile manipulators, Bayle et al.~\cite{bayle2003} analysed the
+manipulability of wheeled platforms coupled with robot arms, showing that base
+motion can be used to maintain the arm in high-dexterity configurations.
+Haviland et al.~\cite{haviland2022} extended this to a holistic reactive
+formulation that simultaneously optimises base and arm velocities through a
+single \ac{QP}, achieving smooth coordinated motion on wheeled platforms.
+
+On legged robots, Bellicoso et al.~\cite{bellicoso2019} presented ALMA,
+demonstrating articulated locomotion and manipulation with a torque-controlled
+legged platform. Minniti et al.~\cite{minniti2019} proposed a whole-body
+\ac{MPC} framework for dynamically stable mobile manipulation, and Sleiman
+et al.~\cite{sleiman2021} unified locomotion and manipulation into a single
+\ac{MPC} problem. These approaches have been validated primarily on ANYmal
+with structured targets at known locations. The Boston Dynamics Spot platform
+has been used for manipulation tasks with an external arm by Zimmermann
+et al.~\cite{zimmermann2021}, who demonstrated dynamic grasping. However,
+none of the existing legged \ac{WBC} systems have addressed
+perception-driven, multi-phase medical scanning tasks where the target must
+be detected and tracked throughout the mission.
+
+\subsection{Visual Perception for Patient Localisation}
+
+Accurate patient localisation from \ac{RGBD} data is a prerequisite for
+autonomous mobile scanning. Skeleton-based approaches, which estimate 3D joint
+positions from monocular or depth-augmented images, have matured significantly
+with deep learning. YOLO-Pose~\cite{maji2022} extended the \ac{YOLO}
+detection framework to multi-person pose estimation using an object keypoint
+similarity loss, achieving real-time performance suitable for robot perception
+pipelines.
+
+In our system, \ac{YOLO}-based skeleton detection is combined with a \ac{KF}
+for 3D torso tracking, providing robust localisation even under partial
+occlusion and during platform motion. The \ac{KF} predicts torso position
+between detections and smooths noisy depth measurements from the Orbbec
+\ac{RGBD} camera, enabling stable approach trajectories without requiring the
+robot to stop for reliable detection.
+
+In summary, while individual components---robotic ultrasound, \ac{WBC}, and
+visual patient tracking---have each received significant attention, no prior
+work has integrated them into a unified system capable of autonomously
+performing a medical scan on a legged platform navigating to an unknown
+patient location. The present paper addresses this gap.
