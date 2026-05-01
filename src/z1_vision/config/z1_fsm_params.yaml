@@ -100,5 +100,5 @@ z1_FSM:
     # Valori di default — da aggiornare con la posa di sicurezza reale:
     #home_position:    [0.1714, 0.0146, 0.5449]        # [m]  x, y, z in world frame
     #home_orientation: [-0.0155, 0.2918, 0.0748, 0.9543]  # [qx, qy, qz, qw]
-    home_position:    [0.0704, -0.0016, 0.1172]     # FK della posa piegata su Spot (joint2≈90°)
-    home_orientation: [-0.0012, 0.6626, -0.0094, 0.7489]  # FK della posa piegata su Spot
+    home_position:    [-0.0946, 0.0009, 0.4392]     # [m]  x, y, z in world frame
+    home_orientation:  [-0.0039, 0.2911, -0.0155, 0.9566]  # [qx, qy, qz, qw]
