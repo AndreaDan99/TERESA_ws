@@ -16,7 +16,7 @@ z1_ik_to_jtc:
     ik_tol:         1.5e-3      # meno rigido: converge anche vicino ai limiti
     ik_damping:     5.0e-4
     ik_alpha:       0.5         # step size dell'integrazione
-    ik_rot_weight:  0.5         # bilanciato: metà peso a posizione, metà a orientamento
+    ik_rot_weight:  0.1         # basso: massima priorità alla posizione, poi raffineremo orientamento
 
     # ── Traiettoria JTC (smoothstep quintica) ──────────────────────
     max_joint_vel: 0.2          # [rad/s] velocità massima joint (ridotta per evitare vibrazioni su Spot)
