@@ -142,10 +142,10 @@ HardwareInterface::on_shutdown(const rclcpp_lifecycle::State& prev_state) {
         != hardware_interface::CallbackReturn::SUCCESS) {
         RCLCPP_ERROR(get_logger(), "parent on_shutdown() failed");
     }
-    RCLCPP_INFO(get_logger(), "Parking arm in forward position");
+    RCLCPP_INFO(get_logger(), "Parking arm in spot-safe position");
     {
         Vec6 park_q;
-        park_q << 0.0, 1.5, -1.0, -0.54, 0.0, 0.0;
+        park_q << 0.012, 0.69, 0.007, -0.05, -0.014, -0.005;
         Vec6 park_raw = park_q - _joint_offset;
         RCLCPP_INFO(get_logger(), "Park target (true):  %s", pretty_vector(park_q).c_str());
         RCLCPP_INFO(get_logger(), "Park target (raw):   %s", pretty_vector(park_raw).c_str());
