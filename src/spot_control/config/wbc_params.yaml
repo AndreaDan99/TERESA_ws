@@ -39,7 +39,7 @@ wbc_qp_controller:
     # Workspace safety margin [m] — keep in sync with z1_fsm_params.yaml
     # Uses the same WorkspaceChecker class (z1_vision.workspace_checker).
     # EE goals are clipped to max_reach - safety_margin.
-    workspace_safety_margin: 0.30
+    workspace_safety_margin: 0.60
 
     # Topics — output to mux, not directly to z1_ik_to_jtc
     ik_goal_topic:      '/wbc/ik_goal_pose'
