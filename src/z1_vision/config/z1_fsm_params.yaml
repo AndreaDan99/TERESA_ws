@@ -88,7 +88,7 @@ z1_FSM:
     # Se true: dopo WAIT_IK_DONE torna in WAITING senza avviare impedance.
     # Usare per verificare che il JTC allinei correttamente l'EE alla normale
     # prima di abilitare il torque controller.
-    skip_impedance: true    # ← test normal mode: verifica solo posizionamento IK
+    skip_impedance: false    # ← abilitato per test impedance
 
     # ── Home position ──────────────────────────────────────────────
     # Posa cartesiana in cui il braccio va all'avvio (HOMING) e quando
