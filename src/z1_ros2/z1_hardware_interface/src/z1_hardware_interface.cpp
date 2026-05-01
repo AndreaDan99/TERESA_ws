@@ -17,11 +17,13 @@
 #include "z1_hardware_interface/z1_hardware_interface.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <ctime>
 #include <fmt/format.h>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 #include <unitree_arm_sdk/control/unitreeArm.h>
 #include <unitree_arm_sdk/message/arm_common.h>
 
@@ -140,8 +142,17 @@ HardwareInterface::on_shutdown(const rclcpp_lifecycle::State& prev_state) {
         != hardware_interface::CallbackReturn::SUCCESS) {
         RCLCPP_ERROR(get_logger(), "parent on_shutdown() failed");
     }
-    RCLCPP_INFO(get_logger(), "Going back to start");
-    _arm->backToStart();
+    RCLCPP_INFO(get_logger(), "Parking arm in forward position");
+    {
+        Vec6 park_q;
+        park_q << 0.0, 1.5, -1.0, -0.54, 0.0, 0.0;
+        Vec6 park_raw = park_q - _joint_offset;
+        RCLCPP_INFO(get_logger(), "Park target (true):  %s", pretty_vector(park_q).c_str());
+        RCLCPP_INFO(get_logger(), "Park target (raw):   %s", pretty_vector(park_raw).c_str());
+        _arm->setArmCmd(park_raw, Vec6::Zero());
+        using namespace std::chrono_literals;
+        std::this_thread::sleep_for(3s);
+    }
     RCLCPP_INFO(get_logger(), "Setting arm into passive state");
     _arm->setFsm(UNITREE_ARM::ArmFSMState::PASSIVE);
     RCLCPP_INFO(get_logger(), "Closing SDK connection");
