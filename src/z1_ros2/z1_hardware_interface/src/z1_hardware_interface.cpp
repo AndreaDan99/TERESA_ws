@@ -279,7 +279,22 @@ hardware_interface::return_type
 HardwareInterface::
         write(const rclcpp::Time& /* time */, const rclcpp::Duration& /* period */) {
     saturate_torque();
-    _arm->setArmCmd(_arm_cmd.q - _joint_offset, _arm_cmd.qd, _arm_cmd.tau);
+    Vec6 cmd_raw = _arm_cmd.q - _joint_offset;
+
+    // Diagnostic: log when command changes significantly from last logged value
+    static Vec6 last_logged = Vec6::Zero();
+    static int log_skip = 0;
+    if (log_skip > 0) { log_skip--; }
+    else if ((cmd_raw - last_logged).norm() > 0.01) {
+        RCLCPP_INFO(get_logger(),
+            "📤 WRITE raw: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f] | true: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
+            cmd_raw(0), cmd_raw(1), cmd_raw(2), cmd_raw(3), cmd_raw(4), cmd_raw(5),
+            _arm_cmd.q(0), _arm_cmd.q(1), _arm_cmd.q(2), _arm_cmd.q(3), _arm_cmd.q(4), _arm_cmd.q(5));
+        last_logged = cmd_raw;
+        log_skip = 100;  // skip 100 cycles (0.1s at 1000Hz)
+    }
+
+    _arm->setArmCmd(cmd_raw, _arm_cmd.qd, _arm_cmd.tau);
     _arm->setGripperCmd(_gripper_cmd.q, _gripper_cmd.qd, _gripper_cmd.tau);
     _arm->sendRecv();
     return hardware_interface::return_type::OK;
