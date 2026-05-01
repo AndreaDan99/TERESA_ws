@@ -163,6 +163,19 @@ class Z1IKToJTC(Node):
             if np.linalg.norm(err) < self.tol:
                 self.get_logger().info(f"🎯 IK converged in {i} iter")
                 self.q = q
+                # ── DIAGNOSTIC: log FK of solution vs target ──
+                sol_pos = current.translation
+                sol_quat = pin.Quaternion(current.rotation).coeffs()
+                tgt_pos = target_SE3.translation
+                tgt_quat = pin.Quaternion(target_SE3.rotation).coeffs()
+                self.get_logger().info(
+                    f"📍 IK solution FK: [{sol_pos[0]:.4f}, {sol_pos[1]:.4f}, {sol_pos[2]:.4f}] | "
+                    f"q=[{sol_quat[0]:.4f}, {sol_quat[1]:.4f}, {sol_quat[2]:.4f}, {sol_quat[3]:.4f}]")
+                self.get_logger().info(
+                    f"🎯 IK target was:  [{tgt_pos[0]:.4f}, {tgt_pos[1]:.4f}, {tgt_pos[2]:.4f}] | "
+                    f"q=[{tgt_quat[0]:.4f}, {tgt_quat[1]:.4f}, {tgt_quat[2]:.4f}, {tgt_quat[3]:.4f}]")
+                self.get_logger().info(
+                    f"📐 Solution joints: [{q[0]:.4f}, {q[1]:.4f}, {q[2]:.4f}, {q[3]:.4f}, {q[4]:.4f}, {q[5]:.4f}]")
                 return q
 
             J = pin.computeFrameJacobian(
@@ -206,7 +219,11 @@ class Z1IKToJTC(Node):
         dq_after  = float(np.max(np.abs(qf - q0)))
         if dq_after < dq_before - 1e-6:
             self.get_logger().warn(f"🔁 unwrap target: dq {dq_before:.3f} -> {dq_after:.3f} rad")
-            
+        self.get_logger().info(
+            f"📊 Traj: q0=[{q0[0]:.4f},{q0[1]:.4f},{q0[2]:.4f},{q0[3]:.4f},{q0[4]:.4f},{q0[5]:.4f}]")
+        self.get_logger().info(
+            f"📊 Traj: qf=[{qf[0]:.4f},{qf[1]:.4f},{qf[2]:.4f},{qf[3]:.4f},{qf[4]:.4f},{qf[5]:.4f}]")
+             
         dq = float(np.max(np.abs(qf - q0)))
         dq = max(dq, 1e-6)
 
