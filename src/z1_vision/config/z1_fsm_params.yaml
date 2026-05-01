@@ -24,7 +24,7 @@ z1_FSM:
     # Margine di sicurezza dal limite massimo di raggiungibilità:
     # il robot si ferma a (max_reach - workspace_safety_margin) dalla base.
     # Keep in sync with wbc_params.yaml — both use the same WorkspaceChecker class.
-    workspace_safety_margin: 0.60  # [m]
+    workspace_safety_margin: 0.05  # [m] — margine dal limite massimo (~0.05m → workspace effettivo ~0.60m)
 
     # Posizione della base del braccio in world frame.
     # [0,0,0] se world == base frame (configurazione standard Z1 su TERESA)
