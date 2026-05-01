@@ -83,8 +83,8 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'joint_offset',
-            default_value='0.0 0.0 0.0 0.0 0.0 0.0',
-            description='Joint encoder offset [rad] — added to raw encoder readings at boot'
+            default_value='0.0 1.57 0.0 0.0 0.0 0.0',
+            description='Joint encoder offset [rad] — joint2 folded 90° for Spot mount'
         ),
         
         # ============== Z1 ROBOT (RViz DISABILITATO) ==============
