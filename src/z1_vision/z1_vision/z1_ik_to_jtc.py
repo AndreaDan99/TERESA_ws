@@ -37,7 +37,7 @@ class Z1IKToJTC(Node):
         self.declare_parameter("ik_done_topic", "/ik_done")
 
         # Trajectory shaping (pulito)
-        self.declare_parameter("max_joint_vel", 0.6)   # rad/s
+        self.declare_parameter("max_joint_vel", 0.3)   # rad/s
         self.declare_parameter("traj_min_time", 1.0)    # s
         self.declare_parameter("traj_max_time", 10.0)   # s
 
