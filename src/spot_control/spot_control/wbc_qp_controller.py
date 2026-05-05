@@ -76,6 +76,7 @@ class WBCQPControllerNode(Node):
         self._dry_run       = bool(p('dry_run'))
         self._odom_frame    = p('odom_frame')
         self._body_frame    = p('body_frame')
+        self._z1_base_frame = p('z1_base_frame')
         self._ee_frame      = p('ee_frame')
         self._lam_arm       = float(p('lam_arm'))
         self._lam_base      = float(p('lam_base'))
