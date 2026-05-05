@@ -197,7 +197,7 @@ class WBCCoordinatorNode(Node):
 
         R = _quat_to_rot(tf.transform.rotation)
         axis_cam = np.array([msg.vector.x, msg.vector.y, msg.vector.z])
-        axis_odom = R @ axis_cam
+        axis_odom = R.T @ axis_cam   # R is odom→camera, we need camera→odom
         axis_odom[2] = 0.0  # project onto XY plane (Spot is on flat ground)
         n = float(np.linalg.norm(axis_odom[:2]))
         if n < 0.1:
