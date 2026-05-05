@@ -332,18 +332,26 @@ class WBCQPControllerNode(Node):
                 f'clipped=[{clipped_pos[0]:.3f},{clipped_pos[1]:.3f},{clipped_pos[2]:.3f}]',
                 throttle_duration_sec=3.0)
 
-        # 10. Publish EE goal — T_new is already in link00 frame ('world' for z1_ik_to_jtc)
+        # 10. Publish EE goal — position from FK, orientation from approach_point
+        # (FK orientation is arbitrary — WBC only controls position.
+        #  Using the goal's orientation keeps the EE pointing in the intended
+        #  approach direction instead of twisting with FK.)
         goal_msg = PoseStamped()
         goal_msg.header.stamp    = self.get_clock().now().to_msg()
         goal_msg.header.frame_id = 'world'
         goal_msg.pose.position.x = float(clipped_pos[0])
         goal_msg.pose.position.y = float(clipped_pos[1])
         goal_msg.pose.position.z = float(clipped_pos[2])
-        quat = _rot_to_quat(T_new.rotation)
-        goal_msg.pose.orientation.x = float(quat[0])
-        goal_msg.pose.orientation.y = float(quat[1])
-        goal_msg.pose.orientation.z = float(quat[2])
-        goal_msg.pose.orientation.w = float(quat[3])
+        try:
+            goal_world = self._tf.transform(goal_fresh, 'link00',
+                                            timeout=Duration(seconds=0.1))
+            goal_msg.pose.orientation = goal_world.pose.orientation
+        except TransformException:
+            quat = _rot_to_quat(T_new.rotation)
+            goal_msg.pose.orientation.x = float(quat[0])
+            goal_msg.pose.orientation.y = float(quat[1])
+            goal_msg.pose.orientation.z = float(quat[2])
+            goal_msg.pose.orientation.w = float(quat[3])
 
         en = Bool(); en.data = True
         self._pub_en.publish(en)
