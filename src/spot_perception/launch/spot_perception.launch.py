@@ -67,7 +67,7 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='spot_to_camera',
         arguments=[
-            '0.40', '0.0', '0.55',
+            '0.30', '0.0', '0.15',
             '0', '0', '0',
             'my_spot/body',
             'camera_link'

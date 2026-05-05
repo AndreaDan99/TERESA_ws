@@ -22,11 +22,11 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description():
 
     # TF mount offsets — ESTIMATED, replace with measured values after mounting
-    z1_x_arg = DeclareLaunchArgument('z1_x', default_value='0.30',
+    z1_x_arg = DeclareLaunchArgument('z1_x', default_value='0.20',
         description='Z1 link00 X from my_spot/body [m] (forward)')
     z1_y_arg = DeclareLaunchArgument('z1_y', default_value='0.0',
         description='Z1 link00 Y from my_spot/body [m] (left)')
-    z1_z_arg = DeclareLaunchArgument('z1_z', default_value='0.70',
+    z1_z_arg = DeclareLaunchArgument('z1_z', default_value='0.20',
         description='Z1 link00 Z from my_spot/body [m] (up)')
 
     dry_run_arg = DeclareLaunchArgument('dry_run', default_value='false',
@@ -74,7 +74,7 @@ def generate_launch_description():
     return LaunchDescription([
         z1_x_arg, z1_y_arg, z1_z_arg, dry_run_arg,
         LogInfo(msg=['WBC — Spot+Z1 holistic control']),
-        LogInfo(msg=['TF my_spot/body → link00 (ESTIMATED — misurare dopo montaggio)']),
+        LogInfo(msg=['TF my_spot/body → link00']),
         static_tf_z1_mount,
         qp_node,
         coord_node,
