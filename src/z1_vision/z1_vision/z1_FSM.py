@@ -249,7 +249,8 @@ class Z1FSM(Node):
         #   il tracker inizia a vedere il torso, i goal IK successivi vengono
         #   riorientati verso la posizione reale invece del look-at fisso pre-calcolato.
         # ── WS_EXTENSION state ───────────────────────────────────────────
-        self._wbc_state_str:      str                       = ''
+        self._wbc_state_str:      str | None                = None
+        self._wbc_wait_start:   float | None              = None   # timestamp primo ingresso in WAITING senza WBC
         self._ws_ext_retries:     int                       = 0
         self._ws_ext_confirmed:   bool                      = False
 
@@ -362,6 +363,7 @@ class Z1FSM(Node):
 
     def _on_wbc_state(self, msg: String):
         self._wbc_state_str = msg.data
+        self._wbc_wait_start = None   # WBC connected, clear timeout
 
     def _on_keyboard_cmd(self, msg: String):
         """Riceve comandi da z1_keyboard_safety via /z1_keyboard_cmd."""
@@ -1137,9 +1139,26 @@ class Z1FSM(Node):
                             '(nessun messaggio su /torso_tracker_state)...'
                         )
                     return
-                # Se WBC è attivo, attendere che il coordinatore entri in SCANNING
+                # Se WBC è in esecuzione, attendere che il coordinatore entri in SCANNING
                 # (Spot ha raggiunto il paziente e ha passato il controllo al FSM).
-                # Se WBC non è presente (_wbc_state_str vuota), modalità standalone.
+                # Se _wbc_state_str è None: nessun messaggio ricevuto da /wbc/state →
+                # il WBC potrebbe non essere ancora partito. Attendere fino a 10s,
+                # poi assumere modalità standalone.
+                if self._wbc_state_str is None:
+                    if self._wbc_wait_start is None:
+                        self._wbc_wait_start = self.get_clock().now().nanoseconds * 1e-9
+                        self.get_logger().info(
+                            '⏳ In attesa del WBC coordinator (/wbc/state)...'
+                        )
+                        return
+                    elapsed = self.get_clock().now().nanoseconds * 1e-9 - self._wbc_wait_start
+                    if elapsed < 10.0:
+                        return
+                    self.get_logger().warn(
+                        '⏰ Nessun WBC rilevato dopo 10s → modalità standalone'
+                    )
+                    self._wbc_state_str = ''
+                    self._wbc_wait_start = None
                 if self._wbc_state_str and self._wbc_state_str != 'SCANNING':
                     return
                 self.set_state(self.BODY_SCANNING)
