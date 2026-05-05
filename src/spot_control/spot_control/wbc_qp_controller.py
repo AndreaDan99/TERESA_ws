@@ -222,13 +222,15 @@ class WBCQPControllerNode(Node):
         v_des[3:6] = self._kp_pos * (effective / (dp_norm + 1e-6)) * dp
 
         # 6. Pinocchio: J_arm in LOCAL_WORLD_ALIGNED (= odom-aligned)
+        n_arm = self._q_meas.shape[0]
         q = self._q_neutral.copy()
-        q[:6] = self._q_meas
+        q[:n_arm] = self._q_meas
         pin.computeJointJacobians(self._model, self._data, q)
         pin.updateFramePlacements(self._model, self._data)
-        J_arm = pin.getFrameJacobian(
+        J_arm_full = pin.getFrameJacobian(
             self._model, self._data, self._ee_id,
             pin.ReferenceFrame.LOCAL_WORLD_ALIGNED)
+        J_arm = J_arm_full[:, :n_arm]
 
         # 7. J_base in body frame → rotate to odom frame to match J_arm
         p_ee_body = np.array([
@@ -276,10 +278,10 @@ class WBCQPControllerNode(Node):
 
         # 9. Integrate q_dot → q_new → FK → new EE pose in Pinocchio world (= link00)
         q_new = q.copy()
-        q_new[:6] = np.clip(
+        q_new[:n_arm] = np.clip(
             self._q_meas + q_dot * self._update_period,
-            self._model.lowerPositionLimit[:6],
-            self._model.upperPositionLimit[:6],
+            self._model.lowerPositionLimit[:n_arm],
+            self._model.upperPositionLimit[:n_arm],
         )
         pin.forwardKinematics(self._model, self._data, q_new)
         pin.updateFramePlacements(self._model, self._data)

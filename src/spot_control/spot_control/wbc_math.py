@@ -138,16 +138,20 @@ def wbc_split(
     w_arm  = lam_arm  / (m + eps)
     w_base = lam_base
 
-    w_diag = np.array([w_arm] * 6 + [w_base, w_base])
+    n_all = J_holistic.shape[1]
+    n_arm = n_all - 2
+
+    w_diag = np.array([w_arm] * n_arm + [w_base, w_base])
     W_inv  = np.diag(1.0 / w_diag)
 
     # Weighted damped least-squares
-    A = J_holistic @ W_inv @ J_holistic.T + damping * np.eye(6)
+    n_rows = v_des.shape[0]
+    A = J_holistic @ W_inv @ J_holistic.T + damping * np.eye(n_rows)
     x = W_inv @ J_holistic.T @ np.linalg.solve(A, v_des)
 
-    q_dot = np.clip(x[:6], -q_dot_max,  q_dot_max)
-    vx    = float(np.clip(x[6],  -vx_max,   vx_max))
-    wz    = float(np.clip(x[7],  -wz_max,   wz_max))
+    q_dot = np.clip(x[:n_arm],     -q_dot_max, q_dot_max)
+    vx    = float(np.clip(x[n_arm],     -vx_max,    vx_max))
+    wz    = float(np.clip(x[n_arm + 1], -wz_max,    wz_max))
 
     return q_dot, vx, wz
 
@@ -192,22 +196,26 @@ def wbc_split_with_yaw(
     w_arm  = lam_arm  / (m + eps)
     w_base = lam_base
 
-    w_diag = np.array([w_arm] * 6 + [w_base, w_base])
+    n_all = J_holistic.shape[1]
+    n_arm = n_all - 2
+
+    w_diag = np.array([w_arm] * n_arm + [w_base, w_base])
     W_inv  = np.diag(1.0 / w_diag)
 
-    # Extend Jacobian: add yaw selection row [0,0,0,0,0,0, 0, 1]
-    J_yaw_row = np.zeros((1, 8))
-    J_yaw_row[0, 7] = 1.0
-    J_ext = np.vstack([J_holistic, J_yaw_row])           # (7, 8)
+    # Extend Jacobian: add yaw selection row — wz is always the last column
+    J_yaw_row = np.zeros((1, n_all))
+    J_yaw_row[0, -1] = 1.0
+    J_ext = np.vstack([J_holistic, J_yaw_row])
 
-    v_des_ext = np.append(v_des, k_yaw * yaw_error)      # (7,)
+    v_des_ext = np.append(v_des, k_yaw * yaw_error)
 
-    # Weighted damped least-squares with 7×8 system
-    A = J_ext @ W_inv @ J_ext.T + damping * np.eye(7)
+    # Weighted damped least-squares
+    n_rows = v_des_ext.shape[0]
+    A = J_ext @ W_inv @ J_ext.T + damping * np.eye(n_rows)
     x = W_inv @ J_ext.T @ np.linalg.solve(A, v_des_ext)
 
-    q_dot = np.clip(x[:6], -q_dot_max,  q_dot_max)
-    vx    = float(np.clip(x[6],  -vx_max,   vx_max))
-    wz    = float(np.clip(x[7],  -wz_max,   wz_max))
+    q_dot = np.clip(x[:n_arm],     -q_dot_max, q_dot_max)
+    vx    = float(np.clip(x[n_arm],     -vx_max,    vx_max))
+    wz    = float(np.clip(x[n_arm + 1], -wz_max,    wz_max))
 
     return q_dot, vx, wz
