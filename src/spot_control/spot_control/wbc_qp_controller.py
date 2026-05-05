@@ -147,6 +147,9 @@ class WBCQPControllerNode(Node):
 
         # ── Timer ─────────────────────────────────────────────────────
         self.create_timer(self._update_period, self._update)
+        # TF mount broadcast at 2 Hz — separate timer so it's in the
+        # buffer before _update does its TF lookups
+        self.create_timer(0.5, self._publish_mount_tf)
         self.get_logger().info('WBC QP Controller ready.')
 
     # ── Callbacks ─────────────────────────────────────────────────────
@@ -194,9 +197,6 @@ class WBCQPControllerNode(Node):
     # ── Main update ───────────────────────────────────────────────────
 
     def _update(self) -> None:
-        # 0. Publish Z1 mount TF (my_spot/body → link00) so the tree is always connected
-        self._publish_mount_tf()
-
         if not self._enabled or self._goal is None or self._q_meas is None:
             return
 
@@ -227,9 +227,13 @@ class WBCQPControllerNode(Node):
             self.get_logger().warn(f'TF body→odom: {e}', throttle_duration_sec=2.0)
             return
 
-        # 4. Transform goal to odom frame
+        # 4. Transform goal to odom frame (use current time to avoid TF extrapolation)
         try:
-            goal_odom = self._tf.transform(self._goal, self._odom_frame,
+            goal_fresh = PoseStamped()
+            goal_fresh.header.frame_id = self._goal.header.frame_id
+            goal_fresh.header.stamp    = self.get_clock().now().to_msg()
+            goal_fresh.pose            = self._goal.pose
+            goal_odom = self._tf.transform(goal_fresh, self._odom_frame,
                                            timeout=Duration(seconds=0.1))
         except TransformException as e:
             self.get_logger().warn(f'TF goal→odom: {e}', throttle_duration_sec=2.0)

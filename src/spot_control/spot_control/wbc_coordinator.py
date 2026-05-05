@@ -359,7 +359,8 @@ class WBCCoordinatorNode(Node):
     def _filtered_goal(self) -> PoseStamped:
         """Return approach_point with position replaced by Kalman estimate."""
         msg = PoseStamped()
-        msg.header = self._approach_point.header
+        msg.header.frame_id = self._approach_point.header.frame_id
+        msg.header.stamp    = self.get_clock().now().to_msg()
         msg.pose.orientation = self._approach_point.pose.orientation
         if self._kf_approach.initialized:
             p = self._kf_approach.get_position()
