@@ -231,7 +231,7 @@ class WBCQPControllerNode(Node):
         try:
             goal_fresh = PoseStamped()
             goal_fresh.header.frame_id = self._goal.header.frame_id
-            goal_fresh.header.stamp    = self.get_clock().now().to_msg()
+            goal_fresh.header.stamp    = rclpy.time.Time().to_msg()
             goal_fresh.pose            = self._goal.pose
             goal_odom = self._tf.transform(goal_fresh, self._odom_frame,
                                            timeout=Duration(seconds=0.1))

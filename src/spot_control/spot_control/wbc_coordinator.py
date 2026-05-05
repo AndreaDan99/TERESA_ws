@@ -360,7 +360,7 @@ class WBCCoordinatorNode(Node):
         """Return approach_point with position replaced by Kalman estimate."""
         msg = PoseStamped()
         msg.header.frame_id = self._approach_point.header.frame_id
-        msg.header.stamp    = self.get_clock().now().to_msg()
+        msg.header.stamp    = rclpy.time.Time().to_msg()
         msg.pose.orientation = self._approach_point.pose.orientation
         if self._kf_approach.initialized:
             p = self._kf_approach.get_position()
