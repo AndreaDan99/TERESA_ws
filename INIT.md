@@ -14,6 +14,14 @@ git status --short
 
 ---
 
+## Recent Changes (5 May 2026)
+
+- **WBC pitch exploration**: `J_base` is 6×2 (only `vx` + `wz`). No body pitch control mechanism exists in `spot_msgs` or this workspace — `cmd_vel.angular.y` is likely not processed by the standard `spot_driver`. Spot API for pitch still to be verified via `ros2 service list | grep my_spot` on SpotCore.
+- **Pitch strategy**: first test WBC without pitch. If arm reach is insufficient, integrate pitch as a discrete compensation (service call, like `SetStandHeight`) during WS_EXTENSION, NOT as part of the continuous WBC 6×4 Jacobian.
+- `skip_impedance: true` for WBC testing (impedance disabled).
+
+---
+
 ## System overview
 
 Two main pipelines coexist:
@@ -260,8 +268,9 @@ Z → right to left
 
 ### Key shared parameters (keep in sync)
 
-- `workspace_safety_margin: 0.30` — in both `z1_fsm_params.yaml` and `wbc_params.yaml`, both use the same `WorkspaceChecker` class
+- `workspace_safety_margin: 0.05` — in both `z1_fsm_params.yaml` and `wbc_params.yaml`, both use the same `WorkspaceChecker` class
 - `orbbec_confidence_threshold: 0.5` — in `wbc_params.yaml` and `laying_human_detector` (min_detection_confidence). Both must match.
+- `ik_goal_topic` / `ik_enable_topic` — FSM code defaults are `/z1/ik_goal_pose` and `/z1/ik_enable` (go through `ik_goal_mux`). YAML must NOT override these to `/ik_*` directly or the mux will be bypassed.
 
 ### YOLO model
 

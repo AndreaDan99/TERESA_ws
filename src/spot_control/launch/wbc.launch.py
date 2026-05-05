@@ -51,12 +51,8 @@ def generate_launch_description():
         ]
     )
 
-    mux_node = Node(
-        package='spot_control',
-        executable='ik_goal_mux',
-        name='ik_goal_mux',
-        output='screen',
-    )
+    # NOTE: ik_goal_mux is now launched by z1_control.launch.py
+    # (always needed, even in standalone mode)
 
     qp_node = Node(
         package='spot_control',
@@ -80,7 +76,6 @@ def generate_launch_description():
         LogInfo(msg=['WBC — Spot+Z1 holistic control']),
         LogInfo(msg=['TF my_spot/body → link00 (ESTIMATED — misurare dopo montaggio)']),
         static_tf_z1_mount,
-        mux_node,
         qp_node,
         coord_node,
     ])

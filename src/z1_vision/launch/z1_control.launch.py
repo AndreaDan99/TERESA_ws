@@ -106,7 +106,17 @@ def generate_launch_description():
         condition  = IfCondition(use_impedance),
     )
 
-    # NODO 4 — FSM  (t = fsm_delay secondi, default 5s)
+    # NODO 4 — IK Goal Mux (t = 0s)
+    # Priority multiplexer: quando WBC è attivo, i goal WBC prendono priorità
+    # sui goal z1_FSM. In standalone (senza WBC) fa pass-through trasparente.
+    mux_node = Node(
+        package    = 'spot_control',
+        executable = 'ik_goal_mux',
+        name       = 'ik_goal_mux',
+        output     = 'screen',
+    )
+
+    # NODO 5 — FSM  (t = fsm_delay secondi, default 5s)
     # Il delay garantisce che impedance controller abbia completato il
     # safe startup (3s) prima che la FSM tenti di attivarlo.
     # Primo stato: HOMING → porta il braccio in home_position → WAITING.
@@ -126,10 +136,11 @@ def generate_launch_description():
         use_impedance_arg,
         use_fsm_arg,
 
-        # t = 0s: switch + IK + impedance partono subito
+        # t = 0s: switch + IK + impedance + mux partono subito
         switch_node,
         ik_to_jtc_node,
         impedance_node,
+        mux_node,
 
         # t = fsm_delay: FSM parte dopo il delay
         TimerAction(

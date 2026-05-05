@@ -102,12 +102,19 @@ Z1:  HOMING → WAITING (gate: wait for WBC=SCANNING or standalone)
 ### Current limitation
 WBC `J_base` is **6×2**: only `[vx, wz]` — forward velocity + yaw. Spot cannot use pitch (forward tilt) or body height (squat/stand) as part of the holistic controller.
 
-### Proposal: extend `J_base` to **6×4**
+### Strategy (updated 5 May 2026)
 
+**Phase 1 — Pitch as discrete compensation** (current focus):
+- Pitch is NOT integrated into the continuous WBC Jacobian (6×4)
+- Instead, pitch is a discrete command (like `SetStandHeight` for body height)
+- Applied during WS_EXTENSION: when arm can't reach target, Spot tilts forward to shift workspace
+- Delivery mechanism: Spot API service (to be verified via `ros2 service list | grep my_spot`). Candidates: `/my_spot/robot_command` or a new `SetBodyPitch.srv` in `spot_msgs`. NOT `cmd_vel.angular.y` (likely not processed by standard `spot_driver`).
+
+**Phase 2 — Full WBC 6×4** (future, after Phase 1 validated):
 | New DOF | Spot command | Effect on EE |
 |---------|-------------|--------------|
-| `vy` (pitch) | `cmd_vel.angular.y` | Pitch forward → EE lowers; pitch backward → EE raises |
-| `vz` (height) | `cmd_vel.linear.z` | Squat → EE lowers; stand → EE raises |
+| `vy` (pitch) | discrete service or `cmd_vel.angular.y` | Pitch forward → EE lowers + forward; pitch backward → EE raises |
+| `vz` (height) | `cmd_vel.linear.z` or `SetStandHeight` | Squat → EE lowers; stand → EE raises |
 
 New solver: 6 equations × (6 arm + 4 base) = **10 DOF**.
 
@@ -125,9 +132,12 @@ Two strategies:
 - `src/spot_control/config/wbc_params.yaml` — new params: `pitch_weight`, `height_weight`, `pitch_max`, `height_max`
 
 ### Next steps
-1. Derive analytical `J_base` for pitch + height (kinematic chain: Spot base → body frame → Z1 base → EE)
-2. Implement and test in dry-run first
-3. Add safety limits: max pitch angle, max height delta, per-direction bounding box in WS_EXTENSION
+1. Test WBC without pitch — verify current vx+wz+body_height is sufficient
+2. Verify Spot pitch API: `ros2 service list | grep my_spot` on SpotCore
+3. Implement Phase 1: discrete pitch compensation in `wbc_coordinator.py` + new service if needed
+4. Derive analytical `J_base` for pitch + height (kinematic chain: Spot base → body frame → Z1 base → EE)
+5. Implement and test in dry-run first
+6. Add safety limits: max pitch angle, max height delta, per-direction bounding box in WS_EXTENSION
 
 ---
 
