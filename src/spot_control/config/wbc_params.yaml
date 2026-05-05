@@ -36,6 +36,11 @@ wbc_qp_controller:
     # Goal update period — must be >= traj_min_time in z1_ik_jtc_params.yaml (1.0s)
     update_period: 1.5   # [s]
 
+    # Z1 mount offset on Spot body [m]
+    z1_mount_x: 0.20    # forward from my_spot/body
+    z1_mount_y: 0.0     # left from my_spot/body
+    z1_mount_z: 0.20    # up from my_spot/body
+
     # Workspace safety margin [m] — keep in sync with z1_fsm_params.yaml
     # Uses the same WorkspaceChecker class (z1_vision.workspace_checker).
     # EE goals are clipped to max_reach - safety_margin.

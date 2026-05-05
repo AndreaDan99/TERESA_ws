@@ -23,7 +23,8 @@ from geometry_msgs.msg import PoseStamped, Twist
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, Float32
 
-from tf2_ros import Buffer, TransformListener, TransformException
+from tf2_ros import Buffer, TransformListener, TransformBroadcaster, TransformException
+from geometry_msgs.msg import TransformStamped
 import tf2_geometry_msgs  # noqa: F401
 
 from spot_control.wbc_math import (
@@ -63,6 +64,9 @@ class WBCQPControllerNode(Node):
         self.declare_parameter('q_dot_max',     0.6)
         self.declare_parameter('update_period', 1.5)
         self.declare_parameter('workspace_safety_margin', 0.30)
+        self.declare_parameter('z1_mount_x',      0.20)
+        self.declare_parameter('z1_mount_y',      0.0)
+        self.declare_parameter('z1_mount_z',      0.20)
         self.declare_parameter('ik_goal_topic',      '/wbc/ik_goal_pose')
         self.declare_parameter('ik_enable_topic',    '/wbc/ik_enable')
         self.declare_parameter('cmd_vel_topic',      '/my_spot/cmd_vel')
@@ -110,6 +114,10 @@ class WBCQPControllerNode(Node):
         # ── TF ────────────────────────────────────────────────────────
         self._tf = Buffer()
         TransformListener(self._tf, self)
+        self._tf_broadcaster = TransformBroadcaster(self)
+        self._mount_x = float(p('z1_mount_x'))
+        self._mount_y = float(p('z1_mount_y'))
+        self._mount_z = float(p('z1_mount_z'))
 
         # ── State ─────────────────────────────────────────────────────
         self._enabled        = False
@@ -165,9 +173,29 @@ class WBCQPControllerNode(Node):
     def _cb_desired_yaw(self, msg: Float32) -> None:
         self._desired_yaw = float(msg.data)
 
+    # ── TF broadcast ───────────────────────────────────────────────────
+
+    def _publish_mount_tf(self) -> None:
+        """Publish my_spot/body → link00 so the TF tree stays connected."""
+        t = TransformStamped()
+        t.header.stamp    = self.get_clock().now().to_msg()
+        t.header.frame_id = self._body_frame
+        t.child_frame_id  = self._z1_base_frame
+        t.transform.translation.x = self._mount_x
+        t.transform.translation.y = self._mount_y
+        t.transform.translation.z = self._mount_z
+        t.transform.rotation.x = 0.0
+        t.transform.rotation.y = 0.0
+        t.transform.rotation.z = 0.0
+        t.transform.rotation.w = 1.0
+        self._tf_broadcaster.sendTransform(t)
+
     # ── Main update ───────────────────────────────────────────────────
 
     def _update(self) -> None:
+        # 0. Publish Z1 mount TF (my_spot/body → link00) so the tree is always connected
+        self._publish_mount_tf()
+
         if not self._enabled or self._goal is None or self._q_meas is None:
             return
 
