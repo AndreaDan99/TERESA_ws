@@ -33,8 +33,10 @@ wbc_qp_controller:
     wz_max:    0.5   # [rad/s]
     q_dot_max: 0.6   # [rad/s]
 
-    # Goal update period — must be >= traj_min_time in z1_ik_jtc_params.yaml (1.0s)
-    update_period: 1.5   # [s]
+    # Goal update period — controls how often WBC recomputes cmd_vel + IK goals.
+    # IK solver processes goals sequentially (one trajectory at a time), so higher
+    # rate (> traj_min_time) just keeps the latched goal fresh.
+    update_period: 0.1   # [s] = 10 Hz (matches spot_goal_navigator rate)
 
     # Z1 mount offset on Spot body [m]
     z1_mount_x: 0.20    # forward from my_spot/body

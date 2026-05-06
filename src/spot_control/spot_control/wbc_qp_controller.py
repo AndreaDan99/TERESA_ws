@@ -236,19 +236,24 @@ class WBCQPControllerNode(Node):
             self.get_logger().warn(f'TF body→odom: {e}', throttle_duration_sec=2.0)
             return
 
-        # 4. Transform goal to odom frame (use current time to avoid TF extrapolation)
+        # 4. Goal is already in odom frame (coordinator publishes in odom).
+        goal_odom = self._goal
+
+        # 5. Transform goal from odom → link00 for stable look-at
+        #    (direction from arm base to target, independent of EE position).
         try:
-            goal_fresh = PoseStamped()
-            goal_fresh.header.frame_id = self._goal.header.frame_id
-            goal_fresh.header.stamp    = rclpy.time.Time().to_msg()
-            goal_fresh.pose            = self._goal.pose
-            goal_odom = self._tf.transform(goal_fresh, self._odom_frame,
-                                           timeout=Duration(seconds=0.1))
+            goal_stamped = PoseStamped()
+            goal_stamped.header.frame_id = self._odom_frame
+            goal_stamped.header.stamp    = self.get_clock().now().to_msg()
+            goal_stamped.pose            = goal_odom.pose
+            goal_link00 = self._tf.transform(goal_stamped, self._z1_base_frame,
+                                             timeout=Duration(seconds=0.1))
         except TransformException as e:
-            self.get_logger().warn(f'TF goal→odom: {e}', throttle_duration_sec=2.0)
+            self.get_logger().warn(f'TF goal→{self._z1_base_frame}: {e}',
+                                   throttle_duration_sec=2.0)
             return
 
-        # 5. EE position error → desired spatial velocity (Pinocchio: [ang(3), lin(3)])
+        # 6. EE position error → desired spatial velocity (Pinocchio: [ang(3), lin(3)])
         dp = np.array([
             goal_odom.pose.position.x - ee_in_odom.transform.translation.x,
             goal_odom.pose.position.y - ee_in_odom.transform.translation.y,
@@ -273,9 +278,6 @@ class WBCQPControllerNode(Node):
             self._model, self._data, self._ee_id,
             pin.ReferenceFrame.LOCAL_WORLD_ALIGNED)
         J_arm = J_arm_full[:, :n_arm]
-
-        # Save current EE FK (at q) for orientation computation (before q_new overwrites it)
-        T_ee_cur = self._data.oMf[self._ee_id]
 
         # 7. J_base in body frame → rotate to odom frame to match J_arm
         p_ee_body = np.array([
@@ -344,9 +346,9 @@ class WBCQPControllerNode(Node):
                 f'clipped=[{clipped_pos[0]:.3f},{clipped_pos[1]:.3f},{clipped_pos[2]:.3f}]',
                 throttle_duration_sec=3.0)
 
-        # 10. Publish EE goal — position from FK, orientation computed geometrically.
-        # X_ee = direction from current EE to target (in link00 frame),
-        # Y_ee constrained to home orientation via Gram-Schmidt (no twist).
+        # 10. Publish EE goal — position from FK, orientation from arm-base to target.
+        # X_ee = direction from arm base (link00 origin) to target (in link00 frame).
+        # Stable: changes only when Spot moves, not when arm joints move.
         goal_msg = PoseStamped()
         goal_msg.header.stamp    = self.get_clock().now().to_msg()
         goal_msg.header.frame_id = 'world'
@@ -354,10 +356,10 @@ class WBCQPControllerNode(Node):
         goal_msg.pose.position.y = float(clipped_pos[1])
         goal_msg.pose.position.z = float(clipped_pos[2])
 
-        ee_cur = np.array([T_ee_cur.translation[0],
-                           T_ee_cur.translation[1],
-                           T_ee_cur.translation[2]])
-        x_ee = clipped_pos - ee_cur
+        target_link00 = np.array([goal_link00.pose.position.x,
+                                   goal_link00.pose.position.y,
+                                   goal_link00.pose.position.z])
+        x_ee = target_link00
         x_norm = float(np.linalg.norm(x_ee))
         if x_norm < 1e-6:
             x_ee = np.array([1.0, 0.0, 0.0])

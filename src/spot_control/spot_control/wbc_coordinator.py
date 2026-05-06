@@ -153,7 +153,7 @@ class WBCCoordinatorNode(Node):
         self._state                  = CoordState.IDLE
         self._posture                = 'UNKNOWN'
         self._confidence             = 0.0
-        self._approach_point: PoseStamped | None = None
+        self._approach_point_odom: PoseStamped | None = None  # odom-frame (world-fixed)
         self._last_lying_time        = None
         self._desired_yaw: float | None = None   # target yaw Spot [rad, odom frame]
         self._ws_ext_anchor: np.ndarray | None = None   # Spot odom position at WS_EXTENSION entry
@@ -229,11 +229,16 @@ class WBCCoordinatorNode(Node):
         self._pub_yaw.publish(msg_out)
 
     def _cb_approach(self, msg: PoseStamped) -> None:
-        self._approach_point = msg
+        try:
+            goal_odom = self._tf.transform(msg, self._odom_frame,
+                                           timeout=Duration(seconds=0.1))
+        except TransformException:
+            return
+        self._approach_point_odom = goal_odom
         z = np.array([
-            msg.pose.position.x,
-            msg.pose.position.y,
-            msg.pose.position.z,
+            goal_odom.pose.position.x,
+            goal_odom.pose.position.y,
+            goal_odom.pose.position.z,
         ])
         self._kf_approach.update(z)
 
@@ -287,12 +292,12 @@ class WBCCoordinatorNode(Node):
     def _tick_idle(self) -> None:
         if (self._posture == 'LYING'
                 and self._confidence >= self._conf_thr
-                and self._approach_point is not None):
+                and self._approach_point_odom is not None):
             self._set_state(CoordState.APPROACHING)
             self._set_wbc_enabled(True)
 
     def _tick_approaching(self) -> None:
-        if self._approach_point is None:
+        if self._approach_point_odom is None:
             return
 
         self._pub_goal.publish(self._filtered_goal())
@@ -348,29 +353,33 @@ class WBCCoordinatorNode(Node):
     # ── Helpers ───────────────────────────────────────────────────────
 
     def _distance_to_patient(self) -> float | None:
-        if self._approach_point is None:
+        if self._approach_point_odom is None:
             return None
         try:
-            pt_body = self._tf.transform(
-                self._approach_point, self._body_frame,
-                timeout=Duration(seconds=0.1))
-            return math.hypot(pt_body.pose.position.x, pt_body.pose.position.y)
+            body_in_odom = self._tf.lookup_transform(
+                self._odom_frame, self._body_frame,
+                rclpy.time.Time(), timeout=Duration(seconds=0.1))
         except TransformException:
             return None
+        dx = body_in_odom.transform.translation.x - self._approach_point_odom.pose.position.x
+        dy = body_in_odom.transform.translation.y - self._approach_point_odom.pose.position.y
+        return math.hypot(dx, dy)
 
     def _filtered_goal(self) -> PoseStamped:
-        """Return approach_point with position replaced by Kalman estimate."""
+        """Return approach_point_odom with position replaced by Kalman estimate."""
         msg = PoseStamped()
-        msg.header.frame_id = self._approach_point.header.frame_id
+        msg.header.frame_id = self._odom_frame
         msg.header.stamp    = rclpy.time.Time().to_msg()
-        msg.pose.orientation = self._approach_point.pose.orientation
+        msg.pose.orientation.w = 1.0  # identity — WBC QP recomputes orientation
         if self._kf_approach.initialized:
             p = self._kf_approach.get_position()
             msg.pose.position.x = float(p[0])
             msg.pose.position.y = float(p[1])
             msg.pose.position.z = float(p[2])
+        elif self._approach_point_odom is not None:
+            msg.pose.position = self._approach_point_odom.pose.position
         else:
-            msg.pose.position = self._approach_point.pose.position
+            return PoseStamped()  # should not happen
         return msg
 
     def _set_state(self, new_state: str) -> None:
