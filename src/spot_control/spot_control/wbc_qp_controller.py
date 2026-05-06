@@ -26,6 +26,7 @@ from std_msgs.msg import Bool, Float32
 from tf2_ros import Buffer, TransformListener, TransformBroadcaster, TransformException
 from geometry_msgs.msg import TransformStamped
 import tf2_geometry_msgs  # noqa: F401
+from tf_transformations import quaternion_matrix
 
 from spot_control.wbc_math import (
     compute_j_base,
@@ -71,6 +72,7 @@ class WBCQPControllerNode(Node):
         self.declare_parameter('ik_enable_topic',    '/wbc/ik_enable')
         self.declare_parameter('cmd_vel_topic',      '/my_spot/cmd_vel')
         self.declare_parameter('joint_states_topic', '/joint_states')
+        self.declare_parameter('home_orientation', [-0.0062, 0.4107, 0.0021, 0.9118])
 
         p = lambda n: self.get_parameter(n).value
         self._dry_run       = bool(p('dry_run'))
@@ -88,6 +90,7 @@ class WBCQPControllerNode(Node):
         self._wz_max        = float(p('wz_max'))
         self._q_dot_max     = float(p('q_dot_max'))
         self._update_period = float(p('update_period'))
+        self._home_orientation = np.array([float(x) for x in p('home_orientation')])
 
         # ── Pinocchio ─────────────────────────────────────────────────
         urdf = p('urdf_path')
@@ -265,6 +268,9 @@ class WBCQPControllerNode(Node):
             pin.ReferenceFrame.LOCAL_WORLD_ALIGNED)
         J_arm = J_arm_full[:, :n_arm]
 
+        # Save current EE FK (at q) for orientation computation (before q_new overwrites it)
+        T_ee_cur = self._data.oMf[self._ee_id]
+
         # 7. J_base in body frame → rotate to odom frame to match J_arm
         p_ee_body = np.array([
             ee_in_body.transform.translation.x,
@@ -332,26 +338,42 @@ class WBCQPControllerNode(Node):
                 f'clipped=[{clipped_pos[0]:.3f},{clipped_pos[1]:.3f},{clipped_pos[2]:.3f}]',
                 throttle_duration_sec=3.0)
 
-        # 10. Publish EE goal — position from FK, orientation from approach_point
-        # (FK orientation is arbitrary — WBC only controls position.
-        #  Using the goal's orientation keeps the EE pointing in the intended
-        #  approach direction instead of twisting with FK.)
+        # 10. Publish EE goal — position from FK, orientation computed geometrically.
+        # X_ee = direction from current EE to target (in link00 frame),
+        # Y_ee constrained to home orientation via Gram-Schmidt (no twist).
         goal_msg = PoseStamped()
         goal_msg.header.stamp    = self.get_clock().now().to_msg()
         goal_msg.header.frame_id = 'world'
         goal_msg.pose.position.x = float(clipped_pos[0])
         goal_msg.pose.position.y = float(clipped_pos[1])
         goal_msg.pose.position.z = float(clipped_pos[2])
-        try:
-            goal_world = self._tf.transform(goal_fresh, 'link00',
-                                            timeout=Duration(seconds=0.1))
-            goal_msg.pose.orientation = goal_world.pose.orientation
-        except TransformException:
-            quat = _rot_to_quat(T_new.rotation)
-            goal_msg.pose.orientation.x = float(quat[0])
-            goal_msg.pose.orientation.y = float(quat[1])
-            goal_msg.pose.orientation.z = float(quat[2])
-            goal_msg.pose.orientation.w = float(quat[3])
+
+        ee_cur = np.array([T_ee_cur.translation[0],
+                           T_ee_cur.translation[1],
+                           T_ee_cur.translation[2]])
+        x_ee = clipped_pos - ee_cur
+        x_norm = float(np.linalg.norm(x_ee))
+        if x_norm < 1e-6:
+            x_ee = np.array([1.0, 0.0, 0.0])
+        else:
+            x_ee = x_ee / x_norm
+
+        R_home = quaternion_matrix(self._home_orientation.tolist())[:3, :3]
+        y_ref = R_home[:, 1]
+        y_ee = y_ref - np.dot(y_ref, x_ee) * x_ee
+        y_norm = float(np.linalg.norm(y_ee))
+        if y_norm < 1e-3:
+            y_ref = R_home[:, 2]
+            y_ee = y_ref - np.dot(y_ref, x_ee) * x_ee
+            y_norm = float(np.linalg.norm(y_ee))
+        y_ee /= y_norm
+        z_ee = np.cross(x_ee, y_ee)
+
+        quat = _rot_to_quat(np.column_stack([x_ee, y_ee, z_ee]))
+        goal_msg.pose.orientation.x = float(quat[0])
+        goal_msg.pose.orientation.y = float(quat[1])
+        goal_msg.pose.orientation.z = float(quat[2])
+        goal_msg.pose.orientation.w = float(quat[3])
 
         en = Bool(); en.data = True
         self._pub_en.publish(en)

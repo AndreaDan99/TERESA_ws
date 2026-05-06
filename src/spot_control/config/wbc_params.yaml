@@ -41,6 +41,10 @@ wbc_qp_controller:
     z1_mount_y: 0.0     # left from my_spot/body
     z1_mount_z: 0.20    # up from my_spot/body
 
+    # EE goal orientation: X_ee points toward target, Y_ee near home config.
+    # Must match home_orientation in z1_fsm_params.yaml.
+    home_orientation: [-0.0062, 0.4107, 0.0021, 0.9118]  # [qx, qy, qz, qw]
+
     # Workspace safety margin [m] — keep in sync with z1_fsm_params.yaml
     # Uses the same WorkspaceChecker class (z1_vision.workspace_checker).
     # EE goals are clipped to max_reach - safety_margin.
