@@ -19,10 +19,11 @@ wbc_qp_controller:
     kp_pos: 1.0    # [1/s]
     kp_ang: 0.5    # [1/s]
 
-    # Chance-constraint dead zone: robot stops when inside uncertainty ball of radius
-    # z_delta * sigma_max.  z_delta = Gaussian quantile for confidence level 1-delta.
-    # z_delta=1.96 → 95% confidence, z_delta=1.645 → 90%, z_delta=2.576 → 99%.
-    z_delta: 1.96
+    # Quality-based velocity scaling — never zero, Spot always moves.
+    # v_scale = v_min + (1 - v_min) / (1 + quality / quality_ref)
+    # quality [m] from QualityMonitor: 0.01=perfect, 0.50=Orbbec lost for ~10s
+    quality_ref: 0.05     # [m] quality where v_scale = (1+v_min)/2
+    v_min: 0.15           # minimum velocity fraction (never stops before handoff)
 
     # Yaw task gain: desired yaw rate = k_yaw * yaw_error [rad/s per rad]
     # Trades off with EE position tracking via the extended 7×8 Jacobian.
@@ -72,9 +73,13 @@ wbc_coordinator:
     # of the patient. Set handoff_distance to a small arrival tolerance (e.g. 0.3m).
     handoff_distance: 0.05
 
-    # Kalman filter for approach point uncertainty estimation
-    approach_kf_process_noise: 1.0e-3   # [m²] patient lying still
-    approach_kf_meas_noise:    2.5e-3   # [m²] ~5cm std from Orbbec depth
+    # Quality monitor: fixed target (mean of first N odom measures) + EMA deviation.
+    # quality = alpha*|meas - target| + (1-alpha)*quality, grows when Orbbec stops.
+    quality_alpha: 0.3      # EMA smoothing (0=no update, 1=instant)
+    quality_growth: 0.05    # [m/s] quality increase when no measurements
+    quality_min: 0.01       # [m] floor
+    quality_max: 0.50       # [m] ceiling
+    quality_buf_size: 3     # number of initial measurements to freeze target
 
     # WS_EXTENSION bounding box (relative to Spot position at WS_EXTENSION entry)
     ws_ext_fwd_limit: 0.20   # [m] max forward displacement

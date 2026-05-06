@@ -62,7 +62,8 @@ class WBCQPControllerNode(Node):
         self.declare_parameter('damping',       1e-3)
         self.declare_parameter('kp_pos',        1.0)
         self.declare_parameter('kp_ang',        0.5)
-        self.declare_parameter('z_delta',        1.96)
+        self.declare_parameter('quality_ref',   0.05)
+        self.declare_parameter('v_min',         0.15)
         self.declare_parameter('k_yaw',         0.5)
         self.declare_parameter('vx_max',        0.4)
         self.declare_parameter('wz_max',        0.5)
@@ -89,7 +90,8 @@ class WBCQPControllerNode(Node):
         self._lam_base      = float(p('lam_base'))
         self._damping       = float(p('damping'))
         self._kp_pos        = float(p('kp_pos'))
-        self._z_delta       = float(p('z_delta'))
+        self._quality_ref   = float(p('quality_ref'))
+        self._v_min         = float(p('v_min'))
         self._k_yaw         = float(p('k_yaw'))
         self._vx_max        = float(p('vx_max'))
         self._wz_max        = float(p('wz_max'))
@@ -133,7 +135,7 @@ class WBCQPControllerNode(Node):
         self._enabled        = False
         self._goal: PoseStamped | None = None
         self._q_meas: np.ndarray | None = None
-        self._sigma_max      = 0.0    # sqrt(lambda_max(P_pos)) from coordinator Kalman
+        self._sigma_max      = 0.0    # quality [m] from QualityMonitor (not std dev)
         self._desired_yaw: float | None = None  # target Spot yaw [rad, odom]
 
         # ── Sub / Pub ─────────────────────────────────────────────────
@@ -259,14 +261,9 @@ class WBCQPControllerNode(Node):
             goal_odom.pose.position.y - ee_in_odom.transform.translation.y,
             goal_odom.pose.position.z - ee_in_odom.transform.translation.z,
         ])
-        # Chance-constraint dead zone: robot stops when EE is already inside the
-        # uncertainty ball (radius = z_delta * sigma_max) around the Kalman estimate.
-        # Prob(true target inside ball) >= 1 - delta  (delta = 0.05 for z_delta=1.96).
         dp_norm = float(np.linalg.norm(dp))
-        r_ball  = self._z_delta * self._sigma_max
-        effective = max(dp_norm - r_ball, 0.0)
         v_des = np.zeros(6)
-        v_des[3:6] = self._kp_pos * (effective / (dp_norm + 1e-6)) * dp
+        v_des[3:6] = self._kp_pos * dp
 
         # 6. Pinocchio: J_arm in LOCAL_WORLD_ALIGNED (= odom-aligned)
         n_arm = self._q_meas.shape[0]
@@ -323,6 +320,15 @@ class WBCQPControllerNode(Node):
                 q_dot_max=self._q_dot_max,
             )
 
+        # 8.5. Quality-based velocity scaling — never zero, Spot always moves.
+        # quality [m] = EMA(|new_meas - fixed_target|) + growth when Orbbec lost.
+        # v_min = minimum velocity fraction (never stops before handoff).
+        quality = self._sigma_max   # now quality [m], not standard deviation
+        k = 1.0 / self._quality_ref
+        v_scale = self._v_min + (1.0 - self._v_min) / (1.0 + k * quality)
+        vx *= v_scale
+        wz *= v_scale
+
         # 9. Integrate q_dot → q_new → FK → new EE pose in Pinocchio world (= link00)
         q_new = q.copy()
         q_new[:n_arm] = np.clip(
@@ -346,9 +352,9 @@ class WBCQPControllerNode(Node):
                 f'clipped=[{clipped_pos[0]:.3f},{clipped_pos[1]:.3f},{clipped_pos[2]:.3f}]',
                 throttle_duration_sec=3.0)
 
-        # 10. Publish EE goal — position from FK, orientation from arm-base to target.
-        # X_ee = direction from arm base (link00 origin) to target (in link00 frame).
-        # Stable: changes only when Spot moves, not when arm joints move.
+        # 10. Publish EE goal — position from FK, orientation from EE to target.
+        # X_ee = direction from predicted EE (clipped_pos) to target (in link00 frame).
+        # Consistent: position and orientation use same time horizon (q_new).
         goal_msg = PoseStamped()
         goal_msg.header.stamp    = self.get_clock().now().to_msg()
         goal_msg.header.frame_id = 'world'
@@ -359,7 +365,7 @@ class WBCQPControllerNode(Node):
         target_link00 = np.array([goal_link00.pose.position.x,
                                    goal_link00.pose.position.y,
                                    goal_link00.pose.position.z])
-        x_ee = target_link00
+        x_ee = target_link00 - clipped_pos
         x_norm = float(np.linalg.norm(x_ee))
         if x_norm < 1e-6:
             x_ee = np.array([1.0, 0.0, 0.0])
@@ -387,7 +393,7 @@ class WBCQPControllerNode(Node):
         prefix = '[DRY_RUN] ' if self._dry_run else ''
         self.get_logger().info(
             f'{prefix}WBC: m={m:.3f} vx={vx:.3f} wz={wz:.3f} '
-            f'|dp|={dp_norm:.3f} r_ball={r_ball:.3f} eff={effective:.3f} '
+            f'|dp|={dp_norm:.3f} q={quality:.3f} v_scale={v_scale:.2f} '
             f'yaw_err={math.degrees(yaw_error):.1f}°',
             throttle_duration_sec=2.0)
 

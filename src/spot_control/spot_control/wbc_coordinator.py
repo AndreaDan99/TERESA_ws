@@ -32,50 +32,58 @@ import tf2_geometry_msgs  # noqa: F401
 from teresa_utils.orientation import quat_to_rot, normalize_angle
 
 
-class _PositionKalman:
-    """Constant-position 3D Kalman filter.
+class _QualityMonitor:
+    """Tracks approach point quality relative to a fixed target.
 
-    Tracks approach point position and exposes tr(P_pos) as uncertainty.
-    When measurements arrive regularly, P → small → robot moves fast.
-    When measurements stop (predict-only), P grows → robot slows down.
+    On init: collects N measurements in odom → target = mean → FROZEN.
+    Quality = EMA(|new_measurement - target|), grows linearly when measurements stop.
+    Publish quality (not sigma) — QP controller scales velocity proportionally.
     """
 
-    def __init__(self, process_noise: float = 1e-3, measurement_noise: float = 2.5e-3):
-        self._x = np.zeros(3)
-        self._P = np.eye(3) * 1.0
-        self._Q = np.eye(3) * process_noise
-        self._R = np.eye(3) * measurement_noise
+    def __init__(self, alpha: float = 0.3, growth_rate: float = 0.05,
+                 min_q: float = 0.01, max_q: float = 0.50, buf_size: int = 3):
+        self._target: np.ndarray | None = None
+        self._buf: list = []
+        self._buf_size = buf_size
+        self._quality = 0.0
+        self._alpha = alpha
+        self._growth_rate = growth_rate
+        self._min_q = min_q
+        self._max_q = max_q
+        self._last_time = None
         self._initialized = False
 
-    def predict(self) -> None:
+    def update(self, z: np.ndarray, now: rclpy.time.Time) -> None:
         if not self._initialized:
+            self._buf.append(z)
+            if len(self._buf) >= self._buf_size:
+                self._target = np.mean(self._buf, axis=0)
+                self._initialized = True
+            self._last_time = now
             return
-        self._P = self._P + self._Q
+        dev = float(np.linalg.norm(z - self._target))
+        self._quality = self._alpha * dev + (1.0 - self._alpha) * self._quality
+        self._quality = max(self._min_q, min(self._max_q, self._quality))
+        self._last_time = now
 
-    def update(self, z: np.ndarray) -> None:
-        if not self._initialized:
-            self._x = z.copy()
-            self._P = np.eye(3) * 0.1
-            self._initialized = True
+    def predict(self, now: rclpy.time.Time) -> None:
+        if not self._initialized or self._last_time is None:
             return
-        S = self._P + self._R
-        K = self._P @ np.linalg.inv(S)
-        self._x = self._x + K @ (z - self._x)
-        self._P = (np.eye(3) - K) @ self._P
+        dt = (now - self._last_time).nanoseconds * 1e-9
+        dt = max(dt, 0.0)
+        self._quality = min(self._max_q, self._quality + self._growth_rate * dt)
 
-    def get_position(self) -> np.ndarray:
-        return self._x.copy()
+    def get_position(self) -> np.ndarray | None:
+        return self._target.copy() if self._initialized else None
 
-    def get_trace_cov(self) -> float:
-        return float(np.trace(self._P))
-
-    def get_sigma_max(self) -> float:
-        """Max std dev: sqrt of largest eigenvalue of P_pos."""
-        return float(np.sqrt(max(float(np.max(np.linalg.eigvalsh(self._P))), 0.0)))
+    def get_quality(self) -> float:
+        return self._quality
 
     def reset(self) -> None:
-        self._x = np.zeros(3)
-        self._P = np.eye(3) * 1.0
+        self._target = None
+        self._buf = []
+        self._quality = 0.0
+        self._last_time = None
         self._initialized = False
 
     @property
@@ -107,8 +115,11 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('wbc_goal_topic',               '/wbc/ee_goal')
         self.declare_parameter('wbc_enable_topic',             '/wbc/enable')
         self.declare_parameter('lying_timeout',                3.0)
-        self.declare_parameter('approach_kf_process_noise',    1e-3)
-        self.declare_parameter('approach_kf_meas_noise',       2.5e-3)
+        self.declare_parameter('quality_alpha',               0.3)
+        self.declare_parameter('quality_growth',              0.05)
+        self.declare_parameter('quality_min',                 0.01)
+        self.declare_parameter('quality_max',                 0.50)
+        self.declare_parameter('quality_buf_size',            3)
         self.declare_parameter('ws_ext_fwd_limit',             0.20)
         self.declare_parameter('ws_ext_lat_limit',             0.20)
         self.declare_parameter('ws_ext_bwd_limit',             0.50)
@@ -139,10 +150,13 @@ class WBCCoordinatorNode(Node):
             self._SetStandHeight = None
             self.get_logger().warn('spot_msgs not found — body height control disabled')
 
-        # ── Approach point Kalman filter ───────────────────────────────
-        self._kf_approach = _PositionKalman(
-            process_noise=float(p('approach_kf_process_noise')),
-            measurement_noise=float(p('approach_kf_meas_noise')),
+        # ── Approach point quality monitor ────────────────────────────
+        self._quality = _QualityMonitor(
+            alpha=float(p('quality_alpha')),
+            growth_rate=float(p('quality_growth')),
+            min_q=float(p('quality_min')),
+            max_q=float(p('quality_max')),
+            buf_size=int(p('quality_buf_size')),
         )
 
         # ── TF ────────────────────────────────────────────────────────
@@ -240,7 +254,7 @@ class WBCCoordinatorNode(Node):
             goal_odom.pose.position.y,
             goal_odom.pose.position.z,
         ])
-        self._kf_approach.update(z)
+        self._quality.update(z, self.get_clock().now())
 
     def _cb_z1_state(self, msg: String) -> None:
         pass
@@ -260,10 +274,9 @@ class WBCCoordinatorNode(Node):
     def _tick(self) -> None:
         self._check_lying_timeout()
 
-        # Propagate approach point uncertainty at FSM rate (5 Hz)
-        self._kf_approach.predict()
+        self._quality.predict(self.get_clock().now())
         u = Float32()
-        u.data = self._kf_approach.get_sigma_max()
+        u.data = self._quality.get_quality()
         self._pub_uncert.publish(u)
 
         if self._state == CoordState.IDLE:
@@ -366,13 +379,13 @@ class WBCCoordinatorNode(Node):
         return math.hypot(dx, dy)
 
     def _filtered_goal(self) -> PoseStamped:
-        """Return approach_point_odom with position replaced by Kalman estimate."""
+        """Return the fixed target position in odom frame."""
         msg = PoseStamped()
         msg.header.frame_id = self._odom_frame
         msg.header.stamp    = rclpy.time.Time().to_msg()
         msg.pose.orientation.w = 1.0  # identity — WBC QP recomputes orientation
-        if self._kf_approach.initialized:
-            p = self._kf_approach.get_position()
+        if self._quality.initialized:
+            p = self._quality.get_position()
             msg.pose.position.x = float(p[0])
             msg.pose.position.y = float(p[1])
             msg.pose.position.z = float(p[2])
@@ -386,7 +399,7 @@ class WBCCoordinatorNode(Node):
         if new_state != self._state:
             self.get_logger().info(f'WBC FSM: {self._state} → {new_state}')
             if new_state == CoordState.IDLE:
-                self._kf_approach.reset()
+                self._quality.reset()
                 self._set_body_height(0.0)   # ripristina altezza nominale
             if new_state == CoordState.SCANNING:
                 self._set_body_height(self._handoff_body_height)
