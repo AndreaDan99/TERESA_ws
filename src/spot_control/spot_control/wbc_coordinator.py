@@ -29,6 +29,8 @@ from std_msgs.msg import Bool, String, Float32
 from tf2_ros import Buffer, TransformListener, TransformException
 import tf2_geometry_msgs  # noqa: F401
 
+from teresa_utils.orientation import quat_to_rot, normalize_angle
+
 
 class _PositionKalman:
     """Constant-position 3D Kalman filter.
@@ -195,7 +197,7 @@ class WBCCoordinatorNode(Node):
         except TransformException:
             return
 
-        R = _quat_to_rot(tf.transform.rotation)
+        R = quat_to_rot(tf.transform.rotation)
         axis_cam = np.array([msg.vector.x, msg.vector.y, msg.vector.z])
         axis_odom = R.T @ axis_cam   # R is odom→camera, we need camera→odom
         axis_odom[2] = 0.0  # project onto XY plane (Spot is on flat ground)
@@ -206,8 +208,8 @@ class WBCCoordinatorNode(Node):
         # body_axis points head → feet in odom XY.
         # Spot X must be ⊥ to body_axis → two candidates: ±90°
         θ_body = math.atan2(float(axis_odom[1]), float(axis_odom[0]))
-        opt1 = _normalize_angle(θ_body + math.pi / 2)
-        opt2 = _normalize_angle(θ_body - math.pi / 2)
+        opt1 = normalize_angle(θ_body + math.pi / 2)
+        opt2 = normalize_angle(θ_body - math.pi / 2)
 
         # Pick the option closest to current Spot yaw (minimum rotation).
         try:
@@ -218,8 +220,8 @@ class WBCCoordinatorNode(Node):
             return
 
         θ_current = _yaw_from_quat(body_in_odom.transform.rotation)
-        err1 = abs(_normalize_angle(opt1 - θ_current))
-        err2 = abs(_normalize_angle(opt2 - θ_current))
+        err1 = abs(normalize_angle(opt1 - θ_current))
+        err2 = abs(normalize_angle(opt2 - θ_current))
         self._desired_yaw = opt1 if err1 <= err2 else opt2
 
         msg_out = Float32()
@@ -424,20 +426,10 @@ class WBCCoordinatorNode(Node):
         self._pub_enable.publish(msg)
 
 
-def _quat_to_rot(q) -> np.ndarray:
-    from tf_transformations import quaternion_matrix
-    return quaternion_matrix([q.x, q.y, q.z, q.w])[:3, :3]
-
-
 def _yaw_from_quat(q) -> float:
     from tf_transformations import euler_from_quaternion
     _, _, yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
     return float(yaw)
-
-
-def _normalize_angle(a: float) -> float:
-    """Wrap angle to (-π, π]."""
-    return float((a + math.pi) % (2 * math.pi) - math.pi)
 
 
 def main(args=None):

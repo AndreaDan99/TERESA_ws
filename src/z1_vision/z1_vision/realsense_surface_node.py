@@ -11,7 +11,8 @@ from cv_bridge import CvBridge
 
 from tf2_ros import Buffer, TransformListener
 from tf_transformations import quaternion_from_matrix
-import tf_transformations as tf
+
+from teresa_utils.orientation import quat_to_rot
 
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
@@ -143,9 +144,6 @@ class RealSenseSurfaceNode(Node):
         n = Vt[-1, :] / np.linalg.norm(Vt[-1, :])
         return p0, n
 
-    def quat_to_rot(self, q):
-        return tf.quaternion_matrix([q.x, q.y, q.z, q.w])[:3, :3]
-
     def _base_point_to_camera(self, p_base, stamp_msg):
         """Trasforma un punto (base/world) in camera frame usando TF."""
         try:
@@ -162,7 +160,7 @@ class RealSenseSurfaceNode(Node):
             )
             return None
 
-        R_cb = self.quat_to_rot(tf_cam_base.transform.rotation)
+        R_cb = quat_to_rot(tf_cam_base.transform.rotation)
         t_cb = np.array([
             tf_cam_base.transform.translation.x,
             tf_cam_base.transform.translation.y,
@@ -244,7 +242,7 @@ class RealSenseSurfaceNode(Node):
             self.get_logger().warn(f"⚠️ TF {self.base_frame}<-{self.camera_frame} non disponibile: {e}", throttle_duration_sec=2.0)
             return
 
-        R_bc = self.quat_to_rot(tf_base_cam.transform.rotation)
+        R_bc = quat_to_rot(tf_base_cam.transform.rotation)
         t_bc = np.array([tf_base_cam.transform.translation.x,
                          tf_base_cam.transform.translation.y,
                          tf_base_cam.transform.translation.z])

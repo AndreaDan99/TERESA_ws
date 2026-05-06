@@ -26,6 +26,10 @@ z1_FSM:
     # Keep in sync with wbc_params.yaml — both use the same WorkspaceChecker class.
     workspace_safety_margin: 0.05  # [m] — margine dal limite massimo (~0.05m → workspace effettivo ~0.60m)
 
+    # Timeout avvio WBC [s] — se nessun messaggio su /wbc/state entro questo tempo,
+    # la FSM assume modalità standalone e inizia la body scan senza Spot.
+    wbc_startup_timeout: 30.0
+
     # Posizione della base del braccio in world frame.
     # [0,0,0] se world == base frame (configurazione standard Z1 su TERESA)
     arm_base_pos: [0.0, 0.0, 0.0]  # [m]

@@ -25,7 +25,7 @@ class WorkspaceChecker:
         self,
         urdf_path: str,
         ee_frame: str = "link06",
-        safety_margin: float = 0.30,
+        safety_margin: float = 0.05,
         n_restarts: int = 10,
     ):
         """
@@ -33,7 +33,7 @@ class WorkspaceChecker:
         ----------
         urdf_path      : path assoluto al file URDF del robot
         ee_frame       : nome del frame end-effector nel modello Pinocchio
-        safety_margin  : margine di sicurezza [m] dal limite massimo (default 0.30 m)
+        safety_margin  : margine di sicurezza [m] dal limite massimo (default 0.05 m)
         n_restarts     : numero di restart per l'ottimizzazione.
                          Più alto = più accurato ma più lento.
                          10 restart → ~100-300 ms su CPU moderna.

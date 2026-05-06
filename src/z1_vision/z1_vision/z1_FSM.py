@@ -12,6 +12,8 @@ from visualization_msgs.msg import Marker
 
 from tf_transformations import quaternion_matrix, quaternion_from_matrix
 
+from teresa_utils.orientation import compute_ee_orientation
+
 from z1_vision.workspace_checker   import WorkspaceChecker
 from z1_vision.z1_scan_manager     import ScanManager
 from z1_vision.body_search_scanner import BodySearchScanner, ScanAction
@@ -84,8 +86,13 @@ class Z1FSM(Node):
 
         # ── Modalità scansione (delegata a ScanManager) ─────────────────
         # Tutti i parametri scan vengono dichiarati e letti internamente
-        # da ScanManager.from_params(): scan_mode, scan_clearance_x,
-        # wait_ik_timeout_s, scan_pause_s, fast_*_ratio.
+        # da ScanManager.from_params(): scan_mode, scan_clearance_x, fast_*_ratio.
+
+        # Pre-dichiarati qui per robustezza: se from_params() fallisse,
+        # la FSM non crasha al get_parameter() successivo.
+        self.declare_parameter("wait_ik_timeout_s", 15.0)
+        self.declare_parameter("scan_pause_s",      1.0)
+
         self._scan_mgr = ScanManager.from_params(self)
 
         # ── Debug: skip impedance per verificare solo allineamento JTC ──
@@ -95,7 +102,7 @@ class Z1FSM(Node):
         self.declare_parameter("skip_impedance", False)
         self._skip_impedance = bool(self.get_parameter("skip_impedance").value)
 
-        # ── Timeout e pausa scan (dichiarati da ScanManager.from_params) ──
+        # ── Timeout e pausa scan ───────────────────────────────────────
         self._wait_ik_timeout = float(self.get_parameter("wait_ik_timeout_s").value)
         self._scan_pause_s = float(self.get_parameter("scan_pause_s").value)
         self._wait_ik_start: float | None = None
@@ -116,8 +123,9 @@ class Z1FSM(Node):
         # ── Workspace checker params ────────────────────────────────────
         self.declare_parameter("urdf_path",               "")
         self.declare_parameter("ee_frame",                "link06")
-        self.declare_parameter("workspace_safety_margin", 0.30)
+        self.declare_parameter("workspace_safety_margin", 0.05)
         self.declare_parameter("arm_base_pos",            [0.0, 0.0, 0.0])
+        self.declare_parameter("wbc_startup_timeout",      30.0)
 
         urdf_path = self.get_parameter("urdf_path").value
         if not urdf_path:
@@ -588,40 +596,7 @@ class Z1FSM(Node):
         return goal
 
     def _orientation_for_xee(self, x_ee: np.ndarray) -> np.ndarray:
-        """
-        Calcola l'orientamento EE con X_ee = x_ee (Gram-Schmidt, riferimento home).
-
-        Metodo:
-          1. X_ee = x_ee normalizzato
-          2. Y_ee = Y_home proiettato ⊥ a X_ee, normalizzato
-             (fallback: Z_home se Y_home è quasi parallelo a X_ee)
-          3. Z_ee = X_ee × Y_ee
-
-        Usare Y_home come riferimento mantiene il polso vicino alla
-        configurazione home, evitando flip d'asse e rotazioni inaspettate.
-        Ritorna quaternione [x, y, z, w].
-        """
-        x_ee   = x_ee / np.linalg.norm(x_ee)
-        R_home = quaternion_matrix(self._home_orientation)[:3, :3]
-
-        # Y_ee: Y_home proiettato ⊥ a X_ee
-        y_ref  = R_home[:, 1]
-        y_ee   = y_ref - np.dot(y_ref, x_ee) * x_ee
-        y_norm = np.linalg.norm(y_ee)
-        if y_norm < 1e-3:
-            # Y_home quasi parallelo a X_ee → usa Z_home come riferimento
-            y_ref  = R_home[:, 2]
-            y_ee   = y_ref - np.dot(y_ref, x_ee) * x_ee
-            y_norm = np.linalg.norm(y_ee)
-        y_ee /= y_norm
-
-        z_ee = np.cross(x_ee, y_ee)
-
-        T = np.eye(4)
-        T[:3, 0] = x_ee
-        T[:3, 1] = y_ee
-        T[:3, 2] = z_ee
-        return quaternion_from_matrix(T)
+        return compute_ee_orientation(x_ee, self._home_orientation.tolist())
 
     def _make_wrist_align_pose(self) -> PoseStamped | None:
         """
@@ -1152,10 +1127,11 @@ class Z1FSM(Node):
                         )
                         return
                     elapsed = self.get_clock().now().nanoseconds * 1e-9 - self._wbc_wait_start
-                    if elapsed < 10.0:
+                    wbc_timeout = float(self.get_parameter("wbc_startup_timeout").value)
+                    if elapsed < wbc_timeout:
                         return
                     self.get_logger().warn(
-                        '⏰ Nessun WBC rilevato dopo 10s → modalità standalone'
+                        f'⏰ Nessun WBC rilevato dopo {wbc_timeout:.0f}s → modalità standalone'
                     )
                     self._wbc_state_str = ''
                     self._wbc_wait_start = None
@@ -1644,11 +1620,13 @@ class Z1FSM(Node):
 
         # ── REQUESTING_WS_EXT ────────────────────────────────────────────
         elif self.state == self.REQUESTING_WS_EXT:
-            # Wait for WBC coordinator to acknowledge (→ WS_EXTENSION) then complete (→ SCANNING).
-            # _ws_ext_confirmed prevents false trigger from stale SCANNING messages.
-            if not self._ws_ext_confirmed and self._wbc_state_str == 'WS_EXTENSION':
+            # On entry: _wbc_state_str reset to '' (line 463), so any SCANNING
+            # is fresh — no stale-guard needed.
+            # The WBC may transition WS_EXTENSION→SCANNING between two FSM ticks;
+            # use elif so SCANNING always triggers progression.
+            if self._wbc_state_str == 'WS_EXTENSION':
                 self._ws_ext_confirmed = True
-            if self._ws_ext_confirmed and self._wbc_state_str == 'SCANNING':
+            elif self._wbc_state_str == 'SCANNING':
                 self._ws_ext_retries += 1
                 self.get_logger().info(
                     f'✅ Spot riposizionato (WS_EXT retry {self._ws_ext_retries}) '

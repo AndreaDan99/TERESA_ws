@@ -14,11 +14,14 @@ git status --short
 
 ---
 
-## Recent Changes (5 May 2026)
+## Recent Changes (6 May 2026)
 
-- **WBC pitch exploration**: `J_base` is 6×2 (only `vx` + `wz`). No body pitch control mechanism exists in `spot_msgs` or this workspace — `cmd_vel.angular.y` is likely not processed by the standard `spot_driver`. Spot API for pitch still to be verified via `ros2 service list | grep my_spot` on SpotCore.
-- **Pitch strategy**: first test WBC without pitch. If arm reach is insufficient, integrate pitch as a discrete compensation (service call, like `SetStandHeight`) during WS_EXTENSION, NOT as part of the continuous WBC 6×4 Jacobian.
-- `skip_impedance: true` for WBC testing (impedance disabled).
+- **Arm twist fix (WBC)**: EE orientation now computed geometrically (X_ee toward target, Y_ee from home via Gram-Schmidt) instead of using the approach_point yaw orientation that caused a roll twist around the X axis. Same algorithm as `z1_FSM._orientation_for_xee()`.
+- **Shared utilities**: new `teresa_utils` package with `orientation.py` — `compute_ee_orientation`, `quat_to_rot`, `rot_to_quat`, `normalize_angle`. Eliminates duplicate code across 4 files.
+- **`workspace_safety_margin` unified**: all defaults aligned to 0.05 m (were 0.05 in YAML but 0.30 in code).
+- **`REQUESTING_WS_EXT` race fixed**: FSM now proceeds to CHECKING_WORKSPACE on SCANNING even if WS_EXTENSION was missed between ticks.
+- **`wbc_startup_timeout` configurable**: 30s default (was hardcoded 10s). Parameter in `z1_fsm_params.yaml`.
+- **`wait_ik_timeout_s` robustness**: declared in FSM (not only via ScanManager) — no crash if `from_params()` fails.
 
 ---
 
@@ -183,6 +186,7 @@ When `dry_run:=true` on WBC launch, all outputs go to debug topics:
 
 | Package | Role |
 |---------|------|
+| `src/teresa_utils/` | Shared orientation & transform utilities (no ROS node) |
 | `src/z1_vision/` | Z1 arm: FSM, IK, impedance, YOLO tracking, workspace checker |
 | `src/spot_control/` | Spot navigation, WBC coordinator, WBC QP controller, ik_goal_mux |
 | `src/spot_perception/` | Orbbec perception: YOLO skeleton, posture classifier, laying detector |
@@ -257,14 +261,14 @@ Z → right to left
 
 | File | Package | Governs |
 |------|---------|---------|
-| `z1_fsm_params.yaml` | z1_vision | FSM topics, home pose, approach offset, FAST point ratios, workspace safety margin |
+| `z1_fsm_params.yaml` | z1_vision | FSM topics, home pose, approach offset, FAST point ratios, workspace safety margin, WBC startup timeout |
 | `z1_yolo_torso_params.yaml` | z1_vision | YOLO model path, confidence, Kalman gains, lock threshold |
 | `z1_ik_jtc_params.yaml` | z1_vision | URDF path, IK tol/damping, max_joint_vel (0.2 rad/s), trajectory timing (max 15s) |
 | `impedance_control_params.yaml` | z1_vision | K_p [150,150,300], K_d, K_i, approach speed, contact threshold |
 | `surface_params.yaml` | z1_vision | Depth ROI size, PCA config, frame names |
 | `body_search_params.yaml` | z1_vision | Scan extents, wrist angles, early-stop threshold |
 | `camera_params.yaml` | z1_vision | Camera TF offset relative to EE (link06 → camera_link) |
-| `wbc_params.yaml` | spot_control | WBC QP weights, handoff distance, confidence threshold (0.5), workspace safety margin (0.30) |
+| `wbc_params.yaml` | spot_control | WBC QP weights, handoff distance, confidence threshold (0.5), workspace safety margin (0.05) |
 
 ### Key shared parameters (keep in sync)
 

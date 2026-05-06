@@ -26,7 +26,10 @@ from std_msgs.msg import Bool, Float32
 from tf2_ros import Buffer, TransformListener, TransformBroadcaster, TransformException
 from geometry_msgs.msg import TransformStamped
 import tf2_geometry_msgs  # noqa: F401
-from tf_transformations import quaternion_matrix
+
+from teresa_utils.orientation import (
+    compute_ee_orientation, quat_to_rot, rot_to_quat, normalize_angle,
+)
 
 from spot_control.wbc_math import (
     compute_j_base,
@@ -64,7 +67,7 @@ class WBCQPControllerNode(Node):
         self.declare_parameter('wz_max',        0.5)
         self.declare_parameter('q_dot_max',     0.6)
         self.declare_parameter('update_period', 1.5)
-        self.declare_parameter('workspace_safety_margin', 0.30)
+        self.declare_parameter('workspace_safety_margin', 0.05)
         self.declare_parameter('z1_mount_x',      0.20)
         self.declare_parameter('z1_mount_y',      0.0)
         self.declare_parameter('z1_mount_z',      0.20)
@@ -278,7 +281,7 @@ class WBCQPControllerNode(Node):
             ee_in_body.transform.translation.z,
         ])
         J_base_body = compute_j_base(p_ee_body)
-        R_body_to_odom = _quat_to_rot(body_in_odom.transform.rotation)
+        R_body_to_odom = quat_to_rot(body_in_odom.transform.rotation)
         J_base_odom = np.zeros((6, 2))
         J_base_odom[:3, :] = R_body_to_odom @ J_base_body[:3, :]
         J_base_odom[3:, :] = R_body_to_odom @ J_base_body[3:, :]
@@ -295,7 +298,7 @@ class WBCQPControllerNode(Node):
                 body_in_odom.transform.rotation.z,
                 body_in_odom.transform.rotation.w,
             ])
-            yaw_error = _normalize_angle(self._desired_yaw - θ_cur)
+            yaw_error = normalize_angle(self._desired_yaw - θ_cur)
             q_dot, vx, wz = wbc_split_with_yaw(
                 J_hol, v_des, m,
                 yaw_error=yaw_error,
@@ -358,18 +361,7 @@ class WBCQPControllerNode(Node):
         else:
             x_ee = x_ee / x_norm
 
-        R_home = quaternion_matrix(self._home_orientation.tolist())[:3, :3]
-        y_ref = R_home[:, 1]
-        y_ee = y_ref - np.dot(y_ref, x_ee) * x_ee
-        y_norm = float(np.linalg.norm(y_ee))
-        if y_norm < 1e-3:
-            y_ref = R_home[:, 2]
-            y_ee = y_ref - np.dot(y_ref, x_ee) * x_ee
-            y_norm = float(np.linalg.norm(y_ee))
-        y_ee /= y_norm
-        z_ee = np.cross(x_ee, y_ee)
-
-        quat = _rot_to_quat(np.column_stack([x_ee, y_ee, z_ee]))
+        quat = compute_ee_orientation(x_ee, self._home_orientation.tolist())
         goal_msg.pose.orientation.x = float(quat[0])
         goal_msg.pose.orientation.y = float(quat[1])
         goal_msg.pose.orientation.z = float(quat[2])
@@ -391,27 +383,6 @@ class WBCQPControllerNode(Node):
             f'|dp|={dp_norm:.3f} r_ball={r_ball:.3f} eff={effective:.3f} '
             f'yaw_err={math.degrees(yaw_error):.1f}°',
             throttle_duration_sec=2.0)
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _normalize_angle(a: float) -> float:
-    return float((a + math.pi) % (2 * math.pi) - math.pi)
-
-
-def _quat_to_rot(q) -> np.ndarray:
-    """geometry_msgs Quaternion → 3x3 rotation matrix."""
-    from tf_transformations import quaternion_matrix
-    R = quaternion_matrix([q.x, q.y, q.z, q.w])
-    return R[:3, :3]
-
-
-def _rot_to_quat(R: np.ndarray) -> np.ndarray:
-    """3x3 rotation matrix → [x, y, z, w] quaternion."""
-    from tf_transformations import quaternion_from_matrix
-    M = np.eye(4)
-    M[:3, :3] = R
-    return quaternion_from_matrix(M)
 
 
 def main(args=None):

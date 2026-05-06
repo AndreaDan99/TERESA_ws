@@ -66,6 +66,25 @@ colcon test-result --verbose
 
 ---
 
+## Recent Changes (6 May 2026)
+
+### Arm twist fix — geometric EE orientation
+**Before:** WBC used `approach_point.pose.orientation` (yaw around optical Z, designed for Spot base heading) as the Z1 arm EE goal orientation. After TF transformation this became a roll around X — the arm twisted.
+**After:** `compute_ee_orientation()` computes X_ee toward target, Y_ee from home via Gram-Schmidt. Same algorithm shared with `z1_FSM._orientation_for_xee()`.
+
+### Shared utilities: `teresa_utils.orientation`
+- `compute_ee_orientation(x_ee, home_quat)` — Gram-Schmidt EE orientation
+- `quat_to_rot(q)`, `rot_to_quat(R)`, `normalize_angle(a)` — general-purpose math
+- Removed duplicate code from `z1_FSM.py`, `wbc_qp_controller.py`, `wbc_coordinator.py`, `realsense_surface_node.py`
+
+### Parameter & robustness fixes
+- `workspace_safety_margin` unified to 0.05 everywhere (code had 0.30)
+- `REQUESTING_WS_EXT` race fixed: SCANNING always triggers progression (was stuck if WS_EXTENSION missed between ticks)
+- `wbc_startup_timeout: 30.0` in `z1_fsm_params.yaml` (was hardcoded 10s)
+- `wait_ik_timeout_s` pre-declared in FSM (was only in ScanManager)
+
+---
+
 ## Recent Changes (30 Apr 2026)
 
 ### WBC-as-Master handoff (simplified FSM)
