@@ -28,7 +28,8 @@ from geometry_msgs.msg import TransformStamped
 import tf2_geometry_msgs  # noqa: F401
 
 from teresa_utils.orientation import (
-    compute_ee_orientation, quat_to_rot, rot_to_quat, normalize_angle,
+    compute_ee_orientation, compute_ee_orientation_minrot,
+    quat_to_rot, rot_to_quat, normalize_angle,
 )
 
 from spot_control.wbc_math import (
@@ -76,6 +77,7 @@ class WBCQPControllerNode(Node):
         self.declare_parameter('cmd_vel_topic',      '/my_spot/cmd_vel')
         self.declare_parameter('joint_states_topic', '/joint_states')
         self.declare_parameter('home_orientation', [-0.0062, 0.4107, 0.0021, 0.9118])
+        self.declare_parameter('orientation_mode', 'minrot')  # 'minrot' | 'gram_schmidt'
 
         p = lambda n: self.get_parameter(n).value
         self._dry_run       = bool(p('dry_run'))
@@ -94,6 +96,7 @@ class WBCQPControllerNode(Node):
         self._q_dot_max     = float(p('q_dot_max'))
         self._update_period = float(p('update_period'))
         self._home_orientation = np.array([float(x) for x in p('home_orientation')])
+        self._orientation_mode = p('orientation_mode')
 
         # ── Pinocchio ─────────────────────────────────────────────────
         urdf = p('urdf_path')
@@ -361,7 +364,9 @@ class WBCQPControllerNode(Node):
         else:
             x_ee = x_ee / x_norm
 
-        quat = compute_ee_orientation(x_ee, self._home_orientation.tolist())
+        quat = (compute_ee_orientation_minrot(x_ee, self._home_orientation.tolist())
+                if self._orientation_mode == 'minrot'
+                else compute_ee_orientation(x_ee, self._home_orientation.tolist()))
         goal_msg.pose.orientation.x = float(quat[0])
         goal_msg.pose.orientation.y = float(quat[1])
         goal_msg.pose.orientation.z = float(quat[2])

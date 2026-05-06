@@ -45,6 +45,11 @@ wbc_qp_controller:
     # Must match home_orientation in z1_fsm_params.yaml.
     home_orientation: [-0.0062, 0.4107, 0.0021, 0.9118]  # [qx, qy, qz, qw]
 
+    # EE orientation computation mode:
+    #   "minrot"       → minimum rotation from home X to x_ee (preserves wrist config)
+    #   "gram_schmidt" → Gram-Schmidt Y_ee ∥ home Y (prevents twist, may force wrist rotation)
+    orientation_mode: "minrot"
+
     # Workspace safety margin [m] — keep in sync with z1_fsm_params.yaml
     # Uses the same WorkspaceChecker class (z1_vision.workspace_checker).
     # EE goals are clipped to max_reach - safety_margin.
