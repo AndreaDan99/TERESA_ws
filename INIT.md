@@ -23,6 +23,52 @@ git status --short
 - **`wbc_startup_timeout` configurable**: 30s default (was hardcoded 10s). Parameter in `z1_fsm_params.yaml`.
 - **`wait_ik_timeout_s` robustness**: declared in FSM (not only via ScanManager) — no crash if `from_params()` fails.
 
+## Recent Changes (7 May 2026)
+
+### WBC refactoring — goal in odom, 10 Hz, stable look-at
+
+**Before:** WBC approach broken:
+- Goal in camera frame → target "scappa" con Spot, errore non cala mai
+- `update_period` 1.5s → `cmd_vel` troppo rado, Spot non reagisce fluidamente
+- look-at: `x_ee = clipped_pos - ee_cur` → instabile, polso oscilla a ogni ciclo
+- Kalman dead zone → `sigma_max` collassa subito (2mm), inutile
+- Handoff puramente a 5cm, nessun controllo qualità
+
+**After:**
+- Goal **fissato in odom** (media prime 3 misure, `_QualityMonitor`) → target fermo nel mondo
+- **10 Hz** (`update_period: 0.1`) → Spot fluido come `spot_goal_navigator`
+- look-at: `x_ee = target_link00 - clipped_pos` → coerente con posizione IK (stesso orizzonte temporale `q_new`)
+- `compute_ee_orientation_minrot()` — rotazione minima da home X a x_ee, polso rilassato
+- `ik_rot_weight: 0.7` (era 0.3) — IK rispetta l'orientazione
+- `orientation_mode: "minrot"` default in `wbc_params.yaml` (fallback: `"gram_schmidt"`)
+
+### QualityMonitor (sostituisce `_PositionKalman`)
+- `target` = media prime `quality_buf_size=3` misure in odom → **congelato** (paziente fermo)
+- `quality` = `EMA(|nuova_misura - target|, α=0.3)` + crescita lineare (`0.05 m/s`) senza misure
+- Pubblicato su `/wbc/target_uncertainty` in **metri** (non più sigma)
+- `v_scale = v_min + (1 - v_min) / (1 + quality / quality_ref)` → **mai zero**
+- Spot si ferma **solo** a 5cm (handoff), quality riduce velocità ma non blocca
+
+### Nuovi parametri WBC
+| Parametro | Valore | Significato |
+|-----------|--------|-------------|
+| `update_period` | 0.1s | WBC a 10 Hz |
+| `quality_ref` | 0.05m | Soglia qualità per `v_scale = (1+v_min)/2` |
+| `v_min` | 0.15 | Velocità minima mai zero |
+| `quality_alpha` | 0.3 | EMA smoothing |
+| `quality_growth` | 0.05 m/s | Crescita qualità senza misure Orbbec |
+| `quality_min/max` | 0.01/0.50 | Floor/ceiling qualità [m] |
+| `quality_buf_size` | 3 | Misure per inizializzare target fisso |
+| `orientation_mode` | "minrot" | Min-rotation quaternion (vs gram_schmidt) |
+
+### Parametri rimossi
+- `z_delta` (chance-constraint dead zone) — sostituito da velocity scaling
+- `approach_kf_process_noise`, `approach_kf_meas_noise` — Kalman rimosso
+
+### Files modificati
+`wbc_coordinator.py`, `wbc_qp_controller.py`, `wbc_params.yaml`,
+`teresa_utils/orientation.py`, `z1_ik_jtc_params.yaml`
+
 ---
 
 ## System overview
@@ -135,39 +181,56 @@ Orbbec Femto Bolt (Jetson → PC)
   └─► yolo_skeleton_spot (YOLO11 pose)
         └─► posture_classifier (posture + confidence)
               └─► laying_human_detector
-                    ├─► /laying_human/approach_point  (PoseStamped)
+                    ├─► /laying_human/approach_point   (PoseStamped, camera frame)
+                    ├─► /laying_human/body_axis         (asse testa-piedi)
                     └─► /human_pose/posture, /human_pose/posture_confidence
 
 /laying_human/approach_point
   └─► wbc_coordinator  (FSM: IDLE → APPROACHING → SCANNING → WS_EXTENSION)
-        ├─► /wbc/ee_goal  (filtered approach point via Kalman)
-        ├─► /wbc/enable   (True = WBC takes over from Z1 FSM)
-        └─► /wbc/desired_yaw  (Spot ⊥ patient body axis)
+        │  Trasforma approach_point camera → odom via TF
+        │  QualityMonitor: target fisso (media prime 3) + quality = EMA deviazione
+        ├─► /wbc/ee_goal             (target fisso in odom frame)
+        ├─► /wbc/enable              (True = WBC priority su MUX)
+        ├─► /wbc/desired_yaw         (Spot ⊥ body_axis)
+        ├─► /wbc/target_uncertainty  (quality [m], non sigma)
+        └─► /wbc/state               (IDLE/APPROACHING/SCANNING/WS_EXTENSION)
 
-/wbc/ee_goal + /wbc/enable
-  └─► wbc_qp_controller  (holistic WBC: arm q_dot + base vx·wz)
+/wbc/ee_goal (odom) + /wbc/enable + /wbc/desired_yaw + /wbc/target_uncertainty
+  └─► wbc_qp_controller  (10 Hz, holistic WBC: arm q_dot + base vx·wz)
+        │  dp = goal_odom - ee_odom  (errore cala quando Spot avanza)
+        │  WBC split → q_dot, vx, wz
+        │  v_scale = v_min + (1-v_min)/(1 + quality/ref)  → vx,wz ridotti
+        │  x_ee = target_link00 - clipped_pos  → orientazione stabile (minrot)
         ├─► /wbc/ik_goal_pose  → ik_goal_mux → /ik_goal_pose → z1_ik_to_jtc
         ├─► /wbc/ik_enable     → ik_goal_mux → /ik_enable → z1_ik_to_jtc
-        └─► /my_spot/cmd_vel   → Spot base velocity
+        └─► /my_spot/cmd_vel   → Spot base velocity (10 Hz)
 
 ik_goal_mux:
   Z1 FSM ──[/z1/ik_goal_pose]──┐
-                                  ├──► /ik_goal_pose → z1_ik_to_jtc
+                                   ├──► /ik_goal_pose → z1_ik_to_jtc
   WBC QP ──[/wbc/ik_goal_pose]──┘
-            priority controlled by /wbc/enable
+             priority controlled by /wbc/enable
 ```
 
 ### WBC coordinator FSM states
 
 ```
-IDLE ──(posture=LYING & confidence≥0.5)──► APPROACHING
-APPROACHING ──(dist<handoff_distance)──► SCANNING
+IDLE ──(posture=LYING & confidence≥0.5 & target_odom ready)──► APPROACHING
+APPROACHING ──(dist<handoff_distance=5cm)──► SCANNING
 SCANNING ──(/wbc/ws_request)──► WS_EXTENSION
 WS_EXTENSION ──(/ik_done)──► SCANNING
 any ──(posture≠LYING for >lying_timeout)──► IDLE
 ```
 
-**Handoff logic (updated):** WBC is the master. When Spot reaches the approach point, it transitions directly `APPROACHING → SCANNING`, disables WBC control (`/wbc/enable=False`), and signals the Z1 FSM to begin its body scan. The Z1 FSM gate in `WAITING` state waits for `/wbc/state == 'SCANNING'` before starting `BODY_SCANNING` (standalone mode is unchanged: if no WBC is present, body scan starts immediately).
+**APPROACHING details:**
+- Target fissato in odom: media prime 3 misure (QualityMonitor)
+- Quality pubblicata su `/wbc/target_uncertainty` in metri
+- Spot naviga con `v_scale` proporzionale alla quality (mai zero)
+- Braccio look-at: orientazione stabile via min-rotation quaternion
+- Handoff a 5 cm di distanza (non basato su incertezza)
+- Orbbec loss non blocca Spot, solo rallenta via quality crescente
+
+**Handoff logic:** WBC master controller. Spot raggiunge target → `APPROACHING → SCANNING`, disabilita WBC, segnala Z1 FSM via `/wbc/state='SCANNING'`. Z1 FSM in WAITING attende questo segnale prima di BODY_SCANNING. In standalone mode (no WBC), body scan parte immediatamente.
 
 
 ### Dry-run mode
@@ -214,8 +277,8 @@ When `dry_run:=true` on WBC launch, all outputs go to debug topics:
 
 | Module | Role |
 |--------|------|
-| `wbc_coordinator.py` | Phase FSM for Spot+Z1: parses posture, triggers SCANNING handoff |
-| `wbc_qp_controller.py` | Holistic WBC: damped pseudo-inverse split of arm joints + base velocity |
+| `wbc_coordinator.py` | Phase FSM for Spot+Z1: QualityMonitor (target fisso in odom + quality tracking), triggers SCANNING handoff |
+| `wbc_qp_controller.py` | Holistic WBC at 10 Hz: damped pseudo-inverse split of arm joints + base velocity, quality-based v_scale, stable look-at orientation |
 | `wbc_math.py` | Pure math: J_base, J_holistic, manipulability, WBC split, WBC split with yaw |
 | `ik_goal_mux.py` | Priority mux: WBC goals override Z1 FSM goals |
 | `spot_goal_navigator.py` | Spot point-to-point navigation |
@@ -268,13 +331,14 @@ Z → right to left
 | `surface_params.yaml` | z1_vision | Depth ROI size, PCA config, frame names |
 | `body_search_params.yaml` | z1_vision | Scan extents, wrist angles, early-stop threshold |
 | `camera_params.yaml` | z1_vision | Camera TF offset relative to EE (link06 → camera_link) |
-| `wbc_params.yaml` | spot_control | WBC QP weights, handoff distance, confidence threshold (0.5), workspace safety margin (0.05) |
+| `wbc_params.yaml` | spot_control | WBC QP weights, handoff distance (0.05), quality params (ref, alpha, growth, min, max, v_min), orientation_mode, workspace safety margin |
 
 ### Key shared parameters (keep in sync)
 
 - `workspace_safety_margin: 0.05` — in both `z1_fsm_params.yaml` and `wbc_params.yaml`, both use the same `WorkspaceChecker` class
 - `orbbec_confidence_threshold: 0.5` — in `wbc_params.yaml` and `laying_human_detector` (min_detection_confidence). Both must match.
 - `ik_goal_topic` / `ik_enable_topic` — FSM code defaults are `/z1/ik_goal_pose` and `/z1/ik_enable` (go through `ik_goal_mux`). YAML must NOT override these to `/ik_*` directly or the mux will be bypassed.
+- `home_orientation: [-0.0062, 0.4107, 0.0021, 0.9118]` — must be identical in `z1_fsm_params.yaml` and `wbc_params.yaml`
 
 ### YOLO model
 

@@ -66,53 +66,38 @@ colcon test-result --verbose
 
 ---
 
-## Recent Changes (6 May 2026)
+## Planned: Early Body Scan during WBC APPROACHING
 
-### Arm twist fix — geometric EE orientation
-**Before:** WBC used `approach_point.pose.orientation` (yaw around optical Z, designed for Spot base heading) as the Z1 arm EE goal orientation. After TF transformation this became a roll around X — the arm twisted.
-**After:** `compute_ee_orientation()` computes X_ee toward target, Y_ee from home via Gram-Schmidt. Same algorithm shared with `z1_FSM._orientation_for_xee()`.
+### Idea
+Il braccio esegue il body scan **mentre** Spot copre gli ultimi ~65 cm di avvicinamento.
+Quando Spot arriva a 5 cm, il centro torso è già noto → si salta la fase BODY_SCANNING
+dopo l'handoff. Guadagno: 5-10 secondi risparmiati.
 
-### Shared utilities: `teresa_utils.orientation`
-- `compute_ee_orientation(x_ee, home_quat)` — Gram-Schmidt EE orientation
-- `quat_to_rot(q)`, `rot_to_quat(R)`, `normalize_angle(a)` — general-purpose math
-- Removed duplicate code from `z1_FSM.py`, `wbc_qp_controller.py`, `wbc_coordinator.py`, `realsense_surface_node.py`
-
-### Parameter & robustness fixes
-- `workspace_safety_margin` unified to 0.05 everywhere (code had 0.30)
-- `REQUESTING_WS_EXT` race fixed: SCANNING always triggers progression (was stuck if WS_EXTENSION missed between ticks)
-- `wbc_startup_timeout: 30.0` in `z1_fsm_params.yaml` (was hardcoded 10s)
-- `wait_ik_timeout_s` pre-declared in FSM (was only in ScanManager)
-
----
-
-## Recent Changes (30 Apr 2026)
-
-### WBC-as-Master handoff (simplified FSM)
-
-**Before:** Z1 FSM started body scan autonomously; WBC waited in HANDOFF for Z1 to enter APPROACHING. Race condition + deadlock risk.
-
-**After:** WBC is the master controller. When Spot reaches approach point, WBC transitions directly `APPROACHING → SCANNING`, disables WBC control, and signals Z1 FSM to begin body scan.
-
-**Files changed:**
-- `src/z1_vision/z1_vision/z1_FSM.py` — WAITING gate: `_wbc_state_str == 'SCANNING'` before BODY_SCANNING
-- `src/spot_control/spot_control/wbc_coordinator.py` — removed HANDOFF state, direct APPROACHING→SCANNING
-
-**New flow:**
+### Flusso
 ```
-WBC: IDLE → APPROACHING (arm look-at + Spot navigation)
-       → SCANNING  (Spot reached, WBC disables, body height adjusted)
-       → WS_EXTENSION (Z1 can't reach → Spot micro-step)
-       
-Z1:  HOMING → WAITING (gate: wait for WBC=SCANNING or standalone)
-       → BODY_SCANNING → CHECKING_WORKSPACE → APPROACHING → FAST
+t=0:  dist=2m     → WBC APPROACHING, braccio look-at
+t=5s: dist=0.7m   → scan_distance raggiunta!
+                    QP sospende ik_enable → MUX lascia passare FSM
+                    FSM esegue body scan (phase 1→2→3)
+                    Spot continua a ricevere cmd_vel (QP non si ferma)
+t=11s: scan done  → QP riprende ik_enable
+t=13s: dist=5cm   → handoff! FSM va diretto a CHECKING_WORKSPACE
 ```
 
-| State | Before | After |
-|-------|--------|-------|
-| WAITING → BODY_SCAN | Immediately (autonomous) | Gate on WBC=SCANNING (or standalone) |
-| APPROACHING → ??? | → HANDOFF → SCANNING (waited for Z1) | → SCANNING (WBC decides) |
-| HANDOFF | WBC wait state | **Removed** |
-| Z1 FSM ↔ WBC | Independent FSMs | WBC master, Z1 waits for signal |
+### File da toccare
+- `wbc_coordinator.py` — param `scan_distance`, topic `/wbc/publish_arm`
+- `wbc_qp_controller.py` — flag `_publish_arm`, smette di pubblicare ik_enable quando False
+- `z1_FSM.py` — segnale `early_scan` in WAITING, skip body scan dopo handoff
+- `wbc_params.yaml` — `scan_distance: 0.7`
+
+### Sfide
+- Coordinazione FSM↔coordinator: chi segnala inizio/fine scan
+- Fallback se scan fallisce → comportamento attuale (body scan dopo handoff)
+- Timing stretto: body scan ~6-8s, Spot percorre 0.65m a ~0.1 m/s → 6-7s
+- Se Spot arriva a 5cm prima che scan finisca → attendere o forzare handoff?
+
+### Pre-requisito
+Validare prima le modifiche WBC attuali (goal in odom, 10 Hz, look-at stabile, QualityMonitor).
 
 ---
 
@@ -164,4 +149,5 @@ Two strategies:
 
 - WS_EXTENSION bounding box: forward 0.20 m, lateral 0.20 m, backward 0.50 m — anchored at WS_EXTENSION entry
 - `wbc_coordinator.py` has a dormant `_cb_z1_state` subscription (no-op after HANDOFF removal) — kept for future monitoring
-- The `_cb_z1_state` subscription can be removed or repurposed later
+- Target paziente fissato in odom (media prime 3 misure) — mai più ricambiato durante APPROACHING
+- QualityMonitor: qualità = EMA(|nuova_misura - target|) + crescita lineare senza misure
