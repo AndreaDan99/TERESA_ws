@@ -73,13 +73,14 @@ wbc_coordinator:
     # of the patient. Set handoff_distance to a small arrival tolerance (e.g. 0.3m).
     handoff_distance: 0.05
 
-    # Quality monitor: fixed target (mean of first N odom measures) + EMA deviation.
-    # quality = alpha*|meas - target| + (1-alpha)*quality, grows when Orbbec stops.
-    quality_alpha: 0.3      # EMA smoothing (0=no update, 1=instant)
-    quality_growth: 0.05    # [m/s] quality increase when no measurements
-    quality_min: 0.01       # [m] floor
-    quality_max: 0.50       # [m] ceiling
-    quality_buf_size: 3     # number of initial measurements to freeze target
+    # Quality monitor: fixed target (mean of first N odom measures) updated
+    # only when confidence improves by >= margin. Quality from posture_confidence.
+    # quality = max_q * (1 - posture_confidence), grows when confidence stops.
+    confidence_margin: 0.10  # min confidence improvement to update target
+    quality_growth: 0.05     # [m/s] quality increase when no confidence data
+    quality_min: 0.01        # [m] floor
+    quality_max: 0.50        # [m] ceiling
+    quality_buf_size: 3      # number of initial measurements to freeze target
 
     # WS_EXTENSION bounding box (relative to Spot position at WS_EXTENSION entry)
     ws_ext_fwd_limit: 0.20   # [m] max forward displacement

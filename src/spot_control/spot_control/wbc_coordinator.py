@@ -33,45 +33,62 @@ from teresa_utils.orientation import quat_to_rot, normalize_angle
 
 
 class _QualityMonitor:
-    """Tracks approach point quality relative to a fixed target.
+    """Tracks approach point with best-confidence target and quality from posture_confidence.
 
-    On init: collects N measurements in odom → target = mean → FROZEN.
-    Quality = EMA(|new_measurement - target|), grows linearly when measurements stop.
-    Publish quality (not sigma) — QP controller scales velocity proportionally.
+    On init: collects N measurements in odom → target = mean.
+    Target updated only when a measurement has significantly higher confidence.
+    Quality = max_q * (1 - posture_confidence), grows linearly when confidence stops.
+    Publish quality [m] — QP controller scales velocity proportionally.
     """
 
-    def __init__(self, alpha: float = 0.3, growth_rate: float = 0.05,
-                 min_q: float = 0.01, max_q: float = 0.50, buf_size: int = 3):
+    def __init__(self, growth_rate: float = 0.05,
+                 min_q: float = 0.01, max_q: float = 0.50,
+                 buf_size: int = 3, conf_margin: float = 0.10):
         self._target: np.ndarray | None = None
         self._buf: list = []
         self._buf_size = buf_size
         self._quality = 0.0
-        self._alpha = alpha
         self._growth_rate = growth_rate
         self._min_q = min_q
         self._max_q = max_q
-        self._last_time = None
+        self._conf_margin = conf_margin
+        self._best_conf = 0.0
+        self._last_conf_time = None
         self._initialized = False
+        self._latest_meas: np.ndarray | None = None
 
-    def update(self, z: np.ndarray, now: rclpy.time.Time) -> None:
-        if not self._initialized:
-            self._buf.append(z)
-            if len(self._buf) >= self._buf_size:
-                self._target = np.mean(self._buf, axis=0)
-                self._initialized = True
-            self._last_time = now
+    def try_init(self, z: np.ndarray, now: rclpy.time.Time) -> None:
+        if self._initialized:
+            self._latest_meas = z.copy()  # always keep latest for best-update
             return
-        dev = float(np.linalg.norm(z - self._target))
-        self._quality = self._alpha * dev + (1.0 - self._alpha) * self._quality
-        self._quality = max(self._min_q, min(self._max_q, self._quality))
-        self._last_time = now
+        self._buf.append(z)
+        self._latest_meas = z.copy()
+        if len(self._buf) >= self._buf_size:
+            self._target = np.mean(self._buf, axis=0)
+            self._initialized = True
+        self._last_conf_time = now
+
+    def update_quality(self, conf: float, now: rclpy.time.Time) -> None:
+        self._quality = max(self._min_q, min(self._max_q,
+                            self._max_q * (1.0 - conf)))
+        self._last_conf_time = now
+
+    def try_best_update(self, conf: float, now: rclpy.time.Time) -> None:
+        if not self._initialized or self._latest_meas is None:
+            return
+        if conf > self._best_conf + self._conf_margin:
+            self._target = self._latest_meas.copy()
+            self._best_conf = conf
+            self._quality = max(self._min_q,
+                               self._max_q * (1.0 - conf))
 
     def predict(self, now: rclpy.time.Time) -> None:
-        if not self._initialized or self._last_time is None:
+        if not self._initialized or self._last_conf_time is None:
             return
-        dt = (now - self._last_time).nanoseconds * 1e-9
+        dt = (now - self._last_conf_time).nanoseconds * 1e-9
         dt = max(dt, 0.0)
-        self._quality = min(self._max_q, self._quality + self._growth_rate * dt)
+        self._quality = min(self._max_q,
+                           self._quality + self._growth_rate * dt)
 
     def get_position(self) -> np.ndarray | None:
         return self._target.copy() if self._initialized else None
@@ -83,7 +100,9 @@ class _QualityMonitor:
         self._target = None
         self._buf = []
         self._quality = 0.0
-        self._last_time = None
+        self._best_conf = 0.0
+        self._last_conf_time = None
+        self._latest_meas = None
         self._initialized = False
 
     @property
@@ -115,7 +134,7 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('wbc_goal_topic',               '/wbc/ee_goal')
         self.declare_parameter('wbc_enable_topic',             '/wbc/enable')
         self.declare_parameter('lying_timeout',                3.0)
-        self.declare_parameter('quality_alpha',               0.3)
+        self.declare_parameter('confidence_margin',          0.10)
         self.declare_parameter('quality_growth',              0.05)
         self.declare_parameter('quality_min',                 0.01)
         self.declare_parameter('quality_max',                 0.50)
@@ -152,11 +171,11 @@ class WBCCoordinatorNode(Node):
 
         # ── Approach point quality monitor ────────────────────────────
         self._quality = _QualityMonitor(
-            alpha=float(p('quality_alpha')),
             growth_rate=float(p('quality_growth')),
             min_q=float(p('quality_min')),
             max_q=float(p('quality_max')),
             buf_size=int(p('quality_buf_size')),
+            conf_margin=float(p('confidence_margin')),
         )
 
         # ── TF ────────────────────────────────────────────────────────
@@ -200,6 +219,7 @@ class WBCCoordinatorNode(Node):
 
     def _cb_conf(self, msg: Float32) -> None:
         self._confidence = float(msg.data)
+        self._quality.update_quality(self._confidence, self.get_clock().now())
 
     def _cb_body_axis(self, msg: Vector3Stamped) -> None:
         """Compute desired Spot yaw so that X_body ⊥ patient head-feet axis."""
@@ -254,7 +274,7 @@ class WBCCoordinatorNode(Node):
             goal_odom.pose.position.y,
             goal_odom.pose.position.z,
         ])
-        self._quality.update(z, self.get_clock().now())
+        self._quality.try_init(z, self.get_clock().now())
 
     def _cb_z1_state(self, msg: String) -> None:
         pass
@@ -274,6 +294,7 @@ class WBCCoordinatorNode(Node):
     def _tick(self) -> None:
         self._check_lying_timeout()
 
+        self._quality.try_best_update(self._confidence, self.get_clock().now())
         self._quality.predict(self.get_clock().now())
         u = Float32()
         u.data = self._quality.get_quality()
