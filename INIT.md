@@ -43,11 +43,14 @@ git status --short
 - `orientation_mode: "minrot"` default in `wbc_params.yaml` (fallback: `"gram_schmidt"`)
 
 ### QualityMonitor (sostituisce `_PositionKalman`)
-- `target` = media prime `quality_buf_size=3` misure in odom → **congelato** (paziente fermo)
-- `quality` = `EMA(|nuova_misura - target|, α=0.3)` + crescita lineare (`0.05 m/s`) senza misure
+- `target` = media prime `quality_buf_size=3` misure in odom → inizializzato
+- `target` aggiornato solo se `posture_confidence > best_conf + confidence_margin` (0.10)
+- `quality` = `max_q * (1 - posture_confidence)` + crescita lineare senza confidence
+  - conf=0.80 → quality=0.10m, conf=0.60 → quality=0.20m
 - Pubblicato su `/wbc/target_uncertainty` in **metri** (non più sigma)
 - `v_scale = v_min + (1 - v_min) / (1 + quality / quality_ref)` → **mai zero**
 - Spot si ferma **solo** a 5cm (handoff), quality riduce velocità ma non blocca
+- Target converge sempre sulla migliore vista del paziente
 
 ### Nuovi parametri WBC
 | Parametro | Valore | Significato |
@@ -55,10 +58,10 @@ git status --short
 | `update_period` | 0.1s | WBC a 10 Hz |
 | `quality_ref` | 0.05m | Soglia qualità per `v_scale = (1+v_min)/2` |
 | `v_min` | 0.15 | Velocità minima mai zero |
-| `quality_alpha` | 0.3 | EMA smoothing |
-| `quality_growth` | 0.05 m/s | Crescita qualità senza misure Orbbec |
+| `confidence_margin` | 0.10 | Min incremento confidenza per aggiornare target |
+| `quality_growth` | 0.05 m/s | Crescita qualità senza dati posture_confidence |
 | `quality_min/max` | 0.01/0.50 | Floor/ceiling qualità [m] |
-| `quality_buf_size` | 3 | Misure per inizializzare target fisso |
+| `quality_buf_size` | 3 | Misure per inizializzare target |
 | `orientation_mode` | "minrot" | Min-rotation quaternion (vs gram_schmidt) |
 
 ### Parametri rimossi
@@ -188,7 +191,7 @@ Orbbec Femto Bolt (Jetson → PC)
 /laying_human/approach_point
   └─► wbc_coordinator  (FSM: IDLE → APPROACHING → SCANNING → WS_EXTENSION)
         │  Trasforma approach_point camera → odom via TF
-        │  QualityMonitor: target fisso (media prime 3) + quality = EMA deviazione
+        │  QualityMonitor: target best-confidence + quality = max_q*(1-conf)
         ├─► /wbc/ee_goal             (target fisso in odom frame)
         ├─► /wbc/enable              (True = WBC priority su MUX)
         ├─► /wbc/desired_yaw         (Spot ⊥ body_axis)
@@ -223,12 +226,13 @@ any ──(posture≠LYING for >lying_timeout)──► IDLE
 ```
 
 **APPROACHING details:**
-- Target fissato in odom: media prime 3 misure (QualityMonitor)
-- Quality pubblicata su `/wbc/target_uncertainty` in metri
+- Target inizializzato: media prime 3 misure in odom
+- Target aggiornato se posture_confidence migliora ≥ confidence_margin (0.10)
+- Quality = max_q * (1 - posture_confidence) su `/wbc/target_uncertainty`
 - Spot naviga con `v_scale` proporzionale alla quality (mai zero)
 - Braccio look-at: orientazione stabile via min-rotation quaternion
 - Handoff a 5 cm di distanza (non basato su incertezza)
-- Orbbec loss non blocca Spot, solo rallenta via quality crescente
+- Senza dati posture_confidence, quality cresce linearmente → Spot rallenta
 
 **Handoff logic:** WBC master controller. Spot raggiunge target → `APPROACHING → SCANNING`, disabilita WBC, segnala Z1 FSM via `/wbc/state='SCANNING'`. Z1 FSM in WAITING attende questo segnale prima di BODY_SCANNING. In standalone mode (no WBC), body scan parte immediatamente.
 

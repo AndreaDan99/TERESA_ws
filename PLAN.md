@@ -150,4 +150,4 @@ Two strategies:
 - WS_EXTENSION bounding box: forward 0.20 m, lateral 0.20 m, backward 0.50 m — anchored at WS_EXTENSION entry
 - `wbc_coordinator.py` has a dormant `_cb_z1_state` subscription (no-op after HANDOFF removal) — kept for future monitoring
 - Target paziente fissato in odom (media prime 3 misure) — mai più ricambiato durante APPROACHING
-- QualityMonitor: qualità = EMA(|nuova_misura - target|) + crescita lineare senza misure
+- QualityMonitor: qualità = `max_q * (1 - posture_confidence)` + crescita lineare senza misure
