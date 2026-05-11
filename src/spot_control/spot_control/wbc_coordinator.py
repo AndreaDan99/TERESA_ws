@@ -265,7 +265,7 @@ class WBCCoordinatorNode(Node):
     def _cb_approach(self, msg: PoseStamped) -> None:
         try:
             goal_odom = self._tf.transform(msg, self._odom_frame,
-                                           timeout=Duration(seconds=0.1))
+                                           timeout=Duration(seconds=1.0))
         except TransformException:
             return
         self._approach_point_odom = goal_odom
