@@ -211,11 +211,14 @@ class WBCQPControllerNode(Node):
         if not self._enabled or self._goal is None or self._q_meas is None:
             return
 
+        # Common lookup time — request at "now", tf2 will wait for data
+        lookup_time = self.get_clock().now()
+
         # 1. EE pose in odom (for error computation)
         try:
             ee_in_odom = self._tf.lookup_transform(
                 self._odom_frame, self._ee_frame,
-                rclpy.time.Time(), timeout=Duration(seconds=0.1))
+                lookup_time, timeout=Duration(seconds=1.0))
         except TransformException as e:
             self.get_logger().warn(f'TF ee→odom: {e}', throttle_duration_sec=2.0)
             return
@@ -224,7 +227,7 @@ class WBCQPControllerNode(Node):
         try:
             ee_in_body = self._tf.lookup_transform(
                 self._body_frame, self._ee_frame,
-                rclpy.time.Time(), timeout=Duration(seconds=0.1))
+                lookup_time, timeout=Duration(seconds=1.0))
         except TransformException as e:
             self.get_logger().warn(f'TF ee→body: {e}', throttle_duration_sec=2.0)
             return
@@ -233,7 +236,7 @@ class WBCQPControllerNode(Node):
         try:
             body_in_odom = self._tf.lookup_transform(
                 self._odom_frame, self._body_frame,
-                rclpy.time.Time(), timeout=Duration(seconds=0.1))
+                lookup_time, timeout=Duration(seconds=1.0))
         except TransformException as e:
             self.get_logger().warn(f'TF body→odom: {e}', throttle_duration_sec=2.0)
             return
@@ -246,10 +249,10 @@ class WBCQPControllerNode(Node):
         try:
             goal_stamped = PoseStamped()
             goal_stamped.header.frame_id = self._odom_frame
-            goal_stamped.header.stamp    = rclpy.time.Time().to_msg()
+            goal_stamped.header.stamp    = lookup_time.to_msg()
             goal_stamped.pose            = goal_odom.pose
             goal_link00 = self._tf.transform(goal_stamped, self._z1_base_frame,
-                                             timeout=Duration(seconds=0.1))
+                                             timeout=Duration(seconds=1.0))
         except TransformException as e:
             self.get_logger().warn(f'TF goal→{self._z1_base_frame}: {e}',
                                    throttle_duration_sec=2.0)
