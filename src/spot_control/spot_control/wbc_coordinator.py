@@ -227,7 +227,7 @@ class WBCCoordinatorNode(Node):
         try:
             tf = self._tf.lookup_transform(
                 self._odom_frame, msg.header.frame_id,
-                rclpy.time.Time(), timeout=Duration(seconds=0.1))
+                self.get_clock().now(), timeout=Duration(seconds=1.0))
         except TransformException:
             return
 
@@ -249,7 +249,7 @@ class WBCCoordinatorNode(Node):
         try:
             body_in_odom = self._tf.lookup_transform(
                 self._odom_frame, self._body_frame,
-                rclpy.time.Time(), timeout=Duration(seconds=0.1))
+                self.get_clock().now(), timeout=Duration(seconds=1.0))
         except TransformException:
             return
 
@@ -356,7 +356,7 @@ class WBCCoordinatorNode(Node):
         try:
             tf = self._tf.lookup_transform(
                 self._odom_frame, self._body_frame,
-                rclpy.time.Time(), timeout=Duration(seconds=0.1))
+                self.get_clock().now(), timeout=Duration(seconds=1.0))
         except TransformException:
             return
 
@@ -392,7 +392,7 @@ class WBCCoordinatorNode(Node):
         try:
             body_in_odom = self._tf.lookup_transform(
                 self._odom_frame, self._body_frame,
-                rclpy.time.Time(), timeout=Duration(seconds=0.1))
+                self.get_clock().now(), timeout=Duration(seconds=1.0))
         except TransformException:
             return None
         dx = body_in_odom.transform.translation.x - self._approach_point_odom.pose.position.x
@@ -433,7 +433,7 @@ class WBCCoordinatorNode(Node):
         try:
             tf = self._tf.lookup_transform(
                 self._odom_frame, self._body_frame,
-                rclpy.time.Time(), timeout=Duration(seconds=0.1))
+                self.get_clock().now(), timeout=Duration(seconds=1.0))
             self._ws_ext_anchor = np.array([
                 tf.transform.translation.x,
                 tf.transform.translation.y,
