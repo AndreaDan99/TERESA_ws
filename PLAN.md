@@ -106,13 +106,19 @@ Validare prima le modifiche WBC attuali (goal in odom, 10 Hz, look-at stabile, Q
 ### Current limitation
 WBC `J_base` is **6×2**: only `[vx, wz]` — forward velocity + yaw. Spot cannot use pitch (forward tilt) or body height (squat/stand) as part of the holistic controller.
 
-### Strategy (updated 5 May 2026)
+### Strategy (updated 11 May 2026)
 
-**Phase 1 — Pitch as discrete compensation** (current focus):
+**Phase 1 — Pitch as discrete compensation** (✅ solution found, implemented 11 May 2026):
 - Pitch is NOT integrated into the continuous WBC Jacobian (6×4)
-- Instead, pitch is a discrete command (like `SetStandHeight` for body height)
-- Applied during WS_EXTENSION: when arm can't reach target, Spot tilts forward to shift workspace
-- Delivery mechanism: Spot API service (to be verified via `ros2 service list | grep my_spot`). Candidates: `/my_spot/robot_command` or a new `SetBodyPitch.srv` in `spot_msgs`. NOT `cmd_vel.angular.y` (likely not processed by standard `spot_driver`).
+- Instead, pitch + height are sent as a single `geometry_msgs/Pose` to **`/my_spot/body_pose`**
+- The **native `spot_driver`** (not custom) subscribes to `body_pose` and maps:
+  - `position.z` → `BodyControlParams.height` (body height offset)
+  - `orientation` → `BodyControlParams.rotation` (pitch / roll quaternion)
+- Already used in `wbc_coordinator.py`: `_set_body_pose(height, pitch)` publishes to this topic
+- Used in **SEARCHING** state (height=-0.20m, pitch=0.26rad≈15° nose-down) for ground-level patient detection
+- Replaces the custom `SetStandHeight` service client — simpler, no `spot_msgs` dependency
+- Future: **WS_EXTENSION** can apply pitch dynamically to shift arm workspace forward/down
+- Reference: `spot_ros2.py:620` subscribes to `"body_pose"` (Pose), callback at line 2652 builds `BodyControlParams`
 
 **Phase 2 — Full WBC 6×4** (future, after Phase 1 validated):
 | New DOF | Spot command | Effect on EE |
@@ -137,11 +143,11 @@ Two strategies:
 
 ### Next steps
 1. Test WBC without pitch — verify current vx+wz+body_height is sufficient
-2. Verify Spot pitch API: `ros2 service list | grep my_spot` on SpotCore
-3. Implement Phase 1: discrete pitch compensation in `wbc_coordinator.py` + new service if needed
-4. Derive analytical `J_base` for pitch + height (kinematic chain: Spot base → body frame → Z1 base → EE)
-5. Implement and test in dry-run first
-6. Add safety limits: max pitch angle, max height delta, per-direction bounding box in WS_EXTENSION
+2. ✅ Pitch API found: `/my_spot/body_pose` topic (native spot_driver, no custom code needed)
+3. ✅ Phase 1 implemented: discrete pitch + height in `_set_body_pose()` for SEARCHING state
+4. Apply pitch in WS_EXTENSION: when arm can't reach target, tilt forward to shift workspace (todo)
+5. Derive analytical `J_base` for pitch + height (kinematic chain: Spot base → body frame → Z1 base → EE)
+6. Implement Phase 2: full WBC 6×4 (future)
 
 ---
 

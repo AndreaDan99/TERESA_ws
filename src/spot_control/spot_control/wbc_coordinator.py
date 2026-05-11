@@ -29,7 +29,7 @@ from rclpy.node import Node
 from rclpy.duration import Duration
 import rclpy.time
 
-from geometry_msgs.msg import PoseStamped, Vector3Stamped
+from geometry_msgs.msg import PoseStamped, Vector3Stamped, Pose
 from std_msgs.msg import Bool, String, Float32
 from tf2_ros import Buffer, TransformListener, TransformException
 import tf2_geometry_msgs  # noqa: F401
@@ -153,6 +153,7 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('min_body_height',             -0.20)
         self.declare_parameter('max_body_height',              0.0)
         self.declare_parameter('search_body_height',          -0.20)  # [m] body lowered during search
+        self.declare_parameter('search_body_pitch',           0.26)   # [rad] ~15° nose-down during search
         self.declare_parameter('search_timeout',              30.0)   # [s] fallback to IDLE if no detection
         self.declare_parameter('pre_approach_duration',        5.0)   # [s] arm look-at before Spot walks
 
@@ -169,18 +170,12 @@ class WBCCoordinatorNode(Node):
         self._min_body_height     = float(p('min_body_height'))
         self._max_body_height     = float(p('max_body_height'))
         self._search_body_height    = float(p('search_body_height'))
+        self._search_body_pitch     = float(p('search_body_pitch'))
         self._search_timeout        = float(p('search_timeout'))
         self._pre_approach_duration = float(p('pre_approach_duration'))
 
-        # ── Body height client (optional — needs spot_msgs) ───────────
-        try:
-            from spot_msgs.srv import SetStandHeight
-            self._height_client = self.create_client(SetStandHeight, '/my_spot/set_stand_height')
-            self._SetStandHeight = SetStandHeight
-        except ImportError:
-            self._height_client = None
-            self._SetStandHeight = None
-            self.get_logger().warn('spot_msgs not found — body height control disabled')
+        # ── Body pose publisher (height + pitch via /my_spot/body_pose) ──
+        self._pub_body_pose = self.create_publisher(Pose, '/my_spot/body_pose', 10)
 
         # ── Approach point quality monitor ────────────────────────────
         self._quality = _QualityMonitor(
@@ -249,7 +244,7 @@ class WBCCoordinatorNode(Node):
 
         R = quat_to_rot(tf.transform.rotation)
         axis_cam = np.array([msg.vector.x, msg.vector.y, msg.vector.z])
-        axis_odom = R.T @ axis_cam   # R is odom→camera, we need camera→odom
+        axis_odom = R @ axis_cam   # lookup_transform(odom, cam) gives R: cam→odom
         axis_odom[2] = 0.0  # project onto XY plane (Spot is on flat ground)
         n = float(np.linalg.norm(axis_odom[:2]))
         if n < 0.1:
@@ -473,12 +468,12 @@ class WBCCoordinatorNode(Node):
             self.get_logger().info(f'WBC FSM: {self._state} → {new_state}')
             if new_state == CoordState.IDLE:
                 self._quality.reset()
-                self._set_body_height(0.0)   # ripristina altezza nominale
+                self._set_body_pose(0.0)   # ripristina altezza nominale
             if new_state == CoordState.SEARCHING:
                 self._search_start = self.get_clock().now()
-                self._set_body_height(self._search_body_height)
+                self._set_body_pose(self._search_body_height, self._search_body_pitch)
             if new_state == CoordState.SCANNING:
-                self._set_body_height(self._handoff_body_height)
+                self._set_body_pose(self._handoff_body_height)
             if new_state == CoordState.WS_EXTENSION:
                 self._save_ws_ext_anchor()
             self._state = new_state
@@ -503,21 +498,19 @@ class WBCCoordinatorNode(Node):
             self._ws_ext_anchor = None
             self.get_logger().warn('WS_EXT: could not save anchor (TF unavailable)')
 
-    def _set_body_height(self, height: float) -> None:
-        if self._height_client is None:
-            return
-        if not self._height_client.service_is_ready():
-            self.get_logger().warn('set_stand_height service not ready — skipping')
-            return
-        req = self._SetStandHeight.Request()
-        req.height = float(np.clip(height, self._min_body_height, self._max_body_height))
-        future = self._height_client.call_async(req)
-        future.add_done_callback(
-            lambda f: self.get_logger().info(
-                f'body height → {req.height:.2f}m: '
-                f'{"OK" if f.result() and f.result().success else "FAILED"}'
-            )
-        )
+    def _set_body_pose(self, height: float, pitch: float = 0.0) -> None:
+        from tf_transformations import quaternion_from_euler
+        q = quaternion_from_euler(pitch, 0.0, 0.0)
+        height_clamped = float(np.clip(height, self._min_body_height, self._max_body_height))
+        pose = Pose()
+        pose.position.z = height_clamped
+        pose.orientation.x = q[0]
+        pose.orientation.y = q[1]
+        pose.orientation.z = q[2]
+        pose.orientation.w = q[3]
+        self._pub_body_pose.publish(pose)
+        self.get_logger().info(
+            f'body_pose → height={height_clamped:.2f}m pitch={math.degrees(pitch):.1f}°')
 
     def _set_wbc_enabled(self, enabled: bool) -> None:
         msg = Bool(); msg.data = enabled

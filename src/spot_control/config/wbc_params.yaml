@@ -94,6 +94,7 @@ wbc_coordinator:
 
     # SEARCHING — active body search before approach
     search_body_height:  -0.20   # [m] abbassa Spot di 20 cm per vedere il suolo
+    search_body_pitch:    0.26   # [rad] ~15° tilt in avanti (nose-down)
     search_timeout:       30.0   # [s] timeout ricerca prima di fallback a IDLE
 
     # PRE_APPROACH — arm pre-orientation before Spot starts walking

@@ -56,7 +56,7 @@ class HumanPostureAnalyzerSpot(Node):
         super().__init__("human_posture_analyzer_spot")
 
         # Frame (deve corrispondere al frame della camera Orbbec)
-        self.declare_parameter("frame_id", "camera_color_optical_frame")
+        self.declare_parameter("frame_id", "orbbec_color_optical_frame")
         self.frame_id = self.get_parameter("frame_id").value
 
         # Soglie classificazione

@@ -256,7 +256,8 @@ any ──(posture≠LYING for >lying_timeout)──► IDLE
 ```
 
 **SEARCHING details:**
-- Stato iniziale (non più IDLE): corpo abbassato a -0.20m, Spot fermo
+- Stato iniziale (non più IDLE): corpo abbassato a -0.20m + tilt ~15° nose-down
+- Usa `/my_spot/body_pose` topic (nativo spot_driver) per altezza + pitch
 - Attende detection LYING + confidence + approach_point in odom
 - Timeout 30s → fallback a IDLE passivo
 
@@ -297,7 +298,7 @@ When `dry_run:=true` on WBC launch, all outputs go to debug topics:
 | `src/z1_vision/` | Z1 arm: FSM, IK, impedance, YOLO tracking, workspace checker |
 | `src/spot_control/` | Spot navigation, WBC coordinator, WBC QP controller, ik_goal_mux |
 | `src/spot_perception/` | Orbbec perception: YOLO skeleton, posture classifier, laying detector |
-| `src/spot_msgs/` | Custom ROS2 messages for Spot (SetStandHeight srv, etc.) |
+| `src/spot_msgs/` | Custom ROS2 messages (Trajectory action only; SetStandHeight deprecated in favor of body_pose topic) |
 | `src/z1_ros2/` | Unitree Z1 hardware interface, URDF, MoveIt2, bringup configs |
 | `src/realsense-ros/` | Intel RealSense ROS2 driver |
 | `src/orbbec_camera/` | Orbbec camera driver |
@@ -375,7 +376,7 @@ Z → right to left
 | `surface_params.yaml` | z1_vision | Depth ROI size, PCA config, frame names |
 | `body_search_params.yaml` | z1_vision | Scan extents, wrist angles, early-stop threshold |
 | `camera_params.yaml` | z1_vision | Camera TF offset relative to EE (link06 → camera_link) |
-| `wbc_params.yaml` | spot_control | WBC QP weights, handoff distance (0.05), quality params, search params (body_height, timeout), pre_approach_duration (5s), orientation_mode, workspace safety margin |
+| `wbc_params.yaml` | spot_control | WBC QP weights, handoff distance (0.05), quality params, search params (body_height=-0.20, body_pitch=0.26), pre_approach_duration (5s), orientation_mode, workspace safety margin |
 
 ### Key shared parameters (keep in sync)
 
@@ -383,6 +384,7 @@ Z → right to left
 - `orbbec_confidence_threshold: 0.5` — in `wbc_params.yaml` and `laying_human_detector` (min_detection_confidence). Both must match.
 - `ik_goal_topic` / `ik_enable_topic` — FSM code defaults are `/z1/ik_goal_pose` and `/z1/ik_enable` (go through `ik_goal_mux`). YAML must NOT override these to `/ik_*` directly or the mux will be bypassed.
 - `home_orientation: [-0.0062, 0.4107, 0.0021, 0.9118]` — must be identical in `z1_fsm_params.yaml` and `wbc_params.yaml`
+- Body control: `/my_spot/body_pose` (Pose topic, nativo spot_driver) — usato dal coordinator per altezza + pitch. Non richiede `spot_msgs` custom.
 
 ### YOLO model
 
@@ -394,6 +396,15 @@ Z → right to left
 - Dispositivi disabilitati: IR, accelerometro, giroscopio, TF automatico
 - Abilitato: RGB 1280×720 @15fps MJPG + Depth 1024×1024 @15fps Y16 + depth registration
 - La camera può freezare se alimentata solo via USB-C (potenza insufficiente). Serve alimentatore 12V DC per stabilità.
+- **SEARCHING**: Spot usa `/my_spot/body_pose` (Pose topic nativo spot_driver) per abbassarsi (-0.20m) e inclinarsi in avanti (~15° pitch) così l'Orbbec punta verso il suolo
+
+### Body pose control
+
+- **Topic**: `/my_spot/body_pose` (tipo `geometry_msgs/Pose`) — nativo dello `spot_driver` ufficiale
+- **`position.z`** → altezza corpo (offset da nominale, negativo = abbassato)
+- **`orientation`** → quaternione per pitch/roll del corpo
+- **`_set_body_pose(height, pitch)`** nel coordinator pubblica su questo topic
+- Sostituisce il vecchio `SetStandHeight` service (custom `spot_msgs`) — più semplice, nessuna dipendenza extra
 
 ### Legacy code
 
