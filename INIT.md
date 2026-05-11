@@ -74,6 +74,31 @@ git status --short
 
 ---
 
+## Recent Changes (11 May 2026)
+
+### Orbbec TF collision fix — camera renamed to `orbbec`
+
+**Before:** Orbbec and RealSense both published TF frames `camera_link`, `camera_color_optical_frame`. The approach_point (Orbbec, on tripod) was transformed through the RealSense chain (`link06 → camera_link`) instead of the static tripod TF. WBC coordinator stayed in IDLE because `_cb_approach` couldn't resolve `approach_point` → `my_spot/odom` correctly.
+
+**After:**
+- Orbbec driver launched with `camera_name: 'orbbec'` → TF frames become `orbbec_link`, `orbbec_color_optical_frame`
+- Static TF chain: `my_spot/body → orbbec_link → orbbec_color_optical_frame` (separate from RealSense)
+- YOLO skeleton topics: `/camera/*` → `/orbbec/*`
+- Perception nodes `frame_id`: `orbbec_color_optical_frame`
+
+### Handoff distance analysis — offset already present
+
+Approach point computed in `laying_human_detector.py` already includes offset:
+```
+dist = bbox_half(≥0.30) + approach_margin(0.05) + spot_front_offset(0.50) = 0.85m
+```
+At handoff (5cm from approach_point), Spot front ~5cm from patient bbox edge. Arm reach covers the rest (~60cm). Approach is lateral (Spot ⊥ patient).
+
+### Files modificati
+`spot_perception.launch.py`, `yolo_skeleton_spot.py`
+
+---
+
 ## System overview
 
 Two main pipelines coexist:
