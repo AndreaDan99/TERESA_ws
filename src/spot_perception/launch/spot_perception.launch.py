@@ -56,6 +56,7 @@ def generate_launch_description():
             'enable_ir': 'false',
             'enable_accel': 'false',
             'enable_gyro': 'false',
+            'publish_tf': 'false',
         }.items()
     )
 
