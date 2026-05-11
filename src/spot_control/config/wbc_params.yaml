@@ -92,6 +92,13 @@ wbc_coordinator:
     min_body_height:     -0.20   # limite minimo di sicurezza
     max_body_height:      0.0    # altezza nominale
 
+    # SEARCHING — active body search before approach
+    search_body_height:  -0.20   # [m] abbassa Spot di 20 cm per vedere il suolo
+    search_timeout:       30.0   # [s] timeout ricerca prima di fallback a IDLE
+
+    # PRE_APPROACH — arm pre-orientation before Spot starts walking
+    pre_approach_duration: 5.0   # [s] pausa per orientare il braccio (WBC arm-only)
+
     # Topics
     posture_confidence_topic: '/human_pose/posture_confidence'
     approach_point_topic:     '/laying_human/approach_point'

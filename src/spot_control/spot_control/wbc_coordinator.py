@@ -3,17 +3,22 @@
 WBC Coordinator — phase FSM (WBC is master, Z1 FSM waits for SCANNING)
 
 States:
-  IDLE           waiting for LYING detection
+  SEARCHING      body lowered, waiting for LYING detection
+  PRE_APPROACH   arm look-at toward target (Spot stationary)
+  IDLE           passive fallback
   APPROACHING    Spot navigates + Z1 look-at via WBC QP
   SCANNING       Spot reached patient → WBC disables, z1_FSM takes over
   WS_EXTENSION   z1_FSM requested workspace help → QP micro-step
 
 Transitions:
-  IDLE         → APPROACHING    posture=LYING and confidence >= threshold
-  APPROACHING  → SCANNING       Spot within handoff_distance of approach_point
-  SCANNING     → WS_EXTENSION   /wbc/ws_request received
-  WS_EXTENSION → SCANNING       /ik_done received
-  any          → IDLE           posture != LYING for > lying_timeout
+  SEARCHING     → PRE_APPROACH   posture=LYING and confidence >= threshold + approach_point
+  SEARCHING     → IDLE           search timeout
+  IDLE          → APPROACHING    posture=LYING and confidence >= threshold
+  PRE_APPROACH  → APPROACHING    pre_approach duration elapsed (arm aligned)
+  APPROACHING   → SCANNING       Spot within handoff_distance of approach_point
+  SCANNING      → WS_EXTENSION   /wbc/ws_request received
+  WS_EXTENSION  → SCANNING       /ik_done received
+  any           → IDLE           posture != LYING for > lying_timeout
 """
 import math
 
@@ -111,11 +116,13 @@ class _QualityMonitor:
 
 
 class CoordState:
-    IDLE         = 'IDLE'
-    APPROACHING  = 'APPROACHING'
-    HANDOFF      = 'HANDOFF'
-    SCANNING     = 'SCANNING'
-    WS_EXTENSION = 'WS_EXTENSION'
+    SEARCHING     = 'SEARCHING'
+    PRE_APPROACH  = 'PRE_APPROACH'
+    IDLE          = 'IDLE'
+    APPROACHING   = 'APPROACHING'
+    HANDOFF       = 'HANDOFF'
+    SCANNING      = 'SCANNING'
+    WS_EXTENSION  = 'WS_EXTENSION'
 
 
 class WBCCoordinatorNode(Node):
@@ -145,6 +152,9 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('handoff_body_height',         -0.15)  # [m] offset from nominal
         self.declare_parameter('min_body_height',             -0.20)
         self.declare_parameter('max_body_height',              0.0)
+        self.declare_parameter('search_body_height',          -0.20)  # [m] body lowered during search
+        self.declare_parameter('search_timeout',              30.0)   # [s] fallback to IDLE if no detection
+        self.declare_parameter('pre_approach_duration',        5.0)   # [s] arm look-at before Spot walks
 
         p = lambda n: self.get_parameter(n).value
         self._conf_thr        = float(p('orbbec_confidence_threshold'))
@@ -158,6 +168,9 @@ class WBCCoordinatorNode(Node):
         self._handoff_body_height = float(p('handoff_body_height'))
         self._min_body_height     = float(p('min_body_height'))
         self._max_body_height     = float(p('max_body_height'))
+        self._search_body_height    = float(p('search_body_height'))
+        self._search_timeout        = float(p('search_timeout'))
+        self._pre_approach_duration = float(p('pre_approach_duration'))
 
         # ── Body height client (optional — needs spot_msgs) ───────────
         try:
@@ -183,7 +196,7 @@ class WBCCoordinatorNode(Node):
         TransformListener(self._tf, self)
 
         # ── State ─────────────────────────────────────────────────────
-        self._state                  = CoordState.IDLE
+        self._state                  = CoordState.SEARCHING
         self._posture                = 'UNKNOWN'
         self._confidence             = 0.0
         self._approach_point_odom: PoseStamped | None = None  # odom-frame (world-fixed)
@@ -191,6 +204,8 @@ class WBCCoordinatorNode(Node):
         self._desired_yaw: float | None = None   # target yaw Spot [rad, odom frame]
         self._ws_ext_anchor: np.ndarray | None = None   # Spot odom position at WS_EXTENSION entry
         self._ws_ext_anchor_yaw: float = 0.0            # Spot yaw at WS_EXTENSION entry
+        self._search_start: rclpy.time.Time | None = None     # SEARCHING entry time
+        self._pre_approach_start: rclpy.time.Time | None = None  # PRE_APPROACH entry time
 
         # ── Sub / Pub ─────────────────────────────────────────────────
         self.create_subscription(String,       '/human_pose/posture',        self._cb_posture,    10)
@@ -201,11 +216,12 @@ class WBCCoordinatorNode(Node):
         self.create_subscription(Bool,         '/wbc/ws_request',            self._cb_ws_req,     10)
         self.create_subscription(Vector3Stamped, '/laying_human/body_axis',  self._cb_body_axis,  10)
 
-        self._pub_goal    = self.create_publisher(PoseStamped, p('wbc_goal_topic'),        10)
-        self._pub_enable  = self.create_publisher(Bool,        p('wbc_enable_topic'),     10)
-        self._pub_state   = self.create_publisher(String,      '/wbc/state',              10)
-        self._pub_uncert  = self.create_publisher(Float32,     '/wbc/target_uncertainty', 10)
-        self._pub_yaw     = self.create_publisher(Float32,     '/wbc/desired_yaw',        10)
+        self._pub_goal     = self.create_publisher(PoseStamped, p('wbc_goal_topic'),        10)
+        self._pub_enable   = self.create_publisher(Bool,        p('wbc_enable_topic'),     10)
+        self._pub_state    = self.create_publisher(String,      '/wbc/state',              10)
+        self._pub_uncert   = self.create_publisher(Float32,     '/wbc/target_uncertainty', 10)
+        self._pub_yaw      = self.create_publisher(Float32,     '/wbc/desired_yaw',        10)
+        self._pub_spot_ctrl = self.create_publisher(Bool,       '/wbc/spot_control',       10)
 
         self.create_timer(0.2, self._tick)   # 5 Hz FSM
         self.get_logger().info('WBC Coordinator ready.')
@@ -302,6 +318,10 @@ class WBCCoordinatorNode(Node):
 
         if self._state == CoordState.IDLE:
             self._tick_idle()
+        elif self._state == CoordState.SEARCHING:
+            self._tick_searching()
+        elif self._state == CoordState.PRE_APPROACH:
+            self._tick_pre_approach()
         elif self._state == CoordState.APPROACHING:
             self._tick_approaching()
         elif self._state == CoordState.WS_EXTENSION:
@@ -313,6 +333,8 @@ class WBCCoordinatorNode(Node):
     def _check_lying_timeout(self) -> None:
         # Once committed (handoff done), don't abort on Orbbec loss — RealSense is in charge.
         if self._state in (CoordState.IDLE,
+                            CoordState.SEARCHING,
+                            CoordState.PRE_APPROACH,
                             CoordState.SCANNING,
                             CoordState.WS_EXTENSION):
             return
@@ -345,6 +367,36 @@ class WBCCoordinatorNode(Node):
                 f'Handoff: dist={dist:.2f}m < {self._handoff_dist:.2f}m → SCANNING')
             self._set_state(CoordState.SCANNING)
             self._set_wbc_enabled(False)
+
+    def _tick_searching(self) -> None:
+        if (self._posture == 'LYING'
+                and self._confidence >= self._conf_thr
+                and self._approach_point_odom is not None):
+            self.get_logger().info('Person found → PRE_APPROACH')
+            self._pre_approach_start = self.get_clock().now()
+            self._set_wbc_enabled(True)
+            self._pub_spot_ctrl.publish(Bool(data=False))
+            self._set_state(CoordState.PRE_APPROACH)
+            return
+
+        if self._search_start is not None:
+            elapsed = (self.get_clock().now() - self._search_start).nanoseconds * 1e-9
+            if elapsed > self._search_timeout:
+                self.get_logger().warn(
+                    f'Search timeout ({self._search_timeout:.0f}s) → IDLE')
+                self._set_state(CoordState.IDLE)
+                self._set_wbc_enabled(False)
+
+    def _tick_pre_approach(self) -> None:
+        self._pub_goal.publish(self._filtered_goal())
+
+        if self._pre_approach_start is not None:
+            elapsed = (self.get_clock().now() - self._pre_approach_start).nanoseconds * 1e-9
+            if elapsed >= self._pre_approach_duration:
+                self.get_logger().info(
+                    f'PRE_APPROACH done ({self._pre_approach_duration:.1f}s) → APPROACHING')
+                self._pub_spot_ctrl.publish(Bool(data=True))
+                self._set_state(CoordState.APPROACHING)
 
     def _tick_ws_extension(self) -> None:
         # Goal published directly by z1_FSM via /wbc/ee_goal.
@@ -422,6 +474,9 @@ class WBCCoordinatorNode(Node):
             if new_state == CoordState.IDLE:
                 self._quality.reset()
                 self._set_body_height(0.0)   # ripristina altezza nominale
+            if new_state == CoordState.SEARCHING:
+                self._search_start = self.get_clock().now()
+                self._set_body_height(self._search_body_height)
             if new_state == CoordState.SCANNING:
                 self._set_body_height(self._handoff_body_height)
             if new_state == CoordState.WS_EXTENSION:

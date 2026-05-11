@@ -214,14 +214,15 @@ Orbbec Femto Bolt (Jetson → PC)
                     └─► /human_pose/posture, /human_pose/posture_confidence
 
 /laying_human/approach_point
-  └─► wbc_coordinator  (FSM: IDLE → APPROACHING → SCANNING → WS_EXTENSION)
+  └─► wbc_coordinator  (FSM: SEARCHING → PRE_APPROACH → APPROACHING → SCANNING → WS_EXTENSION)
         │  Trasforma approach_point camera → odom via TF
         │  QualityMonitor: target best-confidence + quality = max_q*(1-conf)
         ├─► /wbc/ee_goal             (target fisso in odom frame)
         ├─► /wbc/enable              (True = WBC priority su MUX)
         ├─► /wbc/desired_yaw         (Spot ⊥ body_axis)
         ├─► /wbc/target_uncertainty  (quality [m], non sigma)
-        └─► /wbc/state               (IDLE/APPROACHING/SCANNING/WS_EXTENSION)
+        ├─► /wbc/state               (SEARCHING/PRE_APPROACH/IDLE/APPROACHING/SCANNING/WS_EXTENSION)
+        └─► /wbc/spot_control        (False = sopprime cmd_vel, braccio arm-only)
 
 /wbc/ee_goal (odom) + /wbc/enable + /wbc/desired_yaw + /wbc/target_uncertainty
   └─► wbc_qp_controller  (10 Hz, holistic WBC: arm q_dot + base vx·wz)
@@ -229,6 +230,7 @@ Orbbec Femto Bolt (Jetson → PC)
         │  WBC split → q_dot, vx, wz
         │  v_scale = v_min + (1-v_min)/(1 + quality/ref)  → vx,wz ridotti
         │  x_ee = target_link00 - clipped_pos  → orientazione stabile (minrot)
+        │  cmd_vel pubblicato solo se /wbc/spot_control=True
         ├─► /wbc/ik_goal_pose  → ik_goal_mux → /ik_goal_pose → z1_ik_to_jtc
         ├─► /wbc/ik_enable     → ik_goal_mux → /ik_enable → z1_ik_to_jtc
         └─► /my_spot/cmd_vel   → Spot base velocity (10 Hz)
@@ -243,12 +245,25 @@ ik_goal_mux:
 ### WBC coordinator FSM states
 
 ```
-IDLE ──(posture=LYING & confidence≥0.5 & target_odom ready)──► APPROACHING
+SEARCHING ──(posture=LYING & conf≥0.5 & approach_point)──► PRE_APPROACH
+SEARCHING ──(timeout 30s)──► IDLE (fallback)
+IDLE ──(posture=LYING & conf≥0.5 & target_odom ready)──► APPROACHING
+PRE_APPROACH ──(5s elapsed)──► APPROACHING
 APPROACHING ──(dist<handoff_distance=5cm)──► SCANNING
 SCANNING ──(/wbc/ws_request)──► WS_EXTENSION
 WS_EXTENSION ──(/ik_done)──► SCANNING
 any ──(posture≠LYING for >lying_timeout)──► IDLE
 ```
+
+**SEARCHING details:**
+- Stato iniziale (non più IDLE): corpo abbassato a -0.20m, Spot fermo
+- Attende detection LYING + confidence + approach_point in odom
+- Timeout 30s → fallback a IDLE passivo
+
+**PRE_APPROACH details:**
+- WBC abilitato, `/wbc/spot_control=False` → braccio look-at, Spot FERMO
+- Pausa 5s per far assestare il braccio verso il target
+- Scaduto il timer → APPROACHING con WBC pieno (Spot cammina)
 
 **APPROACHING details:**
 - Target inizializzato: media prime 3 misure in odom
@@ -306,8 +321,8 @@ When `dry_run:=true` on WBC launch, all outputs go to debug topics:
 
 | Module | Role |
 |--------|------|
-| `wbc_coordinator.py` | Phase FSM for Spot+Z1: QualityMonitor (target fisso in odom + quality tracking), triggers SCANNING handoff |
-| `wbc_qp_controller.py` | Holistic WBC at 10 Hz: damped pseudo-inverse split of arm joints + base velocity, quality-based v_scale, stable look-at orientation |
+| `wbc_coordinator.py` | Phase FSM for Spot+Z1: SEARCHING→PRE_APPROACH→APPROACHING→SCANNING→WS_EXTENSION, QualityMonitor (target fisso in odom + quality tracking), body height control |
+| `wbc_qp_controller.py` | Holistic WBC at 10 Hz: damped pseudo-inverse split of arm joints + base velocity, quality-based v_scale, stable look-at orientation, `/wbc/spot_control` gates cmd_vel |
 | `wbc_math.py` | Pure math: J_base, J_holistic, manipulability, WBC split, WBC split with yaw |
 | `ik_goal_mux.py` | Priority mux: WBC goals override Z1 FSM goals |
 | `spot_goal_navigator.py` | Spot point-to-point navigation |
@@ -360,7 +375,7 @@ Z → right to left
 | `surface_params.yaml` | z1_vision | Depth ROI size, PCA config, frame names |
 | `body_search_params.yaml` | z1_vision | Scan extents, wrist angles, early-stop threshold |
 | `camera_params.yaml` | z1_vision | Camera TF offset relative to EE (link06 → camera_link) |
-| `wbc_params.yaml` | spot_control | WBC QP weights, handoff distance (0.05), quality params (ref, alpha, growth, min, max, v_min), orientation_mode, workspace safety margin |
+| `wbc_params.yaml` | spot_control | WBC QP weights, handoff distance (0.05), quality params, search params (body_height, timeout), pre_approach_duration (5s), orientation_mode, workspace safety margin |
 
 ### Key shared parameters (keep in sync)
 
@@ -372,6 +387,13 @@ Z → right to left
 ### YOLO model
 
 `yolo11n-pose.pt` lives at the workspace root. Used by both `z1_yolo_torso_tracker` (RealSense) and `yolo_skeleton_spot` (Orbbec).
+
+### Orbbec Femto Bolt — power considerations
+
+- Point cloud e colored point cloud **disabilitate** nel launch file (`spot_perception.launch.py`) — nessun nodo le usa, risparmiano CPU e banda USB
+- Dispositivi disabilitati: IR, accelerometro, giroscopio, TF automatico
+- Abilitato: RGB 1280×720 @15fps MJPG + Depth 1024×1024 @15fps Y16 + depth registration
+- La camera può freezare se alimentata solo via USB-C (potenza insufficiente). Serve alimentatore 12V DC per stabilità.
 
 ### Legacy code
 

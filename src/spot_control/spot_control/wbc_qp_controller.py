@@ -135,6 +135,7 @@ class WBCQPControllerNode(Node):
         self._q_meas: np.ndarray | None = None
         self._sigma_max      = 0.0    # quality [m] from QualityMonitor (not std dev)
         self._desired_yaw: float | None = None  # target Spot yaw [rad, odom]
+        self._spot_control = True  # cmd_vel enabled by default
 
         # ── Sub / Pub ─────────────────────────────────────────────────
         self.create_subscription(Bool,        '/wbc/enable',               self._cb_enable,      10)
@@ -142,6 +143,7 @@ class WBCQPControllerNode(Node):
         self.create_subscription(JointState,  p('joint_states_topic'),     self._cb_joints,      50)
         self.create_subscription(Float32,     '/wbc/target_uncertainty',   self._cb_uncert,      10)
         self.create_subscription(Float32,     '/wbc/desired_yaw',          self._cb_desired_yaw, 10)
+        self.create_subscription(Bool,        '/wbc/spot_control',         self._cb_spot_control, 10)
 
         if self._dry_run:
             self._pub_ik  = self.create_publisher(PoseStamped, '/wbc/ik_goal_pose_debug',  10)
@@ -182,6 +184,9 @@ class WBCQPControllerNode(Node):
 
     def _cb_desired_yaw(self, msg: Float32) -> None:
         self._desired_yaw = float(msg.data)
+
+    def _cb_spot_control(self, msg: Bool) -> None:
+        self._spot_control = msg.data
 
     # ── TF lookup ───────────────────────────────────────────────────
 
@@ -367,11 +372,12 @@ class WBCQPControllerNode(Node):
         self._pub_en.publish(en)
         self._pub_ik.publish(goal_msg)
 
-        # 11. Publish cmd_vel for Spot
-        twist = Twist()
-        twist.linear.x  = float(vx)
-        twist.angular.z = float(wz)
-        self._pub_vel.publish(twist)
+        # 11. Publish cmd_vel for Spot (suppressed when spot_control=False)
+        if self._spot_control:
+            twist = Twist()
+            twist.linear.x  = float(vx)
+            twist.angular.z = float(wz)
+            self._pub_vel.publish(twist)
 
         prefix = '[DRY_RUN] ' if self._dry_run else ''
         self.get_logger().info(

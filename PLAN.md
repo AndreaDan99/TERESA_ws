@@ -151,3 +151,4 @@ Two strategies:
 - `wbc_coordinator.py` has a dormant `_cb_z1_state` subscription (no-op after HANDOFF removal) — kept for future monitoring
 - Target paziente fissato in odom (media prime 3 misure) — mai più ricambiato durante APPROACHING
 - QualityMonitor: qualità = `max_q * (1 - posture_confidence)` + crescita lineare senza misure
+- **Future: QualityMonitor EMA target update** — target congelato dopo init può essere rumoroso (prime 3 misure con Spot lontano). Possibile miglioramento: aggiornamento lento del target via EMA (`α` molto basso, es. 0.05) per convergere gradualmente verso la stima migliore man mano che Spot si avvicina, senza perdere la stabilità del look-at. Il `try_best_update` attuale (confidence jump > 0.10) non basta perché la confidence sale gradualmente.
