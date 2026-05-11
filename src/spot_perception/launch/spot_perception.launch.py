@@ -39,6 +39,7 @@ def generate_launch_description():
             ])
         ]),
         launch_arguments={
+            'camera_name': 'orbbec',
             'enable_color': 'true',
             'enable_depth': 'true',
             'color_width': '1280',
@@ -59,30 +60,30 @@ def generate_launch_description():
     )
 
     # ============================================================
-    # 2) TF STATICHE: body → camera_link → camera_color_optical_frame
+    # 2) TF STATICHE: body → orbbec_link → orbbec_color_optical_frame
     # ============================================================
     # Adatta x, y, z in base al mount fisico dell'Orbbec su Spot
     static_tf_body_camera = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        name='spot_to_camera',
+        name='spot_to_orbbec',
         arguments=[
             '0.30', '0.0', '0.15',
             '0', '0', '0',
             'my_spot/body',
-            'camera_link'
+            'orbbec_link'
         ]
     )
 
     static_tf_camera_optical = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        name='camera_to_optical',
+        name='orbbec_to_optical',
         arguments=[
             '0', '0', '0',
             '-1.5708', '0', '-1.5708',
-            'camera_link',
-            'camera_color_optical_frame'
+            'orbbec_link',
+            'orbbec_color_optical_frame'
         ]
     )
 
@@ -116,7 +117,7 @@ def generate_launch_description():
         name='posture_analyzer',
         output='screen',
         parameters=[{
-            'frame_id': 'camera_color_optical_frame',
+            'frame_id': 'orbbec_color_optical_frame',
             'knee_angle_stand_min': 160.0,
             'knee_angle_sit_max': 120.0,
             'torso_angle_lying_min': 65.0,
@@ -132,7 +133,7 @@ def generate_launch_description():
         name='bbox_visualizer',
         output='screen',
         parameters=[{
-            'frame_id': 'camera_color_optical_frame',
+            'frame_id': 'orbbec_color_optical_frame',
             'safety_margin_body': 0.5,
         }]
     )
@@ -162,15 +163,15 @@ def generate_launch_description():
         test_mode_arg,
 
         LogInfo(msg=['🤖 Spot Perception System — Jetson + Orbbec Femto Bolt']),
-        LogInfo(msg=['   Topics: /camera/color/image_raw + /camera/depth/image_raw']),
-        LogInfo(msg=['   Frame output: camera_color_optical_frame']),
+        LogInfo(msg=['   Topics: /orbbec/color/image_raw + /orbbec/depth/image_raw']),
+        LogInfo(msg=['   Frame output: orbbec_color_optical_frame']),
 
         # Orbbec subito
         orbbec_launch,
 
         # TF statiche dopo 2s (aspetta Orbbec)
         TimerAction(period=2.0, actions=[
-            LogInfo(msg=['[2s] TF statiche: body → camera_link → camera_color_optical_frame']),
+            LogInfo(msg=['[2s] TF statiche: body → orbbec_link → orbbec_color_optical_frame']),
             static_tf_body_camera,
             static_tf_camera_optical,
         ]),

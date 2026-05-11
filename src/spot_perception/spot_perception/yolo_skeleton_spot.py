@@ -53,9 +53,9 @@ class YoloSkeletonNodeOrbbec(Node):
         self.bridge = CvBridge()
 
         # ── Subscriptions ────────────────────────────────────────
-        self.sub_color = self.create_subscription(Image,      "/camera/color/image_raw",   self.cb_color, 10)
-        self.sub_depth = self.create_subscription(Image,      "/camera/depth/image_raw",   self.cb_depth, 10)
-        self.sub_info  = self.create_subscription(CameraInfo, "/camera/color/camera_info", self.cb_info,  10)
+        self.sub_color = self.create_subscription(Image,      "/orbbec/color/image_raw",   self.cb_color, 10)
+        self.sub_depth = self.create_subscription(Image,      "/orbbec/depth/image_raw",   self.cb_depth, 10)
+        self.sub_info  = self.create_subscription(CameraInfo, "/orbbec/color/camera_info", self.cb_info,  10)
 
         # ── Publishers ───────────────────────────────────────────
         self.pub_poses   = self.create_publisher(PoseArray,   "/human_pose/points_3d",       10)
@@ -382,13 +382,13 @@ class YoloSkeletonNodeOrbbec(Node):
         """Publish empty PoseArray when no target is selected."""
         empty = PoseArray()
         empty.header.stamp = stamp
-        empty.header.frame_id = "camera_color_optical_frame"
+        empty.header.frame_id = "orbbec_color_optical_frame"
         self.pub_poses.publish(empty)
 
     def _publish_target_pose(self, pts, stamp):
         """Publish PoseArray of 17 joints for the target person only."""
         pa = PoseArray()
-        pa.header.frame_id = "camera_color_optical_frame"
+        pa.header.frame_id = "orbbec_color_optical_frame"
         pa.header.stamp = stamp
         for p in pts:
             pose = Pose()
@@ -417,7 +417,7 @@ class YoloSkeletonNodeOrbbec(Node):
             for offset in range(4):
                 m = Marker()
                 m.header.stamp = stamp
-                m.header.frame_id = "camera_color_optical_frame"
+                m.header.frame_id = "orbbec_color_optical_frame"
                 m.ns = "multi_track"
                 m.id = old_id * 10 + offset
                 m.action = Marker.DELETE
@@ -434,7 +434,7 @@ class YoloSkeletonNodeOrbbec(Node):
             # Visible joints
             jv = Marker()
             jv.header.stamp = stamp
-            jv.header.frame_id = "camera_color_optical_frame"
+            jv.header.frame_id = "orbbec_color_optical_frame"
             jv.ns = "multi_track";  jv.id = base_id + 0
             jv.type = Marker.SPHERE_LIST;  jv.action = Marker.ADD
             jv.scale.x = jv.scale.y = jv.scale.z = 0.03
@@ -443,7 +443,7 @@ class YoloSkeletonNodeOrbbec(Node):
             # Predicted joints (dimmer)
             jp = Marker()
             jp.header.stamp = stamp
-            jp.header.frame_id = "camera_color_optical_frame"
+            jp.header.frame_id = "orbbec_color_optical_frame"
             jp.ns = "multi_track";  jp.id = base_id + 1
             jp.type = Marker.SPHERE_LIST;  jp.action = Marker.ADD
             jp.scale.x = jp.scale.y = jp.scale.z = 0.03
@@ -462,7 +462,7 @@ class YoloSkeletonNodeOrbbec(Node):
             # Bones
             bn = Marker()
             bn.header.stamp = stamp
-            bn.header.frame_id = "camera_color_optical_frame"
+            bn.header.frame_id = "orbbec_color_optical_frame"
             bn.ns = "multi_track";  bn.id = base_id + 2
             bn.type = Marker.LINE_LIST;  bn.action = Marker.ADD
             bn.scale.x = 0.015
@@ -480,7 +480,7 @@ class YoloSkeletonNodeOrbbec(Node):
                 sh_mid = 0.5 * (pts[5] + pts[6])
                 lbl = Marker()
                 lbl.header.stamp = stamp
-                lbl.header.frame_id = "camera_color_optical_frame"
+                lbl.header.frame_id = "orbbec_color_optical_frame"
                 lbl.ns = "multi_track";  lbl.id = base_id + 3
                 lbl.type = Marker.TEXT_VIEW_FACING;  lbl.action = Marker.ADD
                 lbl.pose.position.x = float(sh_mid[0])
@@ -495,7 +495,7 @@ class YoloSkeletonNodeOrbbec(Node):
                 # Ensure label is deleted when track is no longer the target
                 lbl_del = Marker()
                 lbl_del.header.stamp = stamp
-                lbl_del.header.frame_id = "camera_color_optical_frame"
+                lbl_del.header.frame_id = "orbbec_color_optical_frame"
                 lbl_del.ns = "multi_track";  lbl_del.id = base_id + 3
                 lbl_del.action = Marker.DELETE
                 ma.markers.append(lbl_del)
