@@ -23,8 +23,7 @@ from geometry_msgs.msg import PoseStamped, Twist
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, Float32
 
-from tf2_ros import Buffer, TransformListener, TransformBroadcaster, TransformException
-from geometry_msgs.msg import TransformStamped
+from tf2_ros import Buffer, TransformListener, TransformException
 import tf2_geometry_msgs  # noqa: F401
 
 from teresa_utils.orientation import (
@@ -126,7 +125,6 @@ class WBCQPControllerNode(Node):
         # ── TF ────────────────────────────────────────────────────────
         self._tf = Buffer()
         TransformListener(self._tf, self)
-        self._tf_broadcaster = TransformBroadcaster(self)
         self._mount_x = float(p('z1_mount_x'))
         self._mount_y = float(p('z1_mount_y'))
         self._mount_z = float(p('z1_mount_z'))
@@ -158,9 +156,6 @@ class WBCQPControllerNode(Node):
 
         # ── Timer ─────────────────────────────────────────────────────
         self.create_timer(self._update_period, self._update)
-        # TF mount broadcast at 2 Hz — separate timer so it's in the
-        # buffer before _update does its TF lookups
-        self.create_timer(0.5, self._publish_mount_tf)
         self.get_logger().info('WBC QP Controller ready.')
 
     # ── Callbacks ─────────────────────────────────────────────────────
@@ -188,22 +183,7 @@ class WBCQPControllerNode(Node):
     def _cb_desired_yaw(self, msg: Float32) -> None:
         self._desired_yaw = float(msg.data)
 
-    # ── TF broadcast ───────────────────────────────────────────────────
-
-    def _publish_mount_tf(self) -> None:
-        """Publish my_spot/body → link00 so the TF tree stays connected."""
-        t = TransformStamped()
-        t.header.stamp    = self.get_clock().now().to_msg()
-        t.header.frame_id = self._body_frame
-        t.child_frame_id  = self._z1_base_frame
-        t.transform.translation.x = self._mount_x
-        t.transform.translation.y = self._mount_y
-        t.transform.translation.z = self._mount_z
-        t.transform.rotation.x = 0.0
-        t.transform.rotation.y = 0.0
-        t.transform.rotation.z = 0.0
-        t.transform.rotation.w = 1.0
-        self._tf_broadcaster.sendTransform(t)
+    # ── TF lookup ───────────────────────────────────────────────────
 
     # ── Main update ───────────────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WBC Launch — wbc_qp_controller + wbc_coordinator
+WBC Launch — wbc_qp_controller + wbc_coordinator + static TFs
 
 PREREQUISITI:
   - spot_ros2 su SpotCore (TF odom→body)
@@ -37,8 +37,21 @@ def generate_launch_description():
 
     # NOTE: ik_goal_mux is now launched by z1_control.launch.py
     # (always needed, even in standalone mode)
-    # NOTE: my_spot/body → link00 TF is published by wbc_qp_controller
-    # via TransformBroadcaster (avoids static TF tree fragmentation)
+
+    # Static TF: my_spot/body → link00 (Z1 mount, fixed offset)
+    static_tf_mount = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='z1_mount_tf',
+        arguments=[
+            LaunchConfiguration('z1_mount_x'),
+            LaunchConfiguration('z1_mount_y'),
+            LaunchConfiguration('z1_mount_z'),
+            '0', '0', '0',
+            'my_spot/body',
+            'link00',
+        ],
+    )
 
     qp_node = Node(
         package='spot_control',
@@ -63,6 +76,8 @@ def generate_launch_description():
     return LaunchDescription([
         z1_x_arg, z1_y_arg, z1_z_arg, dry_run_arg,
         LogInfo(msg=['WBC — Spot+Z1 holistic control']),
+        LogInfo(msg=['   Static TF: my_spot/body → link00']),
+        static_tf_mount,
         qp_node,
         coord_node,
     ])
