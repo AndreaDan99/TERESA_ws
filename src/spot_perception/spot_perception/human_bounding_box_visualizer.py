@@ -31,7 +31,7 @@ class HumanBoundingBoxVisualizer(Node):
     def __init__(self):
         super().__init__("human_bounding_box_visualizer")
 
-        self.declare_parameter("frame_id", "orbbec_color_optical_frame")
+        self.declare_parameter("frame_id", "camera_color_optical_frame")
         self.declare_parameter("safety_margin_body", 0.5)
         self.declare_parameter("torso_width_scale", 1.3)
         self.declare_parameter("torso_depth_scale", 1.2)
