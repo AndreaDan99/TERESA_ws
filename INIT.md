@@ -146,8 +146,16 @@ At handoff (5cm from approach_point), Spot front ~5cm from patient bbox edge. Ar
 - During return navigation, keyboard node takes over `/my_spot/cmd_vel` (no conflict: WBC disables on IDLE)
 - Displays WBC state changes from `/wbc/state`
 
+### PRE_APPROACH exits on IK_done + QP publishes mount TF
+
+- PRE_APPROACH now exits when `/ik_done` = True (arm completed look-at), not on 5s timer
+- `pre_approach_duration` parameter kept for backward compat but no longer used
+- QP controller now publishes `my_spot/body → link00` static TF at 10 Hz via `StaticTransformBroadcaster`
+- `static_tf_mount` node removed from `wbc.launch.py` — no race conditions at startup
+- `search_lock_samples` reduced 10 → 5 (faster lock, 1s instead of 2s)
+
 ### Files modified
-`wbc_coordinator.py`, `wbc_params.yaml`, `wbc_keyboard_controller.py` (new), `setup.py`
+`wbc_coordinator.py`, `wbc_qp_controller.py`, `wbc_params.yaml`, `wbc.launch.py`, `wbc_keyboard_controller.py` (new), `setup.py`
 
 ---
 
@@ -320,7 +328,7 @@ SEARCHING ──(posture=LYING & conf≥0.85 & lock: 10 samples)──► PRE_AP
 SEARCHING ──(grid complete: 3 yaw × 3 pitch visited)──► IDLE (dead-end)
 IDLE ──(/wbc/restart=True from keyboard)──► SEARCHING
 any ──(/wbc/restart=False from keyboard)──► IDLE
-PRE_APPROACH ──(5s elapsed)──► APPROACHING
+PRE_APPROACH ──(/ik_done=True, arm oriented)──► APPROACHING
 APPROACHING ──(dist<handoff_distance=5cm)──► SCANNING
 SCANNING ──(/wbc/ws_request)──► WS_EXTENSION
 WS_EXTENSION ──(/ik_done)──► SCANNING

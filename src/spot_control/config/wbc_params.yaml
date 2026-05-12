@@ -100,7 +100,7 @@ wbc_coordinator:
     search_yaw_offsets:        [0.0, 0.17, -0.17]       # [rad] center, +10°, -10°
     search_pause_per_point:    3.0                       # [s] pausa per osservare
     search_lock_confidence:    0.85                      # conf minima per fermarsi e campionare
-    search_lock_samples:       10                        # campioni da mediare prima di uscire
+    search_lock_samples:       5                         # campioni da mediare prima di uscire
 
     # PRE_APPROACH — arm pre-orientation before Spot starts walking
     pre_approach_duration: 5.0   # [s] pausa per orientare il braccio (WBC arm-only)

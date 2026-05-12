@@ -23,7 +23,7 @@ from geometry_msgs.msg import PoseStamped, Twist
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, Float32
 
-from tf2_ros import Buffer, TransformListener, TransformException
+from tf2_ros import Buffer, TransformListener, TransformException, TransformStamped, StaticTransformBroadcaster
 import tf2_geometry_msgs  # noqa: F401
 
 from teresa_utils.orientation import (
@@ -129,6 +129,16 @@ class WBCQPControllerNode(Node):
         self._mount_y = float(p('z1_mount_y'))
         self._mount_z = float(p('z1_mount_z'))
 
+        # Publish my_spot/body → link00 to keep TF tree connected
+        self._mount_tf_bc = StaticTransformBroadcaster(self)
+        self._mount_tf = TransformStamped()
+        self._mount_tf.header.frame_id = self._body_frame
+        self._mount_tf.child_frame_id  = self._z1_base_frame
+        self._mount_tf.transform.translation.x = self._mount_x
+        self._mount_tf.transform.translation.y = self._mount_y
+        self._mount_tf.transform.translation.z = self._mount_z
+        self._mount_tf.transform.rotation.w = 1.0
+
         # ── State ─────────────────────────────────────────────────────
         self._enabled        = False
         self._goal: PoseStamped | None = None
@@ -195,6 +205,10 @@ class WBCQPControllerNode(Node):
     def _update(self) -> None:
         if not self._enabled or self._goal is None or self._q_meas is None:
             return
+
+        # Keep my_spot/body → link00 alive in TF tree
+        self._mount_tf.header.stamp = self.get_clock().now().to_msg()
+        self._mount_tf_bc.sendTransform(self._mount_tf)
 
         # Common lookup time — use time 0 for "latest available transform"
 

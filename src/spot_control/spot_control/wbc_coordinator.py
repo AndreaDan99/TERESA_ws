@@ -164,7 +164,7 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('search_yaw_offsets',        [0.0])  # placeholder, overridden by YAML
         self.declare_parameter('search_pause_per_point',    3.0)    # [s] pause per grid point
         self.declare_parameter('search_lock_confidence',    0.85)   # conf to lock and sample
-        self.declare_parameter('search_lock_samples',       10)     # samples to average before exit
+        self.declare_parameter('search_lock_samples',       5)     # samples to average before exit
         self.declare_parameter('pre_approach_duration',        5.0)   # [s] arm look-at before Spot walks
 
         p = lambda n: self.get_parameter(n).value
@@ -318,6 +318,10 @@ class WBCCoordinatorNode(Node):
         if self._state == CoordState.WS_EXTENSION and msg.data:
             self._set_state(CoordState.SCANNING)
             self._set_wbc_enabled(False)
+        elif self._state == CoordState.PRE_APPROACH and msg.data:
+            self.get_logger().info('IK done → arm oriented → APPROACHING')
+            self._pub_spot_ctrl.publish(Bool(data=True))
+            self._set_state(CoordState.APPROACHING)
 
     def _cb_ws_req(self, msg: Bool) -> None:
         if self._state == CoordState.SCANNING and msg.data:
@@ -455,14 +459,7 @@ class WBCCoordinatorNode(Node):
 
     def _tick_pre_approach(self) -> None:
         self._pub_goal.publish(self._filtered_goal())
-
-        if self._pre_approach_start is not None:
-            elapsed = (self.get_clock().now() - self._pre_approach_start).nanoseconds * 1e-9
-            if elapsed >= self._pre_approach_duration:
-                self.get_logger().info(
-                    f'PRE_APPROACH done ({self._pre_approach_duration:.1f}s) → APPROACHING')
-                self._pub_spot_ctrl.publish(Bool(data=True))
-                self._set_state(CoordState.APPROACHING)
+        # exits on /ik_done via _cb_ik_done
 
     def _tick_ws_extension(self) -> None:
         # Goal published directly by z1_FSM via /wbc/ee_goal.
