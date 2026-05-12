@@ -110,6 +110,14 @@ class _QualityMonitor:
         self._latest_meas = None
         self._initialized = False
 
+    def set_target(self, target: np.ndarray, best_conf: float = 0.85) -> None:
+        self._target = target.copy()
+        self._initialized = True
+        self._best_conf = best_conf
+        self._quality = 0.0
+        self._latest_meas = target.copy()
+        self._last_conf_time = None
+
     @property
     def initialized(self) -> bool:
         return self._initialized
@@ -131,7 +139,6 @@ class WBCCoordinatorNode(Node):
         super().__init__('wbc_coordinator')
 
         # ── Parameters ────────────────────────────────────────────────
-        self.declare_parameter('orbbec_confidence_threshold',  0.5)
         self.declare_parameter('handoff_distance',            0.05)
         self.declare_parameter('odom_frame',                   'my_spot/odom')
         self.declare_parameter('body_frame',                   'my_spot/body')
@@ -158,11 +165,11 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('search_pitch_max',            0.35)   # [rad] ~20° max tilt
         self.declare_parameter('search_pitch_min',            0.087)  # [rad] ~5° min tilt
         self.declare_parameter('search_pitch_steps',          4)      # number of pitch steps
-        self.declare_parameter('search_detection_frames',     3)      # consecutive ticks to exit
+        self.declare_parameter('search_lock_confidence',      0.85)   # conf to lock and sample
+        self.declare_parameter('search_lock_samples',         10)     # samples to average before exit
         self.declare_parameter('pre_approach_duration',        5.0)   # [s] arm look-at before Spot walks
 
         p = lambda n: self.get_parameter(n).value
-        self._conf_thr        = float(p('orbbec_confidence_threshold'))
         self._handoff_dist    = float(p('handoff_distance'))
         self._odom_frame    = p('odom_frame')
         self._body_frame    = p('body_frame')
@@ -179,7 +186,8 @@ class WBCCoordinatorNode(Node):
         self._search_pitch_max      = float(p('search_pitch_max'))
         self._search_pitch_min      = float(p('search_pitch_min'))
         self._search_pitch_steps    = int(p('search_pitch_steps'))
-        self._search_detection_frames = int(p('search_detection_frames'))
+        self._search_lock_confidence = float(p('search_lock_confidence'))
+        self._search_lock_samples   = int(p('search_lock_samples'))
         self._pre_approach_duration = float(p('pre_approach_duration'))
 
         # ── Body pose publisher (height + pitch via /my_spot/body_pose) ──
@@ -210,7 +218,7 @@ class WBCCoordinatorNode(Node):
         self._ws_ext_anchor_yaw: float = 0.0            # Spot yaw at WS_EXTENSION entry
         self._search_start: rclpy.time.Time | None = None     # SEARCHING entry time
         self._pre_approach_start: rclpy.time.Time | None = None  # PRE_APPROACH entry time
-        self._search_consecutive_ok = 0       # consecutive valid detection ticks
+        self._search_lock_buffer: list | None = None  # odom positions collected during lock
         self._last_search_pitch = 0.0         # current pitch during active search
 
         # ── Sub / Pub ─────────────────────────────────────────────────
@@ -292,12 +300,14 @@ class WBCCoordinatorNode(Node):
         except TransformException:
             return
         self._approach_point_odom = goal_odom
-        z = np.array([
-            goal_odom.pose.position.x,
-            goal_odom.pose.position.y,
-            goal_odom.pose.position.z,
-        ])
-        self._quality.try_init(z, self.get_clock().now())
+        if self._state != CoordState.SEARCHING:
+            # In SEARCHING, target is set via lock + average; avoid polluting QualityMonitor.
+            z = np.array([
+                goal_odom.pose.position.x,
+                goal_odom.pose.position.y,
+                goal_odom.pose.position.z,
+            ])
+            self._quality.try_init(z, self.get_clock().now())
 
     def _cb_z1_state(self, msg: String) -> None:
         pass
@@ -342,6 +352,7 @@ class WBCCoordinatorNode(Node):
         if self._state in (CoordState.IDLE,
                             CoordState.SEARCHING,
                             CoordState.PRE_APPROACH,
+                            CoordState.APPROACHING,
                             CoordState.SCANNING,
                             CoordState.WS_EXTENSION):
             return
@@ -353,11 +364,7 @@ class WBCCoordinatorNode(Node):
                 self._set_wbc_enabled(False)
 
     def _tick_idle(self) -> None:
-        if (self._posture == 'LYING'
-                and self._confidence >= self._conf_thr
-                and self._approach_point_odom is not None):
-            self._set_state(CoordState.APPROACHING)
-            self._set_wbc_enabled(True)
+        pass  # IDLE is dead-end — restart requires external intervention
 
     def _tick_approaching(self) -> None:
         if self._approach_point_odom is None:
@@ -376,23 +383,49 @@ class WBCCoordinatorNode(Node):
             self._set_wbc_enabled(False)
 
     def _tick_searching(self) -> None:
-        detection_ok = (self._posture == 'LYING'
-                        and self._confidence >= self._conf_thr
-                        and self._approach_point_odom is not None)
+        lock_ok = (self._posture == 'LYING'
+                   and self._confidence >= self._search_lock_confidence
+                   and self._approach_point_odom is not None)
 
-        if detection_ok:
-            self._search_consecutive_ok += 1
-            if self._search_consecutive_ok >= self._search_detection_frames:
+        # Phase 1: already locked — collecting samples
+        if self._search_lock_buffer is not None:
+            if lock_ok:
+                z = np.array([
+                    self._approach_point_odom.pose.position.x,
+                    self._approach_point_odom.pose.position.y,
+                    self._approach_point_odom.pose.position.z,
+                ])
+                self._search_lock_buffer.append(z)
                 self.get_logger().info(
-                    f'Person found ({self._search_detection_frames} consecutive frames) → PRE_APPROACH')
-                self._pre_approach_start = self.get_clock().now()
-                self._set_wbc_enabled(True)
-                self._pub_spot_ctrl.publish(Bool(data=False))
-                self._set_state(CoordState.PRE_APPROACH)
-                return
-        else:
-            self._search_consecutive_ok = 0
+                    f'Lock sampling {len(self._search_lock_buffer)}/{self._search_lock_samples}',
+                    throttle_duration_sec=1.0)
+                if len(self._search_lock_buffer) >= self._search_lock_samples:
+                    target = np.mean(self._search_lock_buffer, axis=0)
+                    self._quality.set_target(target, self._search_lock_confidence)
+                    self.get_logger().info(
+                        f'Target locked: {target} ({self._search_lock_samples} samples) → PRE_APPROACH')
+                    self._pre_approach_start = self.get_clock().now()
+                    self._set_wbc_enabled(True)
+                    self._pub_spot_ctrl.publish(Bool(data=False))
+                    self._set_state(CoordState.PRE_APPROACH)
+                return  # stay frozen (no rotation)
+            else:
+                self.get_logger().info('Lock lost — resuming search')
+                self._search_lock_buffer = None
+                # fall through to rotation
 
+        # Phase 2: first lock trigger
+        if lock_ok:
+            self.get_logger().info(f'Lock acquired (conf={self._confidence:.2f}) — freezing')
+            z = np.array([
+                self._approach_point_odom.pose.position.x,
+                self._approach_point_odom.pose.position.y,
+                self._approach_point_odom.pose.position.z,
+            ])
+            self._search_lock_buffer = [z]
+            return  # frozen, no rotation
+
+        # Phase 3: active search (no lock) — rotate + pitch ramp
         if self._search_start is not None:
             elapsed = (self.get_clock().now() - self._search_start).nanoseconds * 1e-9
             if elapsed > self._search_timeout:
@@ -402,7 +435,7 @@ class WBCCoordinatorNode(Node):
                 self._set_wbc_enabled(False)
                 return
 
-            # Active search: rotate continuously, pitch ramps from min to max
+            # Pitch ramp
             step_duration = self._search_timeout / self._search_pitch_steps
             step = int(elapsed / step_duration)
             step = min(step, self._search_pitch_steps - 1)
@@ -509,7 +542,7 @@ class WBCCoordinatorNode(Node):
                 self._set_body_pose(0.0)   # ripristina altezza nominale
             if new_state == CoordState.SEARCHING:
                 self._search_start = self.get_clock().now()
-                self._search_consecutive_ok = 0
+                self._search_lock_buffer = None
                 self._last_search_pitch = self._search_pitch_min
                 self._set_body_pose(self._search_body_height, self._search_pitch_min)
             if new_state == CoordState.SCANNING:

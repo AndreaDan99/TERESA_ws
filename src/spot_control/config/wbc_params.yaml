@@ -66,8 +66,6 @@ wbc_qp_controller:
 
 wbc_coordinator:
   ros__parameters:
-    orbbec_confidence_threshold: 0.5
-
     # Handoff triggers when Spot body is within this distance of the approach_point [m].
     # approach_point is published by laying_human_detector at approach_distance in front
     # of the patient. Set handoff_distance to a small arrival tolerance (e.g. 0.3m).
@@ -92,16 +90,17 @@ wbc_coordinator:
     min_body_height:     -0.20   # limite minimo di sicurezza
     max_body_height:      0.0    # altezza nominale
 
-    # SEARCHING — active body search before approach
-    # Spot rotates continuously while varying pitch from shallow to steep.
-    # Pitch increases over time so far targets are caught early, near targets later.
+    # SEARCHING — active body search: Spot rotates while pitch ramps 5°→20°.
+    # Lock triggers when confidence ≥ search_lock_confidence, then collects
+    # search_lock_samples approach_points in odom and averages them as target.
     search_body_height:        -0.20   # [m] abbassa Spot di 20 cm per vedere il suolo
     search_timeout:            30.0    # [s] timeout ricerca prima di fallback a IDLE
     search_angular_speed:      0.15    # [rad/s] ~8.5°/s rotazione continua
     search_pitch_max:          0.35    # [rad] ~20° massima inclinazione (muso giù)
     search_pitch_min:          0.087   # [rad] ~5° minima inclinazione
     search_pitch_steps:        4       # numero step di pitch (uniformi nel tempo)
-    search_detection_frames:   3       # tick consecutivi (600ms @5Hz) per uscire
+    search_lock_confidence:    0.85    # conf minima per fermarsi e campionare
+    search_lock_samples:       10      # campioni da mediare prima di uscire
 
     # PRE_APPROACH — arm pre-orientation before Spot starts walking
     pre_approach_duration: 5.0   # [s] pausa per orientare il braccio (WBC arm-only)

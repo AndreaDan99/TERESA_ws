@@ -101,19 +101,25 @@ At handoff (5cm from approach_point), Spot front ~5cm from patient bbox edge. Ar
 
 ## Recent Changes (12 May 2026)
 
-### Active SEARCHING + body_pose fix
+### Active SEARCHING with confidence lock + body_pose fix
 
 **Before:**
 - SEARCHING passive: Spot lowered + tilted, waited motionless for detection
 - `quaternion_from_euler(pitch, 0.0, 0.0)` → pitch applied as roll (tilted sideways)
 - `body_pose` published without `cmd_vel` flush → spot_driver never applied it
+- IDLE→APPROACHING shortcut bypassed SEARCHING
 
 **After:**
-- SEARCHING active: Spot rotates continuously (0.15 rad/s) while pitch ramps 5°→20° over 4 steps (30s). Hysteresis: 3 consecutive valid detections (600ms @5Hz) before PRE_APPROACH exit.
+- SEARCHING active: Spot rotates continuously (0.15 rad/s) while pitch ramps 5°→20° over 4 steps (30s)
+- **Confidence lock**: when `confidence ≥ 0.85`, Spot freezes (stop rotation, freeze pitch) and collects 10 approach_point samples in odom
+- Target = mean of 10 high-confidence samples → `QualityMonitor.set_target()` → PRE_APPROACH
+- If confidence drops < 0.85 during sampling → lock lost, resume search
 - `quaternion_from_euler(0.0, pitch, 0.0)` → pitch on Y axis (nose-down)
 - Every `_set_body_pose()` call publishes a zero `Twist` on `/my_spot/cmd_vel` to flush body_pose params to spot_driver
 - PRE_APPROACH entry resets body_pose to (0,0) → Spot stands upright for stable approach
-- Coordinator now publishes directly to `/my_spot/cmd_vel` (no conflict: QP inactive during SEARCHING)
+- IDLE→APPROACHING shortcut **removed** — all approaches go through SEARCHING
+- `_check_lying_timeout` now excludes APPROACHING — Spot never aborts approach once committed
+- `_cb_approach` skips `QualityMonitor.try_init()` during SEARCHING (target set only via lock)
 
 ### New parameters in `wbc_params.yaml`
 | Parameter | Value | Meaning |
@@ -122,10 +128,13 @@ At handoff (5cm from approach_point), Spot front ~5cm from patient bbox edge. Ar
 | `search_pitch_max` | 0.35 rad (~20°) | Maximum nose-down tilt |
 | `search_pitch_min` | 0.087 rad (~5°) | Minimum nose-down tilt |
 | `search_pitch_steps` | 4 | Number of uniform pitch steps |
-| `search_detection_frames` | 3 | Consecutive ticks (600ms) to stable-exit |
+| `search_lock_confidence` | 0.85 | Confidence to freeze and sample |
+| `search_lock_samples` | 10 | Samples averaged as target |
 
 ### Removed parameters
 - `search_body_pitch` — replaced by dynamic pitch ramp (min→max)
+- `search_detection_frames` — replaced by confidence lock + sample count
+- `orbbec_confidence_threshold` — multiple thresholds consolidated into `search_lock_confidence`
 
 ### Files modified
 `wbc_coordinator.py`, `wbc_params.yaml`
@@ -278,21 +287,23 @@ ik_goal_mux:
 ### WBC coordinator FSM states
 
 ```
-SEARCHING ──(posture=LYING & conf≥0.5 & approach_point, 3 consec. frames)──► PRE_APPROACH
-SEARCHING ──(timeout 30s)──► IDLE (fallback)
-IDLE ──(posture=LYING & conf≥0.5 & target_odom ready)──► APPROACHING
+SEARCHING ──(posture=LYING & conf≥0.85 & lock: 10 samples in odom)──► PRE_APPROACH
+SEARCHING ──(timeout 30s)──► IDLE (dead-end, no auto-recovery)
 PRE_APPROACH ──(5s elapsed)──► APPROACHING
 APPROACHING ──(dist<handoff_distance=5cm)──► SCANNING
 SCANNING ──(/wbc/ws_request)──► WS_EXTENSION
 WS_EXTENSION ──(/ik_done)──► SCANNING
-any ──(posture≠LYING for >lying_timeout)──► IDLE
 ```
 
 **SEARCHING details:**
 - Spot abbassato -0.20m, rotazione continua 0.15 rad/s (~8.5°/s)
 - Pitch crescente in 4 step: 5°→10°→15°→20° (camera da lontano a vicino)
-- Hysteresis: 3 frame consecutivi (600ms @5Hz) per uscire a PRE_APPROACH
-- Timeout 30s → fallback a IDLE passivo
+- **Lock**: quando conf ≥ 0.85 e posture=LYING e approach_point valido, Spot si FERMA
+- Raccoglie 10 campioni approach_point in odom (2s @5Hz), media = target
+- Se conf scende < 0.85 durante lock → riprende ricerca
+- `QualityMonitor.set_target(media)` inizializza il target con best_conf=0.85
+- `_cb_approach` salta `try_init` durante SEARCHING (target viene solo dal lock)
+- Timeout 30s → IDLE (dead-end, nessuna auto-ripartenza)
 - `body_pose` flushato a ogni cambio pitch tramite Twist() su `/my_spot/cmd_vel`
 
 **PRE_APPROACH details:**
@@ -302,13 +313,14 @@ any ──(posture≠LYING for >lying_timeout)──► IDLE
 - Scaduto il timer → APPROACHING con WBC pieno (Spot cammina)
 
 **APPROACHING details:**
-- Target inizializzato: media prime 3 misure in odom
-- Target aggiornato se posture_confidence migliora ≥ confidence_margin (0.10)
+- Target già fissato dal lock in SEARCHING — `QualityMonitor.set_target` già chiamato
+- `_check_lying_timeout` **non abortisce MAI** APPROACHING — Spot raggiunge sempre il target
+- `try_best_update` può raffinare il target se confidence migliora ≥ confidence_margin (0.10)
 - Quality = max_q * (1 - posture_confidence) su `/wbc/target_uncertainty`
-- Spot naviga con `v_scale` proporzionale alla quality (mai zero)
-- Braccio look-at: orientazione stabile via min-rotation quaternion
-- Handoff a 5 cm di distanza (non basato su incertezza)
+- Spot naviga con `v_scale` proporzionale alla quality (mai zero, v_min=0.15)
 - Senza dati posture_confidence, quality cresce linearmente → Spot rallenta
+- Braccio look-at: orientazione stabile via min-rotation quaternion
+- Handoff a 5 cm di distanza (non basato su quality)
 
 **Handoff logic:** WBC master controller. Spot raggiunge target → `APPROACHING → SCANNING`, disabilita WBC, segnala Z1 FSM via `/wbc/state='SCANNING'`. Z1 FSM in WAITING attende questo segnale prima di BODY_SCANNING. In standalone mode (no WBC), body scan parte immediatamente.
 
@@ -416,7 +428,6 @@ Z → right to left
 ### Key shared parameters (keep in sync)
 
 - `workspace_safety_margin: 0.05` — in both `z1_fsm_params.yaml` and `wbc_params.yaml`, both use the same `WorkspaceChecker` class
-- `orbbec_confidence_threshold: 0.5` — in `wbc_params.yaml` and `laying_human_detector` (min_detection_confidence). Both must match.
 - `ik_goal_topic` / `ik_enable_topic` — FSM code defaults are `/z1/ik_goal_pose` and `/z1/ik_enable` (go through `ik_goal_mux`). YAML must NOT override these to `/ik_*` directly or the mux will be bypassed.
 - `home_orientation: [-0.0062, 0.4107, 0.0021, 0.9118]` — must be identical in `z1_fsm_params.yaml` and `wbc_params.yaml`
 - Body control: `/my_spot/body_pose` (Pose topic, nativo spot_driver) + `/my_spot/cmd_vel` (Twist). Il body_pose è "lazy": spot_driver salva i parametri internamente e li applica solo al prossimo cmd_vel. Il coordinator usa `_pub_cmd_vel` per pubblicare Twist() zero come flush dopo ogni `_set_body_pose()`.
