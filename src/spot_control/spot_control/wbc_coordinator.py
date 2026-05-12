@@ -408,8 +408,7 @@ class WBCCoordinatorNode(Node):
                 ])
                 self._search_lock_buffer.append(z)
                 self.get_logger().info(
-                    f'Lock: {len(self._search_lock_buffer)}/{self._search_lock_samples} samples',
-                    throttle_duration_sec=1.0)
+                    f'Lock: {len(self._search_lock_buffer)}/{self._search_lock_samples} samples')
                 if len(self._search_lock_buffer) >= self._search_lock_samples:
                     target = np.mean(self._search_lock_buffer, axis=0)
                     self._quality.set_target(target, self._search_lock_confidence)
