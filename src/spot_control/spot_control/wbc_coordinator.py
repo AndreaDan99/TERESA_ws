@@ -227,6 +227,7 @@ class WBCCoordinatorNode(Node):
         self.create_subscription(Bool,         '/ik_done',                   self._cb_ik_done,    10)
         self.create_subscription(Bool,         '/wbc/ws_request',            self._cb_ws_req,     10)
         self.create_subscription(Vector3Stamped, '/laying_human/body_axis',  self._cb_body_axis,  10)
+        self.create_subscription(Bool,           '/wbc/restart',             self._cb_restart,    10)
 
         self._pub_goal     = self.create_publisher(PoseStamped, p('wbc_goal_topic'),        10)
         self._pub_enable   = self.create_publisher(Bool,        p('wbc_enable_topic'),     10)
@@ -319,6 +320,15 @@ class WBCCoordinatorNode(Node):
         if self._state == CoordState.SCANNING and msg.data:
             self._set_state(CoordState.WS_EXTENSION)
             self._set_wbc_enabled(True)
+
+    def _cb_restart(self, msg: Bool) -> None:
+        if msg.data and self._state == CoordState.IDLE:
+            self.get_logger().info('Keyboard restart → SEARCHING')
+            self._set_state(CoordState.SEARCHING)
+        elif not msg.data and self._state not in (CoordState.IDLE,):
+            self.get_logger().info('Keyboard stop → IDLE')
+            self._set_state(CoordState.IDLE)
+            self._set_wbc_enabled(False)
 
     # ── FSM tick ──────────────────────────────────────────────────────
 

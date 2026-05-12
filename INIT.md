@@ -138,8 +138,16 @@ At handoff (5cm from approach_point), Spot front ~5cm from patient bbox edge. Ar
 - `search_detection_frames` — replaced by confidence lock + sample count
 - `orbbec_confidence_threshold` — replaced by `search_lock_confidence`
 
+### Keyboard controller + WBC restart
+
+- New node `wbc_keyboard_controller.py`: keyboard-driven Spot control with WBC integration
+- Keys: `s`=start (save pose + SEARCHING), `r`/`q`=return to start, `u`=update start pose, `c`/`a`=sit/stand
+- WBC gains `/wbc/restart` subscriber (Bool): True → IDLE→SEARCHING, False → any→IDLE
+- During return navigation, keyboard node takes over `/my_spot/cmd_vel` (no conflict: WBC disables on IDLE)
+- Displays WBC state changes from `/wbc/state`
+
 ### Files modified
-`wbc_coordinator.py`, `wbc_params.yaml`
+`wbc_coordinator.py`, `wbc_params.yaml`, `wbc_keyboard_controller.py` (new), `setup.py`
 
 ---
 
@@ -207,9 +215,28 @@ ros2 launch z1_vision z1_control.launch.py
 # 5: WBC holistic controller
 ros2 launch spot_control wbc.launch.py
 
+# 6: Keyboard controller (optional, for manual start/return/restart)
+ros2 run spot_control wbc_keyboard_node
+
 # Optional: dry-run mode (no arm movement, debug topics only)
 ros2 launch spot_control wbc.launch.py dry_run:=true
 ```
+
+### Keyboard controller keys
+
+| Key | Action |
+|-----|--------|
+| `s` | Save start pose (first press) + trigger WBC SEARCHING |
+| `r` | Stand + navigate back to start pose + realign yaw |
+| `q` | Same as `r` (restart: interrupt WBC, return to start) |
+| `u` | Update start pose to current position + yaw |
+| `c` / `a` | Sit / Stand |
+
+The keyboard node publishes to `/wbc/restart` (Bool) to control the WBC coordinator FSM:
+- `True` → WBC transitions from IDLE → SEARCHING
+- `False` → WBC transitions from any state → IDLE
+
+During return navigation, the keyboard node takes control of `/my_spot/cmd_vel` directly (no conflict: WBC disables cmd_vel on IDLE).
 
 ### Linting / tests
 
@@ -291,6 +318,8 @@ ik_goal_mux:
 ```
 SEARCHING ──(posture=LYING & conf≥0.85 & lock: 10 samples)──► PRE_APPROACH
 SEARCHING ──(grid complete: 3 yaw × 3 pitch visited)──► IDLE (dead-end)
+IDLE ──(/wbc/restart=True from keyboard)──► SEARCHING
+any ──(/wbc/restart=False from keyboard)──► IDLE
 PRE_APPROACH ──(5s elapsed)──► APPROACHING
 APPROACHING ──(dist<handoff_distance=5cm)──► SCANNING
 SCANNING ──(/wbc/ws_request)──► WS_EXTENSION
@@ -374,6 +403,7 @@ When `dry_run:=true` on WBC launch, all outputs go to debug topics:
 | `wbc_math.py` | Pure math: J_base, J_holistic, manipulability, WBC split, WBC split with yaw |
 | `ik_goal_mux.py` | Priority mux: WBC goals override Z1 FSM goals |
 | `spot_goal_navigator.py` | Spot point-to-point navigation |
+| `wbc_keyboard_controller.py` | Keyboard-driven Spot control: start/return/restart WBC via `/wbc/restart` |
 
 ### Main modules: `src/spot_perception/spot_perception/`
 

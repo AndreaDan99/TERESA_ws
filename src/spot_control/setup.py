@@ -29,6 +29,7 @@ setup(
             'spot_goal_navigator = spot_control.spot_goal_navigator:main',
             'wbc_qp_controller   = spot_control.wbc_qp_controller:main',
             'wbc_coordinator     = spot_control.wbc_coordinator:main',
+            'wbc_keyboard_node   = spot_control.wbc_keyboard_controller:main',
             'ik_goal_mux         = spot_control.ik_goal_mux:main',
         ],
     },
