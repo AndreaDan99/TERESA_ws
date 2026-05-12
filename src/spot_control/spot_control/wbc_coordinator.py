@@ -239,11 +239,9 @@ class WBCCoordinatorNode(Node):
         self.create_timer(0.2, self._tick)   # 5 Hz FSM
         self._set_state(CoordState.SEARCHING)
         self.get_logger().info(
-            '\n╔══════════════════════════════════════╗\n'
-            '║   WBC Coordinator Ready              ║\n'
-            '║   FSM: 5 Hz    | Search: 3×3 grid    ║\n'
-            '║   Lock: conf≥0.85 | Samples: 10      ║\n'
-            '╚══════════════════════════════════════╝')
+            f'WBC Coordinator ready.\n'
+            f'  FSM: 5 Hz  |  Search: 3×3 grid\n'
+            f'  Lock: conf≥{self._search_lock_confidence}  |  samples: {self._search_lock_samples}')
 
     # ── Callbacks ─────────────────────────────────────────────────────
 
@@ -410,13 +408,13 @@ class WBCCoordinatorNode(Node):
                 ])
                 self._search_lock_buffer.append(z)
                 self.get_logger().info(
-                    f'Lock sampling {len(self._search_lock_buffer)}/{self._search_lock_samples}',
+                    f'Lock: {len(self._search_lock_buffer)}/{self._search_lock_samples} samples',
                     throttle_duration_sec=1.0)
                 if len(self._search_lock_buffer) >= self._search_lock_samples:
                     target = np.mean(self._search_lock_buffer, axis=0)
                     self._quality.set_target(target, self._search_lock_confidence)
                     self.get_logger().info(
-                        f'Target locked: {target} ({self._search_lock_samples} samples) → PRE_APPROACH')
+                        f'Lock complete: {self._search_lock_samples} samples → PRE_APPROACH')
                     self._pre_approach_start = self.get_clock().now()
                     self._set_wbc_enabled(True)
                     self._pub_spot_ctrl.publish(Bool(data=False))
@@ -429,7 +427,7 @@ class WBCCoordinatorNode(Node):
 
         # Phase 2: first lock trigger
         if lock_ok:
-            self.get_logger().info(f'Lock acquired (conf={self._confidence:.2f}) — freezing')
+            self.get_logger().info(f'Lock: conf={self._confidence:.2f} — freezing')
             z = np.array([
                 self._approach_point_odom.pose.position.x,
                 self._approach_point_odom.pose.position.y,
@@ -539,10 +537,7 @@ class WBCCoordinatorNode(Node):
 
     def _set_state(self, new_state: str) -> None:
         if new_state != self._state:
-            self.get_logger().info(
-                f'╔══ WBC FSM ══╗\n'
-                f'║  {self._state:<12} → {new_state:<12} ║\n'
-                f'╚══════════════╝')
+            self.get_logger().info(f'WBC FSM: {self._state} → {new_state}')
             if new_state == CoordState.IDLE:
                 self._quality.reset()
                 self._set_body_pose(0.0)   # ripristina altezza nominale

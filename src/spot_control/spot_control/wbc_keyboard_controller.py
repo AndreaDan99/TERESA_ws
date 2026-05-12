@@ -87,16 +87,12 @@ class WBCKeyboardControllerNode(Node):
         self._kb_thread.start()
 
         self.get_logger().info(
-            '\n╔══════════════════════════════════════╗\n'
-            '║   WBC Keyboard Controller Ready     ║\n'
-            '╠════════╦═════════════════════════════╣\n'
-            '║   s    ║ start  → save pose + WBC SEARCHING\n'
-            '║   r    ║ return → back to start + realign\n'
-            '║   q    ║ restart → same as return\n'
-            '║   u    ║ update start pose\n'
-            '║   c    ║ sit\n'
-            '║   a    ║ stand\n'
-            '╚════════╩═════════════════════════════╝')
+            f'WBC Keyboard Controller ready.\n'
+            f'  "s" = start  → save pose + WBC SEARCHING\n'
+            f'  "r" = return → back to start + realign yaw\n'
+            f'  "q" = restart → same as return\n'
+            f'  "u" = update → overwrite start pose\n'
+            f'  "c" = sit    | "a" = stand')
 
     def _cb_wbc_state(self, msg: String) -> None:
         self.get_logger().info(f'WBC state → {msg.data}')
