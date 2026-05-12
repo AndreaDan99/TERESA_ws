@@ -29,7 +29,7 @@ from rclpy.node import Node
 from rclpy.duration import Duration
 import rclpy.time
 
-from geometry_msgs.msg import PoseStamped, Vector3Stamped, Pose
+from geometry_msgs.msg import PoseStamped, Twist, Vector3Stamped, Pose
 from std_msgs.msg import Bool, String, Float32
 from tf2_ros import Buffer, TransformListener, TransformException
 import tf2_geometry_msgs  # noqa: F401
@@ -153,8 +153,12 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('min_body_height',             -0.20)
         self.declare_parameter('max_body_height',              0.0)
         self.declare_parameter('search_body_height',          -0.20)  # [m] body lowered during search
-        self.declare_parameter('search_body_pitch',           0.26)   # [rad] ~15° nose-down during search
         self.declare_parameter('search_timeout',              30.0)   # [s] fallback to IDLE if no detection
+        self.declare_parameter('search_angular_speed',        0.15)   # [rad/s] continuous rotation
+        self.declare_parameter('search_pitch_max',            0.35)   # [rad] ~20° max tilt
+        self.declare_parameter('search_pitch_min',            0.087)  # [rad] ~5° min tilt
+        self.declare_parameter('search_pitch_steps',          4)      # number of pitch steps
+        self.declare_parameter('search_detection_frames',     3)      # consecutive ticks to exit
         self.declare_parameter('pre_approach_duration',        5.0)   # [s] arm look-at before Spot walks
 
         p = lambda n: self.get_parameter(n).value
@@ -170,12 +174,17 @@ class WBCCoordinatorNode(Node):
         self._min_body_height     = float(p('min_body_height'))
         self._max_body_height     = float(p('max_body_height'))
         self._search_body_height    = float(p('search_body_height'))
-        self._search_body_pitch     = float(p('search_body_pitch'))
         self._search_timeout        = float(p('search_timeout'))
+        self._search_angular_speed  = float(p('search_angular_speed'))
+        self._search_pitch_max      = float(p('search_pitch_max'))
+        self._search_pitch_min      = float(p('search_pitch_min'))
+        self._search_pitch_steps    = int(p('search_pitch_steps'))
+        self._search_detection_frames = int(p('search_detection_frames'))
         self._pre_approach_duration = float(p('pre_approach_duration'))
 
         # ── Body pose publisher (height + pitch via /my_spot/body_pose) ──
         self._pub_body_pose = self.create_publisher(Pose, '/my_spot/body_pose', 10)
+        self._pub_cmd_vel = self.create_publisher(Twist, '/my_spot/cmd_vel', 10)
 
         # ── Approach point quality monitor ────────────────────────────
         self._quality = _QualityMonitor(
@@ -191,7 +200,7 @@ class WBCCoordinatorNode(Node):
         TransformListener(self._tf, self)
 
         # ── State ─────────────────────────────────────────────────────
-        self._state                  = CoordState.SEARCHING
+        self._state                  = None   # set via _set_state below
         self._posture                = 'UNKNOWN'
         self._confidence             = 0.0
         self._approach_point_odom: PoseStamped | None = None  # odom-frame (world-fixed)
@@ -201,6 +210,8 @@ class WBCCoordinatorNode(Node):
         self._ws_ext_anchor_yaw: float = 0.0            # Spot yaw at WS_EXTENSION entry
         self._search_start: rclpy.time.Time | None = None     # SEARCHING entry time
         self._pre_approach_start: rclpy.time.Time | None = None  # PRE_APPROACH entry time
+        self._search_consecutive_ok = 0       # consecutive valid detection ticks
+        self._last_search_pitch = 0.0         # current pitch during active search
 
         # ── Sub / Pub ─────────────────────────────────────────────────
         self.create_subscription(String,       '/human_pose/posture',        self._cb_posture,    10)
@@ -219,6 +230,7 @@ class WBCCoordinatorNode(Node):
         self._pub_spot_ctrl = self.create_publisher(Bool,       '/wbc/spot_control',       10)
 
         self.create_timer(0.2, self._tick)   # 5 Hz FSM
+        self._set_state(CoordState.SEARCHING)
         self.get_logger().info('WBC Coordinator ready.')
 
     # ── Callbacks ─────────────────────────────────────────────────────
@@ -364,15 +376,22 @@ class WBCCoordinatorNode(Node):
             self._set_wbc_enabled(False)
 
     def _tick_searching(self) -> None:
-        if (self._posture == 'LYING'
-                and self._confidence >= self._conf_thr
-                and self._approach_point_odom is not None):
-            self.get_logger().info('Person found → PRE_APPROACH')
-            self._pre_approach_start = self.get_clock().now()
-            self._set_wbc_enabled(True)
-            self._pub_spot_ctrl.publish(Bool(data=False))
-            self._set_state(CoordState.PRE_APPROACH)
-            return
+        detection_ok = (self._posture == 'LYING'
+                        and self._confidence >= self._conf_thr
+                        and self._approach_point_odom is not None)
+
+        if detection_ok:
+            self._search_consecutive_ok += 1
+            if self._search_consecutive_ok >= self._search_detection_frames:
+                self.get_logger().info(
+                    f'Person found ({self._search_detection_frames} consecutive frames) → PRE_APPROACH')
+                self._pre_approach_start = self.get_clock().now()
+                self._set_wbc_enabled(True)
+                self._pub_spot_ctrl.publish(Bool(data=False))
+                self._set_state(CoordState.PRE_APPROACH)
+                return
+        else:
+            self._search_consecutive_ok = 0
 
         if self._search_start is not None:
             elapsed = (self.get_clock().now() - self._search_start).nanoseconds * 1e-9
@@ -381,6 +400,25 @@ class WBCCoordinatorNode(Node):
                     f'Search timeout ({self._search_timeout:.0f}s) → IDLE')
                 self._set_state(CoordState.IDLE)
                 self._set_wbc_enabled(False)
+                return
+
+            # Active search: rotate continuously, pitch ramps from min to max
+            step_duration = self._search_timeout / self._search_pitch_steps
+            step = int(elapsed / step_duration)
+            step = min(step, self._search_pitch_steps - 1)
+            if self._search_pitch_steps > 1:
+                frac = step / (self._search_pitch_steps - 1)
+            else:
+                frac = 0.0
+            pitch = self._search_pitch_min + frac * (self._search_pitch_max - self._search_pitch_min)
+
+            if abs(pitch - self._last_search_pitch) > 0.001:
+                self._last_search_pitch = pitch
+                self._set_body_pose(self._search_body_height, pitch)
+
+            twist = Twist()
+            twist.angular.z = self._search_angular_speed
+            self._pub_cmd_vel.publish(twist)
 
     def _tick_pre_approach(self) -> None:
         self._pub_goal.publish(self._filtered_goal())
@@ -471,9 +509,13 @@ class WBCCoordinatorNode(Node):
                 self._set_body_pose(0.0)   # ripristina altezza nominale
             if new_state == CoordState.SEARCHING:
                 self._search_start = self.get_clock().now()
-                self._set_body_pose(self._search_body_height, self._search_body_pitch)
+                self._search_consecutive_ok = 0
+                self._last_search_pitch = self._search_pitch_min
+                self._set_body_pose(self._search_body_height, self._search_pitch_min)
             if new_state == CoordState.SCANNING:
                 self._set_body_pose(self._handoff_body_height)
+            if new_state == CoordState.PRE_APPROACH:
+                self._set_body_pose(0.0, 0.0)
             if new_state == CoordState.WS_EXTENSION:
                 self._save_ws_ext_anchor()
             self._state = new_state
@@ -500,7 +542,7 @@ class WBCCoordinatorNode(Node):
 
     def _set_body_pose(self, height: float, pitch: float = 0.0) -> None:
         from tf_transformations import quaternion_from_euler
-        q = quaternion_from_euler(pitch, 0.0, 0.0)
+        q = quaternion_from_euler(0.0, pitch, 0.0)
         height_clamped = float(np.clip(height, self._min_body_height, self._max_body_height))
         pose = Pose()
         pose.position.z = height_clamped
@@ -509,6 +551,7 @@ class WBCCoordinatorNode(Node):
         pose.orientation.z = q[2]
         pose.orientation.w = q[3]
         self._pub_body_pose.publish(pose)
+        self._pub_cmd_vel.publish(Twist())
         self.get_logger().info(
             f'body_pose → height={height_clamped:.2f}m pitch={math.degrees(pitch):.1f}°')
 

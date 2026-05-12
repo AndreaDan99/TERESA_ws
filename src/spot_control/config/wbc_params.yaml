@@ -93,9 +93,15 @@ wbc_coordinator:
     max_body_height:      0.0    # altezza nominale
 
     # SEARCHING — active body search before approach
-    search_body_height:  -0.20   # [m] abbassa Spot di 20 cm per vedere il suolo
-    search_body_pitch:    0.26   # [rad] ~15° tilt in avanti (nose-down)
-    search_timeout:       30.0   # [s] timeout ricerca prima di fallback a IDLE
+    # Spot rotates continuously while varying pitch from shallow to steep.
+    # Pitch increases over time so far targets are caught early, near targets later.
+    search_body_height:        -0.20   # [m] abbassa Spot di 20 cm per vedere il suolo
+    search_timeout:            30.0    # [s] timeout ricerca prima di fallback a IDLE
+    search_angular_speed:      0.15    # [rad/s] ~8.5°/s rotazione continua
+    search_pitch_max:          0.35    # [rad] ~20° massima inclinazione (muso giù)
+    search_pitch_min:          0.087   # [rad] ~5° minima inclinazione
+    search_pitch_steps:        4       # numero step di pitch (uniformi nel tempo)
+    search_detection_frames:   3       # tick consecutivi (600ms @5Hz) per uscire
 
     # PRE_APPROACH — arm pre-orientation before Spot starts walking
     pre_approach_duration: 5.0   # [s] pausa per orientare il braccio (WBC arm-only)
