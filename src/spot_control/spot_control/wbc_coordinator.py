@@ -160,13 +160,11 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('min_body_height',             -0.20)
         self.declare_parameter('max_body_height',              0.0)
         self.declare_parameter('search_body_height',          -0.20)  # [m] body lowered during search
-        self.declare_parameter('search_timeout',              30.0)   # [s] fallback to IDLE if no detection
-        self.declare_parameter('search_angular_speed',        0.15)   # [rad/s] continuous rotation
-        self.declare_parameter('search_pitch_max',            0.35)   # [rad] ~20° max tilt
-        self.declare_parameter('search_pitch_min',            0.087)  # [rad] ~5° min tilt
-        self.declare_parameter('search_pitch_steps',          4)      # number of pitch steps
-        self.declare_parameter('search_lock_confidence',      0.85)   # conf to lock and sample
-        self.declare_parameter('search_lock_samples',         10)     # samples to average before exit
+        self.declare_parameter('search_pitch_angles',       [0.0])  # placeholder, overridden by YAML
+        self.declare_parameter('search_yaw_offsets',        [0.0])  # placeholder, overridden by YAML
+        self.declare_parameter('search_pause_per_point',    3.0)    # [s] pause per grid point
+        self.declare_parameter('search_lock_confidence',    0.85)   # conf to lock and sample
+        self.declare_parameter('search_lock_samples',       10)     # samples to average before exit
         self.declare_parameter('pre_approach_duration',        5.0)   # [s] arm look-at before Spot walks
 
         p = lambda n: self.get_parameter(n).value
@@ -181,11 +179,9 @@ class WBCCoordinatorNode(Node):
         self._min_body_height     = float(p('min_body_height'))
         self._max_body_height     = float(p('max_body_height'))
         self._search_body_height    = float(p('search_body_height'))
-        self._search_timeout        = float(p('search_timeout'))
-        self._search_angular_speed  = float(p('search_angular_speed'))
-        self._search_pitch_max      = float(p('search_pitch_max'))
-        self._search_pitch_min      = float(p('search_pitch_min'))
-        self._search_pitch_steps    = int(p('search_pitch_steps'))
+        self._search_pitch_angles   = self._read_float_array('search_pitch_angles')
+        self._search_yaw_offsets    = self._read_float_array('search_yaw_offsets')
+        self._search_pause_per_point = float(p('search_pause_per_point'))
         self._search_lock_confidence = float(p('search_lock_confidence'))
         self._search_lock_samples   = int(p('search_lock_samples'))
         self._pre_approach_duration = float(p('pre_approach_duration'))
@@ -219,7 +215,9 @@ class WBCCoordinatorNode(Node):
         self._search_start: rclpy.time.Time | None = None     # SEARCHING entry time
         self._pre_approach_start: rclpy.time.Time | None = None  # PRE_APPROACH entry time
         self._search_lock_buffer: list | None = None  # odom positions collected during lock
-        self._last_search_pitch = 0.0         # current pitch during active search
+        self._search_timeline: list = []         # grid timeline: list of (t0, t1, pitch, yaw)
+        self._search_total_duration: float = 0.0  # total grid duration [s]
+        self._last_search_pitch: float = 0.0      # avoid redundant body_pose publishes
 
         # ── Sub / Pub ─────────────────────────────────────────────────
         self.create_subscription(String,       '/human_pose/posture',        self._cb_posture,    10)
@@ -425,33 +423,23 @@ class WBCCoordinatorNode(Node):
             self._search_lock_buffer = [z]
             return  # frozen, no rotation
 
-        # Phase 3: active search (no lock) — rotate + pitch ramp
+        # Phase 3: grid search (no lock) — cycle through pitch×yaw points
         if self._search_start is not None:
             elapsed = (self.get_clock().now() - self._search_start).nanoseconds * 1e-9
-            if elapsed > self._search_timeout:
-                self.get_logger().warn(
-                    f'Search timeout ({self._search_timeout:.0f}s) → IDLE')
+
+            if elapsed >= self._search_total_duration:
+                self.get_logger().warn('Search grid complete → IDLE')
                 self._set_state(CoordState.IDLE)
                 self._set_wbc_enabled(False)
                 return
 
-            # Pitch ramp
-            step_duration = self._search_timeout / self._search_pitch_steps
-            step = int(elapsed / step_duration)
-            step = min(step, self._search_pitch_steps - 1)
-            if self._search_pitch_steps > 1:
-                frac = step / (self._search_pitch_steps - 1)
-            else:
-                frac = 0.0
-            pitch = self._search_pitch_min + frac * (self._search_pitch_max - self._search_pitch_min)
-
-            if abs(pitch - self._last_search_pitch) > 0.001:
-                self._last_search_pitch = pitch
-                self._set_body_pose(self._search_body_height, pitch)
-
-            twist = Twist()
-            twist.angular.z = self._search_angular_speed
-            self._pub_cmd_vel.publish(twist)
+            # Find current grid point
+            for t0, t1, pitch, yaw in self._search_timeline:
+                if t0 <= elapsed < t1:
+                    if abs(pitch - self._last_search_pitch) > 0.001:
+                        self._last_search_pitch = pitch
+                        self._set_body_pose(self._search_body_height, pitch, yaw)
+                    break
 
     def _tick_pre_approach(self) -> None:
         self._pub_goal.publish(self._filtered_goal())
@@ -543,8 +531,12 @@ class WBCCoordinatorNode(Node):
             if new_state == CoordState.SEARCHING:
                 self._search_start = self.get_clock().now()
                 self._search_lock_buffer = None
-                self._last_search_pitch = self._search_pitch_min
-                self._set_body_pose(self._search_body_height, self._search_pitch_min)
+                self._search_timeline = self._build_search_timeline()
+                self._search_total_duration = (self._search_timeline[-1][1]
+                                               if self._search_timeline else 0.0)
+                entry = self._search_timeline[0]
+                self._last_search_pitch = entry[2]
+                self._set_body_pose(self._search_body_height, entry[2], entry[3])
             if new_state == CoordState.SCANNING:
                 self._set_body_pose(self._handoff_body_height)
             if new_state == CoordState.PRE_APPROACH:
@@ -573,9 +565,9 @@ class WBCCoordinatorNode(Node):
             self._ws_ext_anchor = None
             self.get_logger().warn('WS_EXT: could not save anchor (TF unavailable)')
 
-    def _set_body_pose(self, height: float, pitch: float = 0.0) -> None:
+    def _set_body_pose(self, height: float, pitch: float = 0.0, yaw: float = 0.0) -> None:
         from tf_transformations import quaternion_from_euler
-        q = quaternion_from_euler(0.0, pitch, 0.0)
+        q = quaternion_from_euler(0.0, pitch, yaw)
         height_clamped = float(np.clip(height, self._min_body_height, self._max_body_height))
         pose = Pose()
         pose.position.z = height_clamped
@@ -587,6 +579,39 @@ class WBCCoordinatorNode(Node):
         self._pub_cmd_vel.publish(Twist())
         self.get_logger().info(
             f'body_pose → height={height_clamped:.2f}m pitch={math.degrees(pitch):.1f}°')
+
+    def _read_float_array(self, param_name: str) -> list:
+        val = self.get_parameter(param_name).value
+        if isinstance(val, list):
+            return [float(v) for v in val]
+        return [float(val)]
+
+    def _build_search_timeline(self) -> list:
+        """Build timeline as list of (t_start, t_end, pitch, yaw).
+
+        Entry: SEARCHING just entered. Capture current Spot yaw as reference,
+        then build grid: for each yaw_offset, cycle through pitch angles.
+        Each point: pause = search_pause_per_point [s].
+        Returns timeline (may be empty if no params), sorted by t_start.
+        """
+        try:
+            tf = self._tf.lookup_transform(
+                self._odom_frame, self._body_frame,
+                self.get_clock().now(), timeout=Duration(seconds=1.0))
+            ref_yaw = _yaw_from_quat(tf.transform.rotation)
+        except TransformException:
+            ref_yaw = 0.0
+            self.get_logger().warn('SEARCH: could not get current yaw, using 0')
+
+        timeline = []
+        t = 0.0
+        pause = self._search_pause_per_point
+        for yaw_off in self._search_yaw_offsets:
+            target_yaw = normalize_angle(ref_yaw + yaw_off)
+            for pitch in self._search_pitch_angles:
+                timeline.append((t, t + pause, pitch, target_yaw))
+                t += pause
+        return timeline
 
     def _set_wbc_enabled(self, enabled: bool) -> None:
         msg = Bool(); msg.data = enabled

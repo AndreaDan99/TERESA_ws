@@ -101,40 +101,42 @@ At handoff (5cm from approach_point), Spot front ~5cm from patient bbox edge. Ar
 
 ## Recent Changes (12 May 2026)
 
-### Active SEARCHING with confidence lock + body_pose fix
+### SEARCHING grid search + confidence lock + body_pose fix
 
 **Before:**
-- SEARCHING passive: Spot lowered + tilted, waited motionless for detection
+- SEARCHING continuous rotation with pitch ramp
 - `quaternion_from_euler(pitch, 0.0, 0.0)` → pitch applied as roll (tilted sideways)
 - `body_pose` published without `cmd_vel` flush → spot_driver never applied it
 - IDLE→APPROACHING shortcut bypassed SEARCHING
 
 **After:**
-- SEARCHING active: Spot rotates continuously (0.15 rad/s) while pitch ramps 5°→20° over 4 steps (30s)
-- **Confidence lock**: when `confidence ≥ 0.85`, Spot freezes (stop rotation, freeze pitch) and collects 10 approach_point samples in odom
-- Target = mean of 10 high-confidence samples → `QualityMonitor.set_target()` → PRE_APPROACH
-- If confidence drops < 0.85 during sampling → lock lost, resume search
-- `quaternion_from_euler(0.0, pitch, 0.0)` → pitch on Y axis (nose-down)
-- Every `_set_body_pose()` call publishes a zero `Twist` on `/my_spot/cmd_vel` to flush body_pose params to spot_driver
+- SEARCHING: **3×3 grid** — 3 yaw positions (center, +10°, -10°) × 3 pitch angles (5°, 10°, 15°).
+  At each point Spot pauses 3s for the camera to observe, then moves to the next via `body_pose`.
+  Grid completes after all 9 points (~27s) → IDLE.
+- **Confidence lock**: when `confidence ≥ 0.85`, Spot freezes (no pose changes) and collects 10 approach_point samples in odom (~2s @5Hz). Target = mean of 10 samples → `QualityMonitor.set_target()` → PRE_APPROACH.
+  If confidence drops < 0.85 during sampling → lock lost, resume grid from current point.
+- `quaternion_from_euler(0.0, pitch, yaw)` → pitch on Y axis (nose-down), yaw on Z (orientation)
+- Every `_set_body_pose()` call publishes a zero `Twist` on `/my_spot/cmd_vel` to flush to spot_driver
 - PRE_APPROACH entry resets body_pose to (0,0) → Spot stands upright for stable approach
 - IDLE→APPROACHING shortcut **removed** — all approaches go through SEARCHING
 - `_check_lying_timeout` now excludes APPROACHING — Spot never aborts approach once committed
 - `_cb_approach` skips `QualityMonitor.try_init()` during SEARCHING (target set only via lock)
 
-### New parameters in `wbc_params.yaml`
+### New parameters
 | Parameter | Value | Meaning |
 |-----------|-------|---------|
-| `search_angular_speed` | 0.15 rad/s | Continuous rotation during search |
-| `search_pitch_max` | 0.35 rad (~20°) | Maximum nose-down tilt |
-| `search_pitch_min` | 0.087 rad (~5°) | Minimum nose-down tilt |
-| `search_pitch_steps` | 4 | Number of uniform pitch steps |
+| `search_pitch_angles` | [0.087, 0.17, 0.26] | 5°, 10°, 15° pitch grid |
+| `search_yaw_offsets` | [0.0, 0.17, -0.17] | center, +10°, -10° yaw grid |
+| `search_pause_per_point` | 3.0s | Pause per grid point |
 | `search_lock_confidence` | 0.85 | Confidence to freeze and sample |
 | `search_lock_samples` | 10 | Samples averaged as target |
 
 ### Removed parameters
-- `search_body_pitch` — replaced by dynamic pitch ramp (min→max)
+- `search_timeout` — grid completes when all points visited
+- `search_angular_speed` — no continuous rotation, yaw via body_pose
+- `search_pitch_max`, `search_pitch_min`, `search_pitch_steps` — replaced by explicit pitch array
 - `search_detection_frames` — replaced by confidence lock + sample count
-- `orbbec_confidence_threshold` — multiple thresholds consolidated into `search_lock_confidence`
+- `orbbec_confidence_threshold` — replaced by `search_lock_confidence`
 
 ### Files modified
 `wbc_coordinator.py`, `wbc_params.yaml`
@@ -287,8 +289,8 @@ ik_goal_mux:
 ### WBC coordinator FSM states
 
 ```
-SEARCHING ──(posture=LYING & conf≥0.85 & lock: 10 samples in odom)──► PRE_APPROACH
-SEARCHING ──(timeout 30s)──► IDLE (dead-end, no auto-recovery)
+SEARCHING ──(posture=LYING & conf≥0.85 & lock: 10 samples)──► PRE_APPROACH
+SEARCHING ──(grid complete: 3 yaw × 3 pitch visited)──► IDLE (dead-end)
 PRE_APPROACH ──(5s elapsed)──► APPROACHING
 APPROACHING ──(dist<handoff_distance=5cm)──► SCANNING
 SCANNING ──(/wbc/ws_request)──► WS_EXTENSION
@@ -296,15 +298,13 @@ WS_EXTENSION ──(/ik_done)──► SCANNING
 ```
 
 **SEARCHING details:**
-- Spot abbassato -0.20m, rotazione continua 0.15 rad/s (~8.5°/s)
-- Pitch crescente in 4 step: 5°→10°→15°→20° (camera da lontano a vicino)
-- **Lock**: quando conf ≥ 0.85 e posture=LYING e approach_point valido, Spot si FERMA
-- Raccoglie 10 campioni approach_point in odom (2s @5Hz), media = target
-- Se conf scende < 0.85 durante lock → riprende ricerca
-- `QualityMonitor.set_target(media)` inizializza il target con best_conf=0.85
+- Griglia 3×3: 3 yaw (center, +10°, -10°) × 3 pitch (5°, 10°, 15°)
+- A ogni punto griglia: `body_pose(height=-0.20, pitch, yaw)` + `Twist()` flush, poi pausa 3s
+- Yaw capture: all'ingresso SEARCHING, TF `body→odom` fornisce lo yaw di riferimento
+- **Lock**: quando conf ≥ 0.85 → Spot FREEZE (nessun cambio body_pose), raccoglie 10 sample, media → `QualityMonitor.set_target()` → PRE_APPROACH
+- Se conf scende < 0.85 durante lock → riprende griglia dal punto corrente
 - `_cb_approach` salta `try_init` durante SEARCHING (target viene solo dal lock)
-- Timeout 30s → IDLE (dead-end, nessuna auto-ripartenza)
-- `body_pose` flushato a ogni cambio pitch tramite Twist() su `/my_spot/cmd_vel`
+- Griglia completata (~27s) → IDLE (dead-end)
 
 **PRE_APPROACH details:**
 - Spot si RADDRIZZA (body_pose → 0,0), WBC abilitato

@@ -90,17 +90,17 @@ wbc_coordinator:
     min_body_height:     -0.20   # limite minimo di sicurezza
     max_body_height:      0.0    # altezza nominale
 
-    # SEARCHING — active body search: Spot rotates while pitch ramps 5°→20°.
+    # SEARCHING — grid search (3 yaw positions × 3 pitch angles).
+    # Spot cycles through pitch at each yaw position, pausing per point.
     # Lock triggers when confidence ≥ search_lock_confidence, then collects
-    # search_lock_samples approach_points in odom and averages them as target.
-    search_body_height:        -0.20   # [m] abbassa Spot di 20 cm per vedere il suolo
-    search_timeout:            30.0    # [s] timeout ricerca prima di fallback a IDLE
-    search_angular_speed:      0.15    # [rad/s] ~8.5°/s rotazione continua
-    search_pitch_max:          0.35    # [rad] ~20° massima inclinazione (muso giù)
-    search_pitch_min:          0.087   # [rad] ~5° minima inclinazione
-    search_pitch_steps:        4       # numero step di pitch (uniformi nel tempo)
-    search_lock_confidence:    0.85    # conf minima per fermarsi e campionare
-    search_lock_samples:       10      # campioni da mediare prima di uscire
+    # search_lock_samples approach_points and averages them as target.
+    # Grid completes when all points visited → IDLE.
+    search_body_height:        -0.20     # [m] abbassa Spot per vedere il suolo
+    search_pitch_angles:       [0.087, 0.17, 0.26]      # [rad] 5°, 10°, 15°
+    search_yaw_offsets:        [0.0, 0.17, -0.17]       # [rad] center, +10°, -10°
+    search_pause_per_point:    3.0                       # [s] pausa per osservare
+    search_lock_confidence:    0.85                      # conf minima per fermarsi e campionare
+    search_lock_samples:       10                        # campioni da mediare prima di uscire
 
     # PRE_APPROACH — arm pre-orientation before Spot starts walking
     pre_approach_duration: 5.0   # [s] pausa per orientare il braccio (WBC arm-only)
