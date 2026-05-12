@@ -238,7 +238,12 @@ class WBCCoordinatorNode(Node):
 
         self.create_timer(0.2, self._tick)   # 5 Hz FSM
         self._set_state(CoordState.SEARCHING)
-        self.get_logger().info('WBC Coordinator ready.')
+        self.get_logger().info(
+            '\n╔══════════════════════════════════════╗\n'
+            '║   WBC Coordinator Ready              ║\n'
+            '║   FSM: 5 Hz    | Search: 3×3 grid    ║\n'
+            '║   Lock: conf≥0.85 | Samples: 10      ║\n'
+            '╚══════════════════════════════════════╝')
 
     # ── Callbacks ─────────────────────────────────────────────────────
 
@@ -534,7 +539,10 @@ class WBCCoordinatorNode(Node):
 
     def _set_state(self, new_state: str) -> None:
         if new_state != self._state:
-            self.get_logger().info(f'WBC FSM: {self._state} → {new_state}')
+            self.get_logger().info(
+                f'╔══ WBC FSM ══╗\n'
+                f'║  {self._state:<12} → {new_state:<12} ║\n'
+                f'╚══════════════╝')
             if new_state == CoordState.IDLE:
                 self._quality.reset()
                 self._set_body_pose(0.0)   # ripristina altezza nominale
@@ -588,7 +596,7 @@ class WBCCoordinatorNode(Node):
         self._pub_body_pose.publish(pose)
         self._pub_cmd_vel.publish(Twist())
         self.get_logger().info(
-            f'body_pose → height={height_clamped:.2f}m pitch={math.degrees(pitch):.1f}°')
+            f'body_pose → height={height_clamped:.2f}m  pitch={math.degrees(pitch):.1f}°  yaw={math.degrees(yaw):.1f}°')
 
     def _read_float_array(self, param_name: str) -> list:
         val = self.get_parameter(param_name).value
