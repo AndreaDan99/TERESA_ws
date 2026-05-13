@@ -108,8 +108,6 @@ set(COMMON_LIBRARIES
     Threads::Threads
     -lrt
     -ldw
-    -lssl
-    -lcrypto
     yaml-cpp
 )
 if(USE_RK_HW_DECODER)
@@ -170,7 +168,7 @@ endif()
 macro(add_orbbec_executable TARGET SOURCE)
     add_executable(${TARGET} ${SOURCE})
     target_include_directories(${TARGET} PUBLIC ${COMMON_INCLUDE_DIRS})
-    target_link_libraries(${TARGET} ${COMMON_LIBRARIES} ${PROJECT_NAME})
+    target_link_libraries(${TARGET} ${PROJECT_NAME} ${COMMON_LIBRARIES} ssl crypto)
     ament_target_dependencies(${TARGET} ${dependencies})
 endmacro()
 
@@ -179,7 +177,7 @@ add_library(${PROJECT_NAME} SHARED ${SOURCE_FILES})
 
 ament_target_dependencies(${PROJECT_NAME} ${dependencies})
 target_include_directories(${PROJECT_NAME} PUBLIC ${COMMON_INCLUDE_DIRS})
-target_link_libraries(${PROJECT_NAME} ${COMMON_LIBRARIES})
+target_link_libraries(${PROJECT_NAME} ${COMMON_LIBRARIES} ssl crypto)
 
 rclcpp_components_register_node(
     ${PROJECT_NAME} PLUGIN "orbbec_camera::OBCameraNodeDriver" EXECUTABLE orbbec_camera_node
