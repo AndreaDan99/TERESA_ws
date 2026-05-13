@@ -13,7 +13,7 @@
   <depend>visualization_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>tf2_geometry_msgs</depend>
-  <depend>spot_msgs</depend>
+
   <depend>z1_vision</depend>
   <depend>teresa_utils</depend>
 

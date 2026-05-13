@@ -11,7 +11,7 @@ import rclpy
 import rclpy.duration
 import rclpy.time
 from rclpy.node import Node
-from geometry_msgs.msg import PoseStamped, Twist
+from geometry_msgs.msg import Pose, PoseStamped, Twist
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformListener, TransformException
 import tf2_geometry_msgs  # noqa: F401
@@ -90,15 +90,7 @@ class SpotGoalNavigatorNode(Node):
         self._sit_client   = self.create_client(Trigger, '/my_spot/sit')
         self._stand_client = self.create_client(Trigger, '/my_spot/stand')
 
-        # SetStandHeight per altezza intermedia
-        try:
-            from spot_msgs.srv import SetStandHeight
-            self._height_client = self.create_client(SetStandHeight, '/my_spot/set_stand_height')
-            self._SetStandHeight = SetStandHeight
-        except ImportError:
-            self._height_client = None
-            self._SetStandHeight = None
-            self.get_logger().warn('spot_msgs non trovato — tasto h disabilitato')
+        self._pub_body_pose = self.create_publisher(Pose, '/my_spot/body_pose', 10)
 
         self._state: NavState                 = NavState.IDLE
         self._latest_goal: PoseStamped | None = None
@@ -146,7 +138,7 @@ class SpotGoalNavigatorNode(Node):
                 elif ch == 'b':
                     self._on_return_key()
                 elif ch == 'h':
-                    self._set_height(self._p.crouch_height)
+                    self._set_body_pose(self._p.crouch_height)
                 elif ch == 'c':
                     self._call_trigger(self._sit_client, 'Sit')
                 elif ch == 'a':
@@ -288,7 +280,7 @@ class SpotGoalNavigatorNode(Node):
                 self._cmd_pub.publish(Twist())
                 if not is_ret:
                     self.get_logger().info('Arrivato — abbasso Spot a metà altezza')
-                    self._set_height(self._p.crouch_height)
+                    self._set_body_pose(self._p.crouch_height)
                     with self._lock:
                         self._state = NavState.IDLE
                 else:
@@ -345,21 +337,16 @@ class SpotGoalNavigatorNode(Node):
             )
         )
 
-    def _set_height(self, height: float) -> None:
-        if self._height_client is None:
-            self.get_logger().warn('set_stand_height non disponibile')
-            return
-        if not self._height_client.service_is_ready():
-            self.get_logger().warn('set_stand_height service non pronto')
-            return
-        req = self._SetStandHeight.Request()
-        req.height = float(height)
-        future = self._height_client.call_async(req)
-        future.add_done_callback(
-            lambda f: self.get_logger().info(
-                f'set_stand_height({height}m): {"OK" if f.result().success else "FALLITO"}'
-            )
-        )
+    def _set_body_pose(self, height: float, pitch: float = 0.0) -> None:
+        from tf_transformations import quaternion_from_euler
+        pose = Pose()
+        pose.position.z = max(height, -0.32)
+        q = quaternion_from_euler(0.0, pitch, 0.0)
+        pose.orientation.w = float(q[3])
+        pose.orientation.x = float(q[0])
+        pose.orientation.y = float(q[1])
+        pose.orientation.z = float(q[2])
+        self._pub_body_pose.publish(pose)
 
     def destroy_node(self) -> None:
         self._cmd_pub.publish(Twist())

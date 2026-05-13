@@ -108,6 +108,8 @@ set(COMMON_LIBRARIES
     Threads::Threads
     -lrt
     -ldw
+    -lssl
+    -lcrypto
     yaml-cpp
 )
 if(USE_RK_HW_DECODER)
