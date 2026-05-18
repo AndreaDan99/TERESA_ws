@@ -1,0 +1,4 @@
+# Orbbec cameras (Femto Bolt, Femto Mega, Astra, Gemini, etc.)
+SUBSYSTEM=="usb", ATTR{idVendor}=="2bc5", MODE="0666"
+KERNEL=="video*", ATTRS{idVendor}=="2bc5", MODE="0666"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2bc5", MODE="0666"
