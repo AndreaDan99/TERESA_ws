@@ -21,6 +21,16 @@
 # ─────────────────────────────────────────────────────────────────────────────
 FROM dustynv/ros:humble-ros-base-l4t-r35.4.1
 
+# ─── Fix ROS2 GPG key (expired) ──────────────────────────────────────────────
+RUN rm -f /usr/share/keyrings/ros-archive-keyring.gpg \
+          /etc/apt/sources.list.d/ros2.list && \
+    curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+    | gpg --batch --no-tty --dearmor \
+    -o /usr/share/keyrings/ros-archive-keyring.gpg && \
+    echo "deb [arch=arm64 signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
+    http://packages.ros.org/ros2/ubuntu focal main" \
+    > /etc/apt/sources.list.d/ros2.list
+
 # ─── System deps ─────────────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
@@ -54,7 +64,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-pinocchio \
     # orbbec_camera build deps
     libgflags-dev \
-    nlohmann-json-dev \
+    nlohmann-json3-dev \
     libgoogle-glog-dev \
     # xacro + robot_state_publisher (runtime, z1_bringup)
     ros-humble-xacro \
