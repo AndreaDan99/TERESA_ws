@@ -40,7 +40,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-tf-transformations \
     ros-humble-rviz2 \
     ros-humble-pinocchio \
-    ros-humble-rmw-cyclonedds-cpp \
     # NOTE: cv_bridge, image_transport, tf2_ros, xacro, robot_state_publisher,
     # message_filters, visualization_msgs sono GIÀ nel base image (source-built).
     # Orbbec camera build deps
@@ -107,6 +106,11 @@ RUN pip3 install --no-cache-dir \
 
 # ─── rosdep init ────────────────────────────────────────────────────────────
 RUN rosdep init 2>/dev/null || true && rosdep update
+
+# ─── CycloneDDS RMW (richiesto dalla base image dustynv) ──────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ros-humble-rmw-cyclonedds-cpp \
+    && rm -rf /var/lib/apt/lists/*
 
 # ─── Workspace (mounted as volume at runtime) ───────────────────────────────
 WORKDIR /ros2_ws
