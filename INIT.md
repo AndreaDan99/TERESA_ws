@@ -16,12 +16,12 @@ git status --short
 
 ## Recent Changes (20 May 2026)
 
-### TF monitor & keyboard-controlled startup — no more blind launches
+### TF monitor & keyboard-controlled startup — 7 catene TF + 3 topic
 
 **Before:** WBC coordinator partiva subito in `SEARCHING` all'avvio. Se i TF SpotCore non erano ancora disponibili (DDS non pronto, clock desincronizzato), i nodi fallivano silenziosamente con errori TF criptici. L'utente doveva indovinare il problema.
 
 **After:**
-- **Nuovo nodo `tf_monitor.py`**: controlla ogni secondo che i TF `my_spot/odom → my_spot/body` siano disponibili. Appena li trova pubblica `/wbc/tf_ready = True` e logga un banner di conferma.
+- **Nuovo nodo `tf_monitor.py`** (lanciato da `teresa_core.launch.py`): controlla ogni secondo 7 catene TF + 3 topic hardware. Appena TUTTI sono pronti pubblica `/wbc/tf_ready = True` e logga un banner di conferma. Non si limita più al solo `odom→body`.
 - **Nuovo stato `WAITING_TF` nel coordinator**: il WBC parte in `WAITING_TF`, aspetta `/wbc/tf_ready`, poi passa a `IDLE`. Solo da `IDLE` il keyboard controller può farlo partire (`/wbc/restart → SEARCHING`).
 - **Keyboard controller blocca `s`**: se premi "s" prima che i TF siano pronti, il nodo ti avverte e non fa nulla. Quando `/wbc/tf_ready` arriva, stampa `[TF READY] SpotCore connesso — premi "s" per iniziare`.
 - **Messaggi di errore TF esplicativi**: tutti i `lookup_transform` ora loggano diagnostica chiara:
@@ -34,20 +34,19 @@ git status --short
 - **Script `tf_diag.sh`**: diagnostica standalone (basta eseguirlo senza far girare i nodi TERESA).
 - **Helper `_tf_lookup()` / `_tf_transform()`**: introdotti in tutti i nodi (`wbc_qp_controller`, `wbc_coordinator`, `spot_goal_navigator`) per centralizzare la gestione errori TF.
 
-### Nuovo flusso operativo
+### Nuovo flusso operativo (3 terminali via teresa_core)
 
 ```
 1. SpotCore acceso con spot_ros2
-2. PC: 6 terminali in ordine:
-   T1: ros2 launch z1_vision z1_realsense.launch.py
-   T2: ros2 launch z1_vision z1_perception.launch.py
-   T3: ros2 launch z1_vision z1_control.launch.py
-   T4: ros2 launch spot_perception spot_perception.launch.py
-   T5: ros2 launch spot_control wbc.launch.py
-   T6: ros2 run spot_control wbc_keyboard_node
-3. Aspettare "[TF READY] premi s per iniziare"
-4. Premere "s" → missione parte
+2. PC: 3 terminali in ordine:
+   T1: ros2 launch spot_control teresa_core.launch.py     (driver + TF + monitor)
+   T2: ros2 launch spot_control teresa_app.launch.py      (percezione + controllo + WBC)
+   T3: ros2 run spot_control wbc_keyboard_node             (tastiera)
+3. Aspettare "[TUTTO PRONTO]" da T1, poi "[TF READY] premi s" da T2
+4. Premere "s" in T3 → missione parte
 ```
+
+**Nota:** i 6 terminali standalone restano disponibili per debug (vedi sezione "Running Spot + Z1 WBC").
 
 ### FSM aggiornato
 
@@ -67,6 +66,51 @@ WAITING_TF ──(/wbc/tf_ready)──► IDLE ──(/wbc/restart, tastiera)─
 | `wbc_keyboard_controller.py` | Subscriber `/wbc/tf_ready`, blocca `s` se TF non pronto |
 | `wbc.launch.py` | Aggiunto `tf_monitor` al launch |
 | `setup.py` | Entry point `tf_monitor`, data `scripts/*.sh` |
+
+### teresa_core refactoring (20 May 2026 — same day)
+
+**Obiettivo:** ridurre i 6 terminali a 3 separando driver hardware dalla logica applicativa.
+
+**Before:** ogni launch file lanciava i propri driver + le proprie TF statiche. `tf_monitor` in `wbc.launch.py` controllava solo `odom→body`. `body→link00` pubblicato dal WBC a runtime.
+
+**After:**
+
+- **`teresa_core.launch.py`** (nuovo) — unico terminale per TUTTI i driver hardware:
+  - Orbbec Femto Bolt driver (stessi parametri di prima)
+  - Z1 bringup + RealSense via `z1_realsense.launch.py` (con `use_rviz:=false`, `use_camera_tf:=false`)
+  - **4 TF statiche** centralizzate nel core:
+    - `my_spot/body → orbbec_link` (0.30, 0, 0.15)
+    - `orbbec_link → orbbec_color_optical_frame` (-1.5708, 0, -1.5708)
+    - `my_spot/body → link00` (z1_mount_x/y/z, default 0.20/0.0/0.20)
+    - `link06 → camera_link` (0, 0, 0.05)
+  - `tf_monitor` (spostato da `wbc.launch.py`): 4 condizioni → `/wbc/tf_ready`
+
+- **`tf_monitor`** ora controlla **7 catene TF** (non più solo `odom→body`):
+  1. `my_spot/odom → my_spot/body` (SpotCore DDS)
+  2. `my_spot/body → link00` (Z1 mount on Spot)
+  3. `my_spot/body → orbbec_link` (Orbbec mount)
+  4. `orbbec_link → orbbec_color_optical_frame` (Orbbec optical)
+  5. `link00 → link06` (Z1 arm, robot_state_publisher)
+  6. `link06 → camera_link` (RealSense mount)
+  7. `camera_link → camera_color_optical_frame` (RealSense optical)
+  - Più 3 topic: `/joint_states`, `/orbbec/color/image_raw`, `/camera/color/image_raw`
+  - Solo quando TUTTE vere → `/wbc/tf_ready = True`
+
+- **`z1_realsense.launch.py`**: nuovo arg `use_camera_tf` (default `true`). Quando `false` (da `teresa_core`), salta la pubblicazione della TF `link06→camera_link`.
+- **`spot_perception.launch.py`**: arg `use_orbbec_driver` (default `true`). Quando `false` salta driver Orbbec + TF statiche.
+- **`wbc_qp_controller.py`**: rimosso `StaticTransformBroadcaster` di `body→link00` (ora è una static TF del core).
+- **`wbc.launch.py`**: rimosso `tf_monitor` (ora nel core), lancia solo `wbc_qp_controller` + `wbc_coordinator`.
+
+### Files modificati in questo commit
+
+| File | Modifica |
+|------|----------|
+| `teresa_core.launch.py` | **Nuovo** |
+| `tf_monitor.py` | 7 catene TF + 3 topic (prima: solo `odom→body`) |
+| `wbc_qp_controller.py` | Rimosso `StaticTransformBroadcaster` per `body→link00` |
+| `wbc.launch.py` | Rimosso `tf_monitor` |
+| `spot_perception.launch.py` | Aggiunto arg `use_orbbec_driver` |
+| `z1_realsense.launch.py` | Aggiunto arg `use_camera_tf` |
 
 ---
 
@@ -255,7 +299,7 @@ ros2 launch z1_vision z1_perception.launch.py
 ros2 launch z1_vision z1_control.launch.py
 ```
 
-### Running Spot + Z1 WBC (SpotCore + 6 PC terminals)
+### Running Spot + Z1 WBC (SpotCore + 3 PC terminali)
 
 **Prerequisites on Spot:**
 - `spot_ros2` running on SpotCore (publishes `my_spot/odom → my_spot/body` TF)
@@ -264,30 +308,26 @@ ros2 launch z1_vision z1_control.launch.py
 **PC terminals (in order):**
 
 ```bash
-# 1: Z1 hardware + RealSense camera
-ros2 launch z1_vision z1_realsense.launch.py
+# T1: Core — tutti i driver hardware + TF statiche + tf_monitor
+ros2 launch spot_control teresa_core.launch.py
+# Aspettare: [TUTTO PRONTO] /wbc/tf_ready = True
 
-# 2: Z1 perception (YOLO tracker + surface node)
-ros2 launch z1_vision z1_perception.launch.py
+# T2: App — percezione + controllo Z1 + WBC
+ros2 launch spot_control teresa_app.launch.py
+# Aspettare: "[TF READY] SpotCore connesso — premi s per iniziare"
 
-# 3: Z1 control (FSM + IK + impedance)
-ros2 launch z1_vision z1_control.launch.py
-
-# 4: Spot perception (Orbbec + YOLO skeleton + posture + laying detector)
-ros2 launch spot_perception spot_perception.launch.py
-
-# 5: Spot WBC (tf_monitor + wbc_coordinator + wbc_qp_controller)
-ros2 launch spot_control wbc.launch.py
-
-# 6: Keyboard controller (richiede TTY interattivo)
+# T3: Keyboard controller (richiede TTY interattivo)
 ros2 run spot_control wbc_keyboard_node
-
-# Wait for "[TF READY] SpotCore connesso — premi s per iniziare"
-# Then press "s" to start mission
+# Premere "s" → missione parte
 
 # Optional: dry-run mode (no arm movement, debug topics only)
 ros2 launch spot_control wbc.launch.py dry_run:=true
+
+# Optional: override Z1 mount position
+ros2 launch spot_control teresa_core.launch.py z1_mount_x:=0.25 z1_mount_z:=0.15
 ```
+
+**Nota:** i sub-launch (`z1_realsense`, `z1_perception`, `z1_control`, `spot_perception`, `wbc`) restano comunque utilizzabili standalone per debug. Tutti i parametri hardware (Orbbec, RealSense, Z1) sono invariati.
 
 ### Keyboard controller keys
 
@@ -347,9 +387,12 @@ z1_FSM ──(Trigger srv)──► safe_controller_switch  ←──► impedan
 ### Spot + Z1 WBC pipeline
 
 ```
-tf_monitor
-  │  Check: my_spot/odom → my_spot/body (1 Hz)
-  └─► /wbc/tf_ready  (Bool, True when SpotCore TF available)
+tf_monitor (da teresa_core.launch.py)
+  │  Check: 7 catene TF + 3 topic (1 Hz)
+  │    TF: odom→body, body→link00, body→orbbec_link, orbbec→optical,
+  │         link00→link06, link06→camera_link, camera_link→camera_optical
+  │    Topic: /joint_states, /orbbec/color/image_raw, /camera/color/image_raw
+  └─► /wbc/tf_ready  (Bool, True when ALL conditions met)
         ├─► wbc_coordinator  (WAITING_TF → IDLE)
         └─► wbc_keyboard_controller  (enables "s" key)
 
@@ -479,7 +522,7 @@ When `dry_run:=true` on WBC launch, all outputs go to debug topics:
 | `wbc_coordinator.py` | Phase FSM for Spot+Z1: WAITING_TF→IDLE→SEARCHING→PRE_APPROACH→APPROACHING→SCANNING→WS_EXTENSION, QualityMonitor (target fisso in odom + quality tracking), body height control |
 | `wbc_qp_controller.py` | Holistic WBC at 10 Hz: damped pseudo-inverse split of arm joints + base velocity, quality-based v_scale, stable look-at orientation, `/wbc/spot_control` gates cmd_vel |
 | `wbc_math.py` | Pure math: J_base, J_holistic, manipulability, WBC split, WBC split with yaw |
-| `tf_monitor.py` | Standalone TF monitor: attende `my_spot/odom → my_spot/body`, pubblica `/wbc/tf_ready` quando disponibile |
+| `tf_monitor.py` | Monitora 7 catene TF + 3 topic hardware. Pubblica `/wbc/tf_ready` quando tutto è pronto. Lanciato da `teresa_core.launch.py`. |
 | `ik_goal_mux.py` | Priority mux: WBC goals override Z1 FSM goals |
 | `spot_goal_navigator.py` | Spot point-to-point navigation |
 | `wbc_keyboard_controller.py` | Keyboard-driven Spot control: start/return/restart WBC via `/wbc/restart`, blocca start se TF non pronto |

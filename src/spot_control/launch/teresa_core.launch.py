@@ -14,14 +14,18 @@ Uso:
   ros2 launch spot_control teresa_core.launch.py
 """
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, LogInfo
+from launch.actions import IncludeLaunchDescription, LogInfo, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+
+    z1_mount_x = LaunchConfiguration('z1_mount_x')
+    z1_mount_y = LaunchConfiguration('z1_mount_y')
+    z1_mount_z = LaunchConfiguration('z1_mount_z')
 
     # ── Orbbec Femto Bolt driver ──────────────────────────────────────
     orbbec_launch = IncludeLaunchDescription(
@@ -88,7 +92,32 @@ def generate_launch_description():
         ]),
         launch_arguments={
             'use_rviz': 'false',
+            'use_camera_tf': 'false',
         }.items()
+    )
+
+    # ── TF statica Z1 mount: my_spot/body → link00 ─────────────────
+    static_tf_body_link00 = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='spot_to_link00',
+        arguments=[
+            z1_mount_x, z1_mount_y, z1_mount_z,
+            '0', '0', '0', '1',
+            'my_spot/body', 'link00',
+        ]
+    )
+
+    # ── TF statica RealSense mount: link06 → camera_link ───────────
+    static_tf_link06_camera = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='link06_to_camera_link',
+        arguments=[
+            '0.0', '0.0', '0.05',
+            '0', '0', '0', '1',
+            'link06', 'camera_link',
+        ]
     )
 
     # ── TF monitor (4 condizioni → /wbc/tf_ready) ────────────────────
@@ -100,11 +129,22 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument('z1_mount_x', default_value='0.20',
+            description='Z1 link00 X da my_spot/body [m]'),
+        DeclareLaunchArgument('z1_mount_y', default_value='0.0',
+            description='Z1 link00 Y da my_spot/body [m]'),
+        DeclareLaunchArgument('z1_mount_z', default_value='0.20',
+            description='Z1 link00 Z da my_spot/body [m]'),
+
         LogInfo(msg=['TERESA Core — driver hardware + TF statiche + monitor']),
 
         orbbec_launch,
         static_tf_body_orbbec,
         static_tf_orbbec_optical,
+
+        static_tf_body_link00,
+
+        static_tf_link06_camera,
 
         z1_realsense_launch,
 

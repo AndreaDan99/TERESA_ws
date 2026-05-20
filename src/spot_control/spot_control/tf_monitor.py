@@ -6,7 +6,7 @@ Condizioni:
   1. /joint_states ricevuto            → Z1 driver attivo
   2. /orbbec/color/image_raw ricevuto  → Orbbec camera viva
   3. /camera/color/image_raw ricevuto  → RealSense camera viva
-  4. 6 catene TF disponibili           → TF tree completo (escluso body→link00, app-level)
+  4. 7 catene TF disponibili           → TF tree completo
 
 Solo quando TUTTE e 4 sono vere → pubblica /wbc/tf_ready = True.
 
@@ -26,12 +26,12 @@ import rclpy.time
 # TF chains to check (source, target, description)
 TF_CHAINS = [
     ('my_spot/odom',          'my_spot/body',              'SpotCore DDS'),
+    ('my_spot/body',          'link00',                    'Z1 mount on Spot'),
     ('my_spot/body',          'orbbec_link',               'Orbbec mount'),
     ('orbbec_link',           'orbbec_color_optical_frame', 'Orbbec optical'),
     ('link00',                'link06',                    'Z1 arm (robot_state_publisher)'),
     ('link06',                'camera_link',               'Realsense mount'),
     ('camera_link',           'camera_color_optical_frame',  'Realsense optical'),
-    # NOTE: my_spot/body → link00 is from wbc_qp (app), checked at runtime
 ]
 
 
@@ -77,7 +77,7 @@ class TFMonitorNode(Node):
 
         self.get_logger().info(
             'TF Monitor avviato.\n'
-            '  4 condizioni: Z1 driver | Orbbec | RealSense | 6 catene TF\n'
+            '  4 condizioni: Z1 driver | Orbbec | RealSense | 7 catene TF\n'
             '  Diagnostica manuale: bash src/spot_control/scripts/tf_diag.sh')
 
     # ── Callbacks ─────────────────────────────────────────────────────
@@ -150,7 +150,7 @@ class TFMonitorNode(Node):
             self.get_logger().info(
                 '========================================\n'
                 ' TUTTO PRONTO\n'
-                ' Z1 driver OK | Orbbec OK | RealSense OK | TF 6/6 OK\n'
+                ' Z1 driver OK | Orbbec OK | RealSense OK | TF 7/7 OK\n'
                 ' /wbc/tf_ready = True\n'
                 ' Ora puoi lanciare i terminali applicativi.\n'
                 '========================================')

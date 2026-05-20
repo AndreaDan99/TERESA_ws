@@ -22,6 +22,7 @@ def generate_launch_description():
     joint_offset = LaunchConfiguration('joint_offset')
     #use_surface_node = LaunchConfiguration('use_surface_node')
     use_rviz = LaunchConfiguration('use_rviz')
+    use_camera_tf = LaunchConfiguration('use_camera_tf')
     
     # Package paths
     z1_bringup_pkg = FindPackageShare('z1_bringup')
@@ -82,6 +83,11 @@ def generate_launch_description():
             description='Launch RViz with custom config'
         ),
         DeclareLaunchArgument(
+            'use_camera_tf',
+            default_value='true',
+            description='Publish static TF link06→camera_link. false se gestita da teresa_core'
+        ),
+        DeclareLaunchArgument(
             'joint_offset',
             default_value='0.0 0.69 0.0 0.0 0.0 0.0',
             description='Joint encoder offset [rad] — joint2 folded ~40° for Spot mount'
@@ -131,7 +137,8 @@ def generate_launch_description():
                 camera_qx, camera_qy, camera_qz, camera_qw,
                 parent_frame, 'camera_link'
             ],
-            output='screen'
+            output='screen',
+            condition=IfCondition(use_camera_tf)
         ),
         
         # ============== RVIZ CUSTOM ==============
