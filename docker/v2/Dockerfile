@@ -40,6 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-tf-transformations \
     ros-humble-rviz2 \
     ros-humble-pinocchio \
+    ros-humble-rmw-cyclonedds-cpp \
     # NOTE: cv_bridge, image_transport, tf2_ros, xacro, robot_state_publisher,
     # message_filters, visualization_msgs sono GIÀ nel base image (source-built).
     # Orbbec camera build deps

@@ -14,6 +14,7 @@ else
 fi
 
 export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+export RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
 
 chmod -R a+rw /dev/bus/usb 2>/dev/null || true
 
