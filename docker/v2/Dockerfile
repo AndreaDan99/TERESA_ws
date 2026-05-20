@@ -21,10 +21,14 @@
 # ─────────────────────────────────────────────────────────────────────────────
 FROM dustynv/ros:humble-ros-base-l4t-r35.4.1
 
-# ─── Fix ROS2 GPG key (expired) ──────────────────────────────────────────────
-# Only update the key; preserve the base image's ros2.list sources
+# ─── Fix ROS2 GPG key (expired) + apt source (jammy for Humble) ──────────────
+# Base image is Focal-based (L4T r35) but ros-humble packages are only on the
+# jammy pool at packages.ros.org. Rewrite ros2.list accordingly.
 RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
-    -o /usr/share/keyrings/ros-archive-keyring.gpg
+    -o /usr/share/keyrings/ros-archive-keyring.gpg && \
+    echo "deb [arch=arm64 signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
+    http://packages.ros.org/ros2/ubuntu jammy main" \
+    > /etc/apt/sources.list.d/ros2.list
 
 # ─── System deps ─────────────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
