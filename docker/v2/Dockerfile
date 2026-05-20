@@ -110,11 +110,12 @@ RUN pip3 install --no-cache-dir --force-reinstall "numpy<2"
 # ─── rosdep init ────────────────────────────────────────────────────────────
 RUN rosdep init 2>/dev/null || true && rosdep update
 
-# ─── CycloneDDS RMW + rosidl + diagnostic (non in ros_base) ─────────────────
+# ─── CycloneDDS RMW + rosidl + diagnostic + numpy headers ──────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-rmw-cyclonedds-cpp \
     ros-humble-rosidl-default-generators \
     ros-humble-diagnostic-updater \
+    python3-numpy \
     && rm -rf /var/lib/apt/lists/*
 
 # ─── Workspace (mounted as volume at runtime) ───────────────────────────────
