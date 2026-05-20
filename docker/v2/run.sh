@@ -7,7 +7,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 WORKSPACE_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-IMAGE_NAME="teresa_ws:v2"
+IMAGE_NAME="teresa_ws:latest"
+CONTAINER_NAME="teresa_v2"
 CONTAINER_DIR="$(dirname "$0")"
 
 # Applica regole udev Orbbec sull'host (solo la prima volta)
@@ -20,6 +21,7 @@ else
 fi
 
 docker run -it --rm \
+    --name "${CONTAINER_NAME}" \
     --runtime nvidia \
     --network host \
     --privileged \
