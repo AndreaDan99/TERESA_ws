@@ -85,8 +85,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends unzip \
     -O /tmp/orbbec_sdk.zip \
     && mkdir -p /opt/orbbec_sdk \
     && unzip -q /tmp/orbbec_sdk.zip -d /opt/orbbec_sdk \
-    && cp /opt/orbbec_sdk/*/lib/*.so* /usr/local/lib/ 2>/dev/null \
-    || cp /opt/orbbec_sdk/lib/*.so* /usr/local/lib/ \
+    && find /opt/orbbec_sdk -name '*.so*' -exec cp {} /usr/local/lib/ \; \
     && ldconfig \
     && rm /tmp/orbbec_sdk.zip
 
