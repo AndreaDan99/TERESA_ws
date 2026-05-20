@@ -107,10 +107,11 @@ RUN pip3 install --no-cache-dir \
 # ─── rosdep init ────────────────────────────────────────────────────────────
 RUN rosdep init 2>/dev/null || true && rosdep update
 
-# ─── CycloneDDS RMW + rosidl (richiesti dalla base image dustynv) ──────────
+# ─── CycloneDDS RMW + rosidl + diagnostic (non in ros_base) ─────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-rmw-cyclonedds-cpp \
     ros-humble-rosidl-default-generators \
+    ros-humble-diagnostic-updater \
     && rm -rf /var/lib/apt/lists/*
 
 # ─── Workspace (mounted as volume at runtime) ───────────────────────────────
