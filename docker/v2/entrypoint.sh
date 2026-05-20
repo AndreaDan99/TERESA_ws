@@ -17,6 +17,18 @@ for d in /opt/venv/lib/python*/site-packages/cmake; do
 done
 hash -r 2>/dev/null || true
 
+# Fix: base image's builtin_interfaces expects numpy headers at old path
+python3 -c "
+import numpy, os
+expected = '/usr/local/lib/python3.10/dist-packages/numpy/core/include'
+if not os.path.exists(expected):
+    actual = numpy.get_include()
+    if os.path.exists(actual):
+        os.makedirs(os.path.dirname(expected), exist_ok=True)
+        os.symlink(actual, expected)
+        print(f'numpy include symlink: {expected} -> {actual}')
+" 2>/dev/null || true
+
 if [ -f /ros2_ws/install/setup.bash ]; then
     source /ros2_ws/install/setup.bash
 else
