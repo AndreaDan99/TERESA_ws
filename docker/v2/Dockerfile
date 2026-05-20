@@ -117,6 +117,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ─── Workspace (mounted as volume at runtime) ───────────────────────────────
 WORKDIR /ros2_ws
 
+# ─── Workspace source + build (immagine self-contained) ──────────────────
+COPY src/ /ros2_ws/src/
+RUN . /opt/ros/humble/setup.bash && \
+    . /opt/ros/humble/install/setup.bash 2>/dev/null || true && \
+    colcon build --symlink-install \
+      --cmake-args -DCMAKE_BUILD_TYPE=Release && \
+    rm -rf /ros2_ws/build /ros2_ws/log
+
 # ─── Entrypoint ─────────────────────────────────────────────────────────────
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
