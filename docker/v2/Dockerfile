@@ -101,8 +101,11 @@ RUN pip3 install --no-cache-dir \
     ultralytics \
     scipy \
     transforms3d \
-    numpy \
+    "numpy<2" \
     opencv-python-headless
+
+# Pinocchio, cv_bridge etc. sono compilati con NumPy 1.x — forzo downgrade
+RUN pip3 install --no-cache-dir --force-reinstall "numpy<2"
 
 # ─── rosdep init ────────────────────────────────────────────────────────────
 RUN rosdep init 2>/dev/null || true && rosdep update
