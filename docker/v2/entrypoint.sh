@@ -5,6 +5,17 @@
 # ============================================================
 set -e
 
+# Ensure system Python 3.10 (not venv's 3.12) is used by cmake/colcon
+export PATH=/usr/bin:$PATH
+export COLCON_DEFAULTS_FILE=/ros2_ws/colcon_defaults.yaml 2>/dev/null || true
+
+cat << 'YAML' > /colcon_defaults.yaml
+build:
+  cmake-args:
+    - -DPython3_EXECUTABLE=/usr/bin/python3
+    - -DPython3_NumPy_INCLUDE_DIRS=/usr/lib/python3/dist-packages/numpy/core/include
+YAML
+
 source /opt/ros/humble/setup.bash
 # dustynv base image installs ROS2 under .../install/ (merge-install layout)
 if [ -f /opt/ros/humble/install/setup.bash ]; then
