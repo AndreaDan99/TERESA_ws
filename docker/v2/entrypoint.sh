@@ -7,11 +7,11 @@ set -e
 
 source /opt/ros/humble/setup.bash
 
-# Fix: dustynv base image's venv shadows system cmake with a broken one
-if [ -f /opt/venv/bin/cmake ]; then
-    rm -f /opt/venv/bin/cmake 2>/dev/null || true
-    hash -r 2>/dev/null || true
-fi
+# Fix: dustynv base image's venv has a broken cmake that shadows system cmake
+for d in /opt/venv/lib/python*/site-packages/cmake; do
+    rm -rf "$d" 2>/dev/null || true
+done
+hash -r 2>/dev/null || true
 
 if [ -f /ros2_ws/install/setup.bash ]; then
     source /ros2_ws/install/setup.bash
