@@ -82,6 +82,7 @@ class SpotGoalNavigatorNode(Node):
 
         self._tf_buffer   = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
+        self._tf_ready    = False
 
         self._goal_sub = self.create_subscription(
             PoseStamped, '/laying_human/approach_point', self._cb_goal, 10)
@@ -117,6 +118,44 @@ class SpotGoalNavigatorNode(Node):
     def _cb_goal(self, msg: PoseStamped) -> None:
         with self._lock:
             self._latest_goal = msg
+
+    # ── TF helpers ───────────────────────────────────────────────────────────
+
+    def _tf_lookup(self, source: str, target: str,
+                   timeout_sec: float = 0.5) -> TransformStamped | None:
+        try:
+            return self._tf_buffer.lookup_transform(
+                source, target, rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=timeout_sec))
+        except TransformException as e:
+            if not self._tf_ready:
+                self.get_logger().warn(
+                    f'TF {source} → {target} non disponibile.\n'
+                    f'  Diagnostica: ros2 topic list | grep tf',
+                    throttle_duration_sec=5.0)
+            else:
+                self.get_logger().warn(
+                    f'TF {source} → {target}: {e}',
+                    throttle_duration_sec=2.0)
+            return None
+
+    def _tf_transform(self, pose: PoseStamped, target_frame: str,
+                      timeout_sec: float = 0.5) -> PoseStamped | None:
+        try:
+            return self._tf_buffer.transform(
+                pose, target_frame,
+                timeout=rclpy.duration.Duration(seconds=timeout_sec))
+        except TransformException as e:
+            if not self._tf_ready:
+                self.get_logger().warn(
+                    f'TF {pose.header.frame_id} → {target_frame} non disponibile.\n'
+                    f'  Diagnostica: ros2 topic list | grep tf',
+                    throttle_duration_sec=5.0)
+            else:
+                self.get_logger().warn(
+                    f'TF {pose.header.frame_id} → {target_frame}: {e}',
+                    throttle_duration_sec=2.0)
+            return None
 
     # ── Keyboard ──────────────────────────────────────────────────────────────
 
@@ -173,19 +212,15 @@ class SpotGoalNavigatorNode(Node):
         goal_stamped.header.stamp    = rclpy.time.Time().to_msg()
         goal_stamped.pose            = goal_raw.pose
 
-        try:
-            goal_odom = self._tf_buffer.transform(
-                goal_stamped, self._p.odom_frame,
-                timeout=rclpy.duration.Duration(seconds=0.5))
-        except TransformException as e:
-            self.get_logger().warn(f'TF fallita: {e} — navigazione non avviata.')
+        goal_odom = self._tf_transform(goal_stamped, self._p.odom_frame)
+        if goal_odom is None:
             return
 
         # Salva start pose
-        try:
-            t = self._tf_buffer.lookup_transform(
-                self._p.odom_frame, self._p.robot_frame,
-                rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=0.5))
+        t = self._tf_lookup(self._p.odom_frame, self._p.robot_frame)
+        if t is None:
+            self.get_logger().warn('Impossibile salvare start pose — TF non disponibile')
+        else:
             start = PoseStamped()
             start.header.frame_id  = self._p.odom_frame
             start.header.stamp     = self.get_clock().now().to_msg()
@@ -198,11 +233,14 @@ class SpotGoalNavigatorNode(Node):
             with self._lock:
                 self._start_odom = start
                 self._start_yaw  = yaw
+            if not self._tf_ready:
+                self._tf_ready = True
+                self.get_logger().info(
+                    f'TF disponibile: {self._p.odom_frame} → {self._p.robot_frame} OK. '
+                    f'SpotCore connesso via DDS.')
             self.get_logger().info(
                 f'Start pose salvata: ({start.pose.position.x:.2f}, {start.pose.position.y:.2f}) '
                 f'yaw={math.degrees(yaw):.1f}°')
-        except TransformException as e:
-            self.get_logger().warn(f'Impossibile salvare start pose: {e}')
 
         with self._lock:
             self._goal_odom    = goal_odom
@@ -253,12 +291,8 @@ class SpotGoalNavigatorNode(Node):
         goal_body_stamped.header.stamp    = rclpy.time.Time().to_msg()
         goal_body_stamped.pose            = goal_odom.pose
 
-        try:
-            goal_body = self._tf_buffer.transform(
-                goal_body_stamped, self._p.robot_frame,
-                timeout=rclpy.duration.Duration(seconds=0.1))
-        except TransformException as e:
-            self.get_logger().warn(f'TF error: {e}')
+        goal_body = self._tf_transform(goal_body_stamped, self._p.robot_frame, timeout_sec=0.1)
+        if goal_body is None:
             return
 
         dx            = goal_body.pose.position.x
@@ -291,14 +325,11 @@ class SpotGoalNavigatorNode(Node):
 
         if state == NavState.REALIGNING:
             # Leggi yaw corrente
-            try:
-                t = self._tf_buffer.lookup_transform(
-                    self._p.odom_frame, self._p.robot_frame,
-                    rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=0.1))
-                q = t.transform.rotation
-                _, _, current_yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
-            except TransformException:
+            t = self._tf_lookup(self._p.odom_frame, self._p.robot_frame, timeout_sec=0.1)
+            if t is None:
                 return
+            q = t.transform.rotation
+            _, _, current_yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
 
             with self._lock:
                 target_yaw = self._start_yaw

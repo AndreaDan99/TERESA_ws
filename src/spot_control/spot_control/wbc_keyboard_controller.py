@@ -72,6 +72,9 @@ class WBCKeyboardControllerNode(Node):
 
         self.create_subscription(String, '/wbc/state', self._cb_wbc_state, 10)
 
+        self._tf_system_ready = False
+        self.create_subscription(Bool, '/wbc/tf_ready', self._cb_tf_ready, 10)
+
         self._kc_state: KCState               = KCState.IDLE
         self._start_odom:   PoseStamped | None = None
         self._start_yaw:    float              = 0.0
@@ -87,15 +90,18 @@ class WBCKeyboardControllerNode(Node):
         self._kb_thread.start()
 
         self.get_logger().info(
-            f'WBC Keyboard Controller ready.\n'
-            f'  "s" = start  → save pose + WBC SEARCHING\n'
-            f'  "r" = return → back to start + realign yaw\n'
-            f'  "q" = restart → same as return\n'
-            f'  "u" = update → overwrite start pose\n'
-            f'  "c" = sit    | "a" = stand')
+            f'WBC Keyboard Controller ready — in attesa TF SpotCore...\n'
+            f'  "s" = avvia missione  |  "r" = torna a start  |  "u" = aggiorna start\n'
+            f'  "c" = sit  |  "a" = stand  |  ESC = stop')
 
     def _cb_wbc_state(self, msg: String) -> None:
         self.get_logger().info(f'WBC state → {msg.data}')
+
+    def _cb_tf_ready(self, msg: Bool) -> None:
+        if msg.data and not self._tf_system_ready:
+            self._tf_system_ready = True
+            self.get_logger().info(
+                '[TF READY] SpotCore connesso — premi "s" per iniziare.')
 
     def _keyboard_loop(self) -> None:
         fd = sys.stdin.fileno()
@@ -154,6 +160,11 @@ class WBCKeyboardControllerNode(Node):
             return False
 
     def _on_start(self) -> None:
+        if not self._tf_system_ready:
+            self.get_logger().warn(
+                'TF non ancora disponibile — attendere SpotCore.\n'
+                '  Diagnostica: ros2 topic list | grep tf')
+            return
         if not self._start_has_goal:
             if not self._save_start_pose():
                 return

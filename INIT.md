@@ -14,6 +14,62 @@ git status --short
 
 ---
 
+## Recent Changes (20 May 2026)
+
+### TF monitor & keyboard-controlled startup — no more blind launches
+
+**Before:** WBC coordinator partiva subito in `SEARCHING` all'avvio. Se i TF SpotCore non erano ancora disponibili (DDS non pronto, clock desincronizzato), i nodi fallivano silenziosamente con errori TF criptici. L'utente doveva indovinare il problema.
+
+**After:**
+- **Nuovo nodo `tf_monitor.py`**: controlla ogni secondo che i TF `my_spot/odom → my_spot/body` siano disponibili. Appena li trova pubblica `/wbc/tf_ready = True` e logga un banner di conferma.
+- **Nuovo stato `WAITING_TF` nel coordinator**: il WBC parte in `WAITING_TF`, aspetta `/wbc/tf_ready`, poi passa a `IDLE`. Solo da `IDLE` il keyboard controller può farlo partire (`/wbc/restart → SEARCHING`).
+- **Keyboard controller blocca `s`**: se premi "s" prima che i TF siano pronti, il nodo ti avverte e non fa nulla. Quando `/wbc/tf_ready` arriva, stampa `[TF READY] SpotCore connesso — premi "s" per iniziare`.
+- **Messaggi di errore TF esplicativi**: tutti i `lookup_transform` ora loggano diagnostica chiara:
+  ```
+  TF my_spot/odom → my_spot/body non disponibile.
+    Diagnostica: ros2 topic list | grep tf
+    Verifica: 1) spot_ros2 attivo su SpotCore?  2) ROS_DOMAIN_ID uguale?  3) spot_name='my_spot'?
+  ```
+  I messaggi sono throttled: ogni 5s quando TF mai visto, ogni 2s se perso a runtime.
+- **Script `tf_diag.sh`**: diagnostica standalone (basta eseguirlo senza far girare i nodi TERESA).
+- **Helper `_tf_lookup()` / `_tf_transform()`**: introdotti in tutti i nodi (`wbc_qp_controller`, `wbc_coordinator`, `spot_goal_navigator`) per centralizzare la gestione errori TF.
+
+### Nuovo flusso operativo
+
+```
+1. SpotCore acceso con spot_ros2
+2. PC: 6 terminali in ordine:
+   T1: ros2 launch z1_vision z1_realsense.launch.py
+   T2: ros2 launch z1_vision z1_perception.launch.py
+   T3: ros2 launch z1_vision z1_control.launch.py
+   T4: ros2 launch spot_perception spot_perception.launch.py
+   T5: ros2 launch spot_control wbc.launch.py
+   T6: ros2 run spot_control wbc_keyboard_node
+3. Aspettare "[TF READY] premi s per iniziare"
+4. Premere "s" → missione parte
+```
+
+### FSM aggiornato
+
+```
+WAITING_TF ──(/wbc/tf_ready)──► IDLE ──(/wbc/restart, tastiera)──► SEARCHING ──► ...
+```
+
+### Files nuovi/modificati
+
+| File | Modifica |
+|------|----------|
+| `spot_control/tf_monitor.py` | **Nuovo** — nodo monitor TF standalone |
+| `scripts/tf_diag.sh` | **Nuovo** — script diagnostico TF |
+| `wbc_coordinator.py` | Stato `WAITING_TF`, subscriber `/wbc/tf_ready`, helper `_tf_lookup/transform`, errori esplicativi |
+| `wbc_qp_controller.py` | Helper `_tf_lookup/transform`, flag `_tf_ready`, errori esplicativi |
+| `spot_goal_navigator.py` | Helper `_tf_lookup/transform`, flag `_tf_ready`, errori esplicativi |
+| `wbc_keyboard_controller.py` | Subscriber `/wbc/tf_ready`, blocca `s` se TF non pronto |
+| `wbc.launch.py` | Aggiunto `tf_monitor` al launch |
+| `setup.py` | Entry point `tf_monitor`, data `scripts/*.sh` |
+
+---
+
 ## Recent Changes (6 May 2026)
 
 - **Arm twist fix (WBC)**: EE orientation now computed geometrically (X_ee toward target, Y_ee from home via Gram-Schmidt) instead of using the approach_point yaw orientation that caused a roll twist around the X axis. Same algorithm as `z1_FSM._orientation_for_xee()`.
@@ -199,32 +255,35 @@ ros2 launch z1_vision z1_perception.launch.py
 ros2 launch z1_vision z1_control.launch.py
 ```
 
-### Running Spot + Z1 WBC (SpotCore + 5 PC terminals)
+### Running Spot + Z1 WBC (SpotCore + 6 PC terminals)
 
 **Prerequisites on Spot:**
 - `spot_ros2` running on SpotCore (publishes `my_spot/odom → my_spot/body` TF)
 - Spot in **sit** position (ignores `/my_spot/cmd_vel` for safety)
 
-**PC terminals:**
+**PC terminals (in order):**
 
 ```bash
-# 1: Orbbec driver + perception (no Spot navigation)
-ros2 launch spot_perception spot_perception.launch.py test_mode:=true
+# 1: Z1 hardware + RealSense camera
+ros2 launch z1_vision z1_realsense.launch.py
 
-# 2: Z1 hardware + RealSense + YOLO tracker
-ros2 launch z1_vision z1_realsense.launch.py use_rviz:=true
-
-# 3: Surface normals + signed distance
+# 2: Z1 perception (YOLO tracker + surface node)
 ros2 launch z1_vision z1_perception.launch.py
 
-# 4: Z1 control (FSM + IK + impedance)
+# 3: Z1 control (FSM + IK + impedance)
 ros2 launch z1_vision z1_control.launch.py
 
-# 5: WBC holistic controller
+# 4: Spot perception (Orbbec + YOLO skeleton + posture + laying detector)
+ros2 launch spot_perception spot_perception.launch.py
+
+# 5: Spot WBC (tf_monitor + wbc_coordinator + wbc_qp_controller)
 ros2 launch spot_control wbc.launch.py
 
-# 6: Keyboard controller (optional, for manual start/return/restart)
+# 6: Keyboard controller (richiede TTY interattivo)
 ros2 run spot_control wbc_keyboard_node
+
+# Wait for "[TF READY] SpotCore connesso — premi s per iniziare"
+# Then press "s" to start mission
 
 # Optional: dry-run mode (no arm movement, debug topics only)
 ros2 launch spot_control wbc.launch.py dry_run:=true
@@ -234,11 +293,15 @@ ros2 launch spot_control wbc.launch.py dry_run:=true
 
 | Key | Action |
 |-----|--------|
-| `s` | Save start pose (first press) + trigger WBC SEARCHING |
+| `s` | Save start pose (first press) + trigger WBC SEARCHING (only if TF ready) |
 | `r` | Stand + navigate back to start pose + realign yaw |
 | `q` | Same as `r` (restart: interrupt WBC, return to start) |
 | `u` | Update start pose to current position + yaw |
 | `c` / `a` | Sit / Stand |
+
+The keyboard node subscribes to `/wbc/tf_ready` (Bool) to know when SpotCore is connected.
+Pressing `s` before TF is ready shows a warning and does nothing.
+When TF becomes available, the node prints `[TF READY] SpotCore connesso — premi "s" per iniziare`.
 
 The keyboard node publishes to `/wbc/restart` (Bool) to control the WBC coordinator FSM:
 - `True` → WBC transitions from IDLE → SEARCHING
@@ -284,6 +347,12 @@ z1_FSM ──(Trigger srv)──► safe_controller_switch  ←──► impedan
 ### Spot + Z1 WBC pipeline
 
 ```
+tf_monitor
+  │  Check: my_spot/odom → my_spot/body (1 Hz)
+  └─► /wbc/tf_ready  (Bool, True when SpotCore TF available)
+        ├─► wbc_coordinator  (WAITING_TF → IDLE)
+        └─► wbc_keyboard_controller  (enables "s" key)
+
 Orbbec Femto Bolt (Jetson → PC)
   └─► yolo_skeleton_spot (YOLO11 pose)
         └─► posture_classifier (posture + confidence)
@@ -293,14 +362,14 @@ Orbbec Femto Bolt (Jetson → PC)
                     └─► /human_pose/posture, /human_pose/posture_confidence
 
 /laying_human/approach_point
-  └─► wbc_coordinator  (FSM: SEARCHING → PRE_APPROACH → APPROACHING → SCANNING → WS_EXTENSION)
+  └─► wbc_coordinator  (FSM: WAITING_TF → IDLE → SEARCHING → PRE_APPROACH → APPROACHING → SCANNING → WS_EXTENSION)
         │  Trasforma approach_point camera → odom via TF
         │  QualityMonitor: target best-confidence + quality = max_q*(1-conf)
         ├─► /wbc/ee_goal             (target fisso in odom frame)
         ├─► /wbc/enable              (True = WBC priority su MUX)
         ├─► /wbc/desired_yaw         (Spot ⊥ body_axis)
         ├─► /wbc/target_uncertainty  (quality [m], non sigma)
-        ├─► /wbc/state               (SEARCHING/PRE_APPROACH/IDLE/APPROACHING/SCANNING/WS_EXTENSION)
+        ├─► /wbc/state               (WAITING_TF/SEARCHING/PRE_APPROACH/IDLE/APPROACHING/SCANNING/WS_EXTENSION)
         └─► /wbc/spot_control        (False = sopprime cmd_vel, braccio arm-only)
 
 /wbc/ee_goal (odom) + /wbc/enable + /wbc/desired_yaw + /wbc/target_uncertainty
@@ -324,13 +393,14 @@ ik_goal_mux:
 ### WBC coordinator FSM states
 
 ```
-SEARCHING ──(posture=LYING & conf≥0.85 & lock: 10 samples)──► PRE_APPROACH
-SEARCHING ──(grid complete: 3 yaw × 3 pitch visited)──► IDLE (dead-end)
-IDLE ──(/wbc/restart=True from keyboard)──► SEARCHING
-any ──(/wbc/restart=False from keyboard)──► IDLE
+WAITING_TF ──(/wbc/tf_ready)──► IDLE
+IDLE       ──(/wbc/restart=True from keyboard)──► SEARCHING
+SEARCHING  ──(posture=LYING & conf≥0.85 & lock: 5 samples)──► PRE_APPROACH
+SEARCHING  ──(grid complete: 3 yaw × 3 pitch visited)──► IDLE (dead-end)
+any        ──(/wbc/restart=False from keyboard)──► IDLE
 PRE_APPROACH ──(/ik_done=True, arm oriented)──► APPROACHING
-APPROACHING ──(dist<handoff_distance=5cm)──► SCANNING
-SCANNING ──(/wbc/ws_request)──► WS_EXTENSION
+APPROACHING  ──(dist<handoff_distance=5cm)──► SCANNING
+SCANNING     ──(/wbc/ws_request)──► WS_EXTENSION
 WS_EXTENSION ──(/ik_done)──► SCANNING
 ```
 
@@ -338,7 +408,7 @@ WS_EXTENSION ──(/ik_done)──► SCANNING
 - Griglia 3×3: 3 yaw (center, +10°, -10°) × 3 pitch (5°, 10°, 15°)
 - A ogni punto griglia: `body_pose(height=-0.20, pitch, yaw)` + `Twist()` flush, poi pausa 3s
 - Yaw capture: all'ingresso SEARCHING, TF `body→odom` fornisce lo yaw di riferimento
-- **Lock**: quando conf ≥ 0.85 → Spot FREEZE (nessun cambio body_pose), raccoglie 10 sample, media → `QualityMonitor.set_target()` → PRE_APPROACH
+- **Lock**: quando conf ≥ 0.85 → Spot FREEZE (nessun cambio body_pose), raccoglie 5 sample, media → `QualityMonitor.set_target()` → PRE_APPROACH
 - Se conf scende < 0.85 durante lock → riprende griglia dal punto corrente
 - `_cb_approach` salta `try_init` durante SEARCHING (target viene solo dal lock)
 - Griglia completata (~27s) → IDLE (dead-end)
@@ -406,12 +476,13 @@ When `dry_run:=true` on WBC launch, all outputs go to debug topics:
 
 | Module | Role |
 |--------|------|
-| `wbc_coordinator.py` | Phase FSM for Spot+Z1: SEARCHING→PRE_APPROACH→APPROACHING→SCANNING→WS_EXTENSION, QualityMonitor (target fisso in odom + quality tracking), body height control |
+| `wbc_coordinator.py` | Phase FSM for Spot+Z1: WAITING_TF→IDLE→SEARCHING→PRE_APPROACH→APPROACHING→SCANNING→WS_EXTENSION, QualityMonitor (target fisso in odom + quality tracking), body height control |
 | `wbc_qp_controller.py` | Holistic WBC at 10 Hz: damped pseudo-inverse split of arm joints + base velocity, quality-based v_scale, stable look-at orientation, `/wbc/spot_control` gates cmd_vel |
 | `wbc_math.py` | Pure math: J_base, J_holistic, manipulability, WBC split, WBC split with yaw |
+| `tf_monitor.py` | Standalone TF monitor: attende `my_spot/odom → my_spot/body`, pubblica `/wbc/tf_ready` quando disponibile |
 | `ik_goal_mux.py` | Priority mux: WBC goals override Z1 FSM goals |
 | `spot_goal_navigator.py` | Spot point-to-point navigation |
-| `wbc_keyboard_controller.py` | Keyboard-driven Spot control: start/return/restart WBC via `/wbc/restart` |
+| `wbc_keyboard_controller.py` | Keyboard-driven Spot control: start/return/restart WBC via `/wbc/restart`, blocca start se TF non pronto |
 
 ### Main modules: `src/spot_perception/spot_perception/`
 

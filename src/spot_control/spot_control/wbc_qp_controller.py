@@ -146,6 +146,7 @@ class WBCQPControllerNode(Node):
         self._sigma_max      = 0.0    # quality [m] from QualityMonitor (not std dev)
         self._desired_yaw: float | None = None  # target Spot yaw [rad, odom]
         self._spot_control = True  # cmd_vel enabled by default
+        self._tf_ready   = False  # TF available flag
 
         # ── Sub / Pub ─────────────────────────────────────────────────
         self.create_subscription(Bool,        '/wbc/enable',               self._cb_enable,      10)
@@ -198,7 +199,45 @@ class WBCQPControllerNode(Node):
     def _cb_spot_control(self, msg: Bool) -> None:
         self._spot_control = msg.data
 
-    # ── TF lookup ───────────────────────────────────────────────────
+    # ── TF helpers ────────────────────────────────────────────────────
+
+    def _tf_lookup(self, source: str, target: str,
+                   timeout_sec: float = 1.0) -> TransformStamped | None:
+        try:
+            return self._tf.lookup_transform(
+                source, target,
+                rclpy.time.Time(), timeout=Duration(seconds=timeout_sec))
+        except TransformException as e:
+            if not self._tf_ready:
+                self.get_logger().warn(
+                    f'TF {source} → {target} non disponibile.\n'
+                    f'  Diagnostica: ros2 topic list | grep tf\n'
+                    f'  Verifica: 1) spot_ros2 attivo su SpotCore?  '
+                    f'2) ROS_DOMAIN_ID uguale?  '
+                    f'3) spot_name=\'my_spot\'?',
+                    throttle_duration_sec=5.0)
+            else:
+                self.get_logger().warn(
+                    f'TF {source} → {target} persa ({e})',
+                    throttle_duration_sec=2.0)
+            return None
+
+    def _tf_transform(self, pose: PoseStamped, target_frame: str,
+                      timeout_sec: float = 1.0) -> PoseStamped | None:
+        try:
+            return self._tf.transform(
+                pose, target_frame, timeout=Duration(seconds=timeout_sec))
+        except TransformException as e:
+            if not self._tf_ready:
+                self.get_logger().warn(
+                    f'TF {pose.header.frame_id} → {target_frame} non disponibile.\n'
+                    f'  Diagnostica: ros2 topic list | grep tf',
+                    throttle_duration_sec=5.0)
+            else:
+                self.get_logger().warn(
+                    f'TF {pose.header.frame_id} → {target_frame} persa ({e})',
+                    throttle_duration_sec=2.0)
+            return None
 
     # ── Main update ───────────────────────────────────────────────────
 
@@ -210,50 +249,39 @@ class WBCQPControllerNode(Node):
         self._mount_tf.header.stamp = self.get_clock().now().to_msg()
         self._mount_tf_bc.sendTransform(self._mount_tf)
 
-        # Common lookup time — use time 0 for "latest available transform"
-
         # 1. EE pose in odom (for error computation)
-        try:
-            ee_in_odom = self._tf.lookup_transform(
-                self._odom_frame, self._ee_frame,
-                rclpy.time.Time(), timeout=Duration(seconds=1.0))
-        except TransformException as e:
-            self.get_logger().warn(f'TF ee→odom: {e}', throttle_duration_sec=2.0)
+        ee_in_odom = self._tf_lookup(self._odom_frame, self._ee_frame)
+        if ee_in_odom is None:
             return
 
         # 2. EE position in body frame (for J_base)
-        try:
-            ee_in_body = self._tf.lookup_transform(
-                self._body_frame, self._ee_frame,
-                rclpy.time.Time(), timeout=Duration(seconds=1.0))
-        except TransformException as e:
-            self.get_logger().warn(f'TF ee→body: {e}', throttle_duration_sec=2.0)
+        ee_in_body = self._tf_lookup(self._body_frame, self._ee_frame)
+        if ee_in_body is None:
             return
 
         # 3. Rotation body→odom (to align J_base with J_arm world frame)
-        try:
-            body_in_odom = self._tf.lookup_transform(
-                self._odom_frame, self._body_frame,
-                rclpy.time.Time(), timeout=Duration(seconds=1.0))
-        except TransformException as e:
-            self.get_logger().warn(f'TF body→odom: {e}', throttle_duration_sec=2.0)
+        body_in_odom = self._tf_lookup(self._odom_frame, self._body_frame)
+        if body_in_odom is None:
             return
+
+        # First successful TF lookup in this session → confirm connectivity
+        if not self._tf_ready:
+            self._tf_ready = True
+            self.get_logger().info(
+                f'TF disponibile: {self._odom_frame} → {self._body_frame} OK. '
+                f'SpotCore connesso via DDS.')
 
         # 4. Goal is already in odom frame (coordinator publishes in odom).
         goal_odom = self._goal
 
         # 5. Transform goal from odom → link00 for stable look-at
         #    (direction from arm base to target, independent of EE position).
-        try:
-            goal_stamped = PoseStamped()
-            goal_stamped.header.frame_id = self._odom_frame
-            goal_stamped.header.stamp    = rclpy.time.Time().to_msg()
-            goal_stamped.pose            = goal_odom.pose
-            goal_link00 = self._tf.transform(goal_stamped, self._z1_base_frame,
-                                             timeout=Duration(seconds=1.0))
-        except TransformException as e:
-            self.get_logger().warn(f'TF goal→{self._z1_base_frame}: {e}',
-                                   throttle_duration_sec=2.0)
+        goal_stamped = PoseStamped()
+        goal_stamped.header.frame_id = self._odom_frame
+        goal_stamped.header.stamp    = rclpy.time.Time().to_msg()
+        goal_stamped.pose            = goal_odom.pose
+        goal_link00 = self._tf_transform(goal_stamped, self._z1_base_frame)
+        if goal_link00 is None:
             return
 
         # 6. EE position error → desired spatial velocity (Pinocchio: [ang(3), lin(3)])

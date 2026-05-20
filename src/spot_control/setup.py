@@ -16,6 +16,8 @@ setup(
             glob('launch/*.py')),
         (os.path.join('share', package_name, 'config'),
             glob('config/*.yaml')),
+        (os.path.join('share', package_name, 'scripts'),
+            glob('scripts/*.sh')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -31,6 +33,7 @@ setup(
             'wbc_coordinator     = spot_control.wbc_coordinator:main',
             'wbc_keyboard_node   = spot_control.wbc_keyboard_controller:main',
             'ik_goal_mux         = spot_control.ik_goal_mux:main',
+            'tf_monitor          = spot_control.tf_monitor:main',
         ],
     },
 )

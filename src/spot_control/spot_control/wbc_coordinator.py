@@ -124,6 +124,7 @@ class _QualityMonitor:
 
 
 class CoordState:
+    WAITING_TF    = 'WAITING_TF'
     SEARCHING     = 'SEARCHING'
     PRE_APPROACH  = 'PRE_APPROACH'
     IDLE          = 'IDLE'
@@ -202,6 +203,7 @@ class WBCCoordinatorNode(Node):
         # ── TF ────────────────────────────────────────────────────────
         self._tf = Buffer()
         TransformListener(self._tf, self)
+        self._tf_ready = False
 
         # ── State ─────────────────────────────────────────────────────
         self._state                  = None   # set via _set_state below
@@ -228,6 +230,7 @@ class WBCCoordinatorNode(Node):
         self.create_subscription(Bool,         '/wbc/ws_request',            self._cb_ws_req,     10)
         self.create_subscription(Vector3Stamped, '/laying_human/body_axis',  self._cb_body_axis,  10)
         self.create_subscription(Bool,           '/wbc/restart',             self._cb_restart,    10)
+        self.create_subscription(Bool,           '/wbc/tf_ready',            self._cb_tf_ready,    10)
 
         self._pub_goal     = self.create_publisher(PoseStamped, p('wbc_goal_topic'),        10)
         self._pub_enable   = self.create_publisher(Bool,        p('wbc_enable_topic'),     10)
@@ -237,9 +240,10 @@ class WBCCoordinatorNode(Node):
         self._pub_spot_ctrl = self.create_publisher(Bool,       '/wbc/spot_control',       10)
 
         self.create_timer(0.2, self._tick)   # 5 Hz FSM
-        self._set_state(CoordState.SEARCHING)
+        self._set_state(CoordState.WAITING_TF)
         self.get_logger().info(
-            f'WBC Coordinator ready.\n'
+            f'WBC Coordinator ready — in attesa TF da SpotCore.\n'
+            f'  Attendo {self._odom_frame} → {self._body_frame} ...\n'
             f'  FSM: 5 Hz  |  Search: 3×3 grid\n'
             f'  Lock: conf≥{self._search_lock_confidence}  |  samples: {self._search_lock_samples}')
 
@@ -256,12 +260,8 @@ class WBCCoordinatorNode(Node):
 
     def _cb_body_axis(self, msg: Vector3Stamped) -> None:
         """Compute desired Spot yaw so that X_body ⊥ patient head-feet axis."""
-        # Rotate body axis direction from camera frame to odom frame (rotation only).
-        try:
-            tf = self._tf.lookup_transform(
-                self._odom_frame, msg.header.frame_id,
-                self.get_clock().now(), timeout=Duration(seconds=1.0))
-        except TransformException:
+        tf = self._tf_lookup(self._odom_frame, msg.header.frame_id)
+        if tf is None:
             return
 
         R = quat_to_rot(tf.transform.rotation)
@@ -279,12 +279,15 @@ class WBCCoordinatorNode(Node):
         opt2 = normalize_angle(θ_body - math.pi / 2)
 
         # Pick the option closest to current Spot yaw (minimum rotation).
-        try:
-            body_in_odom = self._tf.lookup_transform(
-                self._odom_frame, self._body_frame,
-                self.get_clock().now(), timeout=Duration(seconds=1.0))
-        except TransformException:
+        body_in_odom = self._tf_lookup(self._odom_frame, self._body_frame)
+        if body_in_odom is None:
             return
+
+        if not self._tf_ready:
+            self._tf_ready = True
+            self.get_logger().info(
+                f'TF disponibile: {self._odom_frame} → {self._body_frame} OK. '
+                f'SpotCore connesso via DDS.')
 
         θ_current = _yaw_from_quat(body_in_odom.transform.rotation)
         err1 = abs(normalize_angle(opt1 - θ_current))
@@ -296,10 +299,8 @@ class WBCCoordinatorNode(Node):
         self._pub_yaw.publish(msg_out)
 
     def _cb_approach(self, msg: PoseStamped) -> None:
-        try:
-            goal_odom = self._tf.transform(msg, self._odom_frame,
-                                           timeout=Duration(seconds=1.0))
-        except TransformException:
+        goal_odom = self._tf_transform(msg, self._odom_frame)
+        if goal_odom is None:
             return
         self._approach_point_odom = goal_odom
         if self._state != CoordState.SEARCHING:
@@ -337,6 +338,14 @@ class WBCCoordinatorNode(Node):
             self._set_state(CoordState.IDLE)
             self._set_wbc_enabled(False)
 
+    def _cb_tf_ready(self, msg: Bool) -> None:
+        if msg.data and self._state == CoordState.WAITING_TF:
+            self.get_logger().info(
+                'TF SpotCore disponibile → IDLE.\n'
+                '  Premi "s" sul keyboard controller per avviare la missione.')
+            self._tf_ready = True
+            self._set_state(CoordState.IDLE)
+
     # ── FSM tick ──────────────────────────────────────────────────────
 
     def _tick(self) -> None:
@@ -350,6 +359,8 @@ class WBCCoordinatorNode(Node):
 
         if self._state == CoordState.IDLE:
             self._tick_idle()
+        elif self._state == CoordState.WAITING_TF:
+            self._tick_waiting_tf()
         elif self._state == CoordState.SEARCHING:
             self._tick_searching()
         elif self._state == CoordState.PRE_APPROACH:
@@ -364,7 +375,8 @@ class WBCCoordinatorNode(Node):
 
     def _check_lying_timeout(self) -> None:
         # Once committed (handoff done), don't abort on Orbbec loss — RealSense is in charge.
-        if self._state in (CoordState.IDLE,
+        if self._state in (CoordState.WAITING_TF,
+                            CoordState.IDLE,
                             CoordState.SEARCHING,
                             CoordState.PRE_APPROACH,
                             CoordState.APPROACHING,
@@ -380,6 +392,9 @@ class WBCCoordinatorNode(Node):
 
     def _tick_idle(self) -> None:
         pass  # IDLE is dead-end — restart requires external intervention
+
+    def _tick_waiting_tf(self) -> None:
+        pass  # attesa passiva — _cb_tf_ready farà la transizione
 
     def _tick_approaching(self) -> None:
         if self._approach_point_odom is None:
@@ -468,11 +483,8 @@ class WBCCoordinatorNode(Node):
         if self._ws_ext_anchor is None:
             return
 
-        try:
-            tf = self._tf.lookup_transform(
-                self._odom_frame, self._body_frame,
-                self.get_clock().now(), timeout=Duration(seconds=1.0))
-        except TransformException:
+        tf = self._tf_lookup(self._odom_frame, self._body_frame)
+        if tf is None:
             return
 
         p_now = np.array([tf.transform.translation.x, tf.transform.translation.y])
@@ -501,14 +513,38 @@ class WBCCoordinatorNode(Node):
 
     # ── Helpers ───────────────────────────────────────────────────────
 
+    def _tf_lookup(self, source: str, target: str,
+                   timeout_sec: float = 1.0) -> TransformStamped | None:
+        try:
+            return self._tf.lookup_transform(
+                source, target, self.get_clock().now(),
+                timeout=Duration(seconds=timeout_sec))
+        except TransformException:
+            if not self._tf_ready:
+                self.get_logger().warn(
+                    f'TF {source} → {target} non disponibile.\n'
+                    f'  Diagnostica: ros2 topic list | grep tf',
+                    throttle_duration_sec=5.0)
+            return None
+
+    def _tf_transform(self, pose: PoseStamped, target_frame: str,
+                      timeout_sec: float = 1.0) -> PoseStamped | None:
+        try:
+            return self._tf.transform(
+                pose, target_frame, timeout=Duration(seconds=timeout_sec))
+        except TransformException:
+            if not self._tf_ready:
+                self.get_logger().warn(
+                    f'TF {pose.header.frame_id} → {target_frame} non disponibile.\n'
+                    f'  Diagnostica: ros2 topic list | grep tf',
+                    throttle_duration_sec=5.0)
+            return None
+
     def _distance_to_patient(self) -> float | None:
         if self._approach_point_odom is None:
             return None
-        try:
-            body_in_odom = self._tf.lookup_transform(
-                self._odom_frame, self._body_frame,
-                self.get_clock().now(), timeout=Duration(seconds=1.0))
-        except TransformException:
+        body_in_odom = self._tf_lookup(self._odom_frame, self._body_frame)
+        if body_in_odom is None:
             return None
         dx = body_in_odom.transform.translation.x - self._approach_point_odom.pose.position.x
         dy = body_in_odom.transform.translation.y - self._approach_point_odom.pose.position.y
@@ -556,23 +592,21 @@ class WBCCoordinatorNode(Node):
 
     def _save_ws_ext_anchor(self) -> None:
         """Save Spot odom position+yaw as anchor for WS_EXTENSION box constraint."""
-        try:
-            tf = self._tf.lookup_transform(
-                self._odom_frame, self._body_frame,
-                self.get_clock().now(), timeout=Duration(seconds=1.0))
-            self._ws_ext_anchor = np.array([
-                tf.transform.translation.x,
-                tf.transform.translation.y,
-            ])
-            self._ws_ext_anchor_yaw = _yaw_from_quat(tf.transform.rotation)
-            self.get_logger().info(
-                f'WS_EXT anchor saved: '
-                f'p=[{self._ws_ext_anchor[0]:.2f},{self._ws_ext_anchor[1]:.2f}] '
-                f'yaw={math.degrees(self._ws_ext_anchor_yaw):.1f}°'
-            )
-        except TransformException:
+        tf = self._tf_lookup(self._odom_frame, self._body_frame)
+        if tf is None:
             self._ws_ext_anchor = None
             self.get_logger().warn('WS_EXT: could not save anchor (TF unavailable)')
+            return
+        self._ws_ext_anchor = np.array([
+            tf.transform.translation.x,
+            tf.transform.translation.y,
+        ])
+        self._ws_ext_anchor_yaw = _yaw_from_quat(tf.transform.rotation)
+        self.get_logger().info(
+            f'WS_EXT anchor saved: '
+            f'p=[{self._ws_ext_anchor[0]:.2f},{self._ws_ext_anchor[1]:.2f}] '
+            f'yaw={math.degrees(self._ws_ext_anchor_yaw):.1f}°'
+        )
 
     def _set_body_pose(self, height: float, pitch: float = 0.0, yaw: float = 0.0) -> None:
         from tf_transformations import quaternion_from_euler
@@ -603,12 +637,10 @@ class WBCCoordinatorNode(Node):
         Each point: pause = search_pause_per_point [s].
         Returns timeline (may be empty if no params), sorted by t_start.
         """
-        try:
-            tf = self._tf.lookup_transform(
-                self._odom_frame, self._body_frame,
-                self.get_clock().now(), timeout=Duration(seconds=1.0))
+        tf = self._tf_lookup(self._odom_frame, self._body_frame)
+        if tf is not None:
             ref_yaw = _yaw_from_quat(tf.transform.rotation)
-        except TransformException:
+        else:
             ref_yaw = 0.0
             self.get_logger().warn('SEARCH: could not get current yaw, using 0')
 
