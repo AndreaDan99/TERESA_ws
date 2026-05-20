@@ -6,6 +6,10 @@
 set -e
 
 source /opt/ros/humble/setup.bash
+# dustynv base image installs ROS2 under .../install/ (merge-install layout)
+if [ -f /opt/ros/humble/install/setup.bash ]; then
+    source /opt/ros/humble/install/setup.bash
+fi
 
 # Fix: dustynv base image's venv has a broken cmake that shadows system cmake
 for d in /opt/venv/lib/python*/site-packages/cmake; do
