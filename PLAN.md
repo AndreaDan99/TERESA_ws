@@ -1,160 +1,108 @@
-# PLAN.md — TERESA Project Roadmap & Test Guide
+# TERESA — Piano rifattorizzazione launch (Core + App)
 
----
+## Obiettivo
 
-## Quick Test Procedures
+Ridurre i 6 terminali attuali a 3, separando i driver hardware (Orbbec, RealSense, Z1) dalla logica applicativa (percezione, controllo, WBC). Il Core segnala quando tutto è attivo via `/core/ready`.
 
-### Prerequisites
-```bash
-source /opt/ros/humble/setup.bash
-source install/setup.bash
 ```
-
-### Z1 Standalone (no Spot)
-```bash
-# T1: Hardware + RealSense + YOLO
-ros2 launch z1_vision z1_realsense.launch.py use_rviz:=true
-
-# T2: Perception
-ros2 launch z1_vision z1_perception.launch.py
-
-# T3: Control (FSM, homing in 5s → body_scan → FAST)
-ros2 launch z1_vision z1_control.launch.py
-```
-
-### WBC Dry-Run (all code runs, nothing moves)
-Prerequisites: Spot in **sit**, `spot_ros2` on SpotCore.
-
-```bash
-# T1: Orbbec perception
-ros2 launch spot_perception spot_perception.launch.py test_mode:=true
-
-# T2: Z1 hardware + RealSense
-ros2 launch z1_vision z1_realsense.launch.py use_rviz:=true
-
-# T3: Z1 perception
-ros2 launch z1_vision z1_perception.launch.py
-
-# T4: Z1 control (FSM, body scan gated on WBC=SCANNING)
-ros2 launch z1_vision z1_control.launch.py
-
-# T5: WBC dry-run (debug topics only)
-ros2 launch spot_control wbc.launch.py dry_run:=true
-```
-
-### WBC Full (real Spot movement)
-Prerequisites: Spot in **sit**, `spot_ros2` on SpotCore.
-
-```bash
-# T1–T4: same as dry-run
-
-# T5: WBC live (arm + Spot move)
-ros2 launch spot_control wbc.launch.py
-```
-
-### Build
-```bash
-colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
-colcon build --packages-select z1_vision spot_control spot_perception
-```
-
-### Lint / Test
-```bash
-colcon test --packages-select z1_vision spot_control spot_perception
-colcon test-result --verbose
+T1: ros2 launch spot_control teresa_core.launch.py
+T2: ros2 launch spot_control teresa_app.launch.py
+T3: ros2 run spot_control wbc_keyboard_node
 ```
 
 ---
 
-## Planned: Early Body Scan during WBC APPROACHING
+## Architettura
 
-### Idea
-Il braccio esegue il body scan **mentre** Spot copre gli ultimi ~65 cm di avvicinamento.
-Quando Spot arriva a 5 cm, il centro torso è già noto → si salta la fase BODY_SCANNING
-dopo l'handoff. Guadagno: 5-10 secondi risparmiati.
+### `teresa_core.launch.py` — nuovo file in `spot_control/launch/`
 
-### Flusso
+| Cosa | Provenienza |
+|---|---|
+| Orbbec Femto Bolt driver | `spot_perception.launch.py` → estrarre `IncludeLaunchDescription` di `femto_bolt.launch.py` |
+| TF statica `my_spot/body → orbbec_link` | `spot_perception.launch.py` → spostare `static_transform_publisher` |
+| TF statica `orbbec_link → orbbec_color_optical_frame` | `spot_perception.launch.py` → spostare |
+| Z1 bringup (`z1.launch.py`, robot_state_publisher + JTC + `/joint_states`) | `z1_realsense.launch.py` → estrarre `IncludeLaunchDescription` di `z1.launch.py` |
+| RealSense driver | `z1_realsense.launch.py` → estrarre `IncludeLaunchDescription` di `rs_launch.py` |
+| TF statica `link06 → camera_link` | `z1_realsense.launch.py` → spostare `static_transform_publisher` |
+| Nodo `core_ready` | **Nuovo**: monitora `/joint_states` + `/orbbec/color/image_raw` + TF `link00→link06`. Quando tutti attivi, pubblica `/core/ready` Bool True una volta sola. |
+
+### `teresa_app.launch.py` — nuovo file in `spot_control/launch/`
+
+Include tramite `IncludeLaunchDescription`:
+- `spot_perception.launch.py` con `use_orbbec_driver:=false`
+- `z1_perception.launch.py`
+- `z1_control.launch.py`
+- `wbc.launch.py`
+
+### `spot_perception.launch.py` — modifica
+
+Aggiungere argomento `use_orbbec_driver` (default `true` per retrocompatibilità):
+
+```python
+use_orbbec_driver_arg = DeclareLaunchArgument(
+    'use_orbbec_driver', default_value='true',
+    description='Lancia Orbbec driver + TF statiche. false se già lanciato da teresa_core')
 ```
-t=0:  dist=2m     → WBC APPROACHING, braccio look-at
-t=5s: dist=0.7m   → scan_distance raggiunta!
-                    QP sospende ik_enable → MUX lascia passare FSM
-                    FSM esegue body scan (phase 1→2→3)
-                    Spot continua a ricevere cmd_vel (QP non si ferma)
-t=11s: scan done  → QP riprende ik_enable
-t=13s: dist=5cm   → handoff! FSM va diretto a CHECKING_WORKSPACE
+
+Quando `false`:
+- **Salta** `orbbec_launch` (IncludeLaunchDescription di femto_bolt)
+- **Salta** `static_tf_body_camera` e `static_tf_camera_optical`
+- **Riduce** i `TimerAction`: yolo+posture+bbox+laying a t=1s invece di t=4s (Orbbec già attivo dal core)
+- **Lancia** solo: yolo_skeleton, posture_analyzer, bbox_visualizer, laying_human_detector
+
+### `core_ready` node — nuovo file `spot_control/spot_control/core_ready.py`
+
+Nodo ROS 2 minimale:
+1. Si sottoscrive a `/joint_states` → ricevuto almeno un messaggio = Z1 driver attivo
+2. Si sottoscrive a `/orbbec/color/image_raw` (o un topic equivalente) → Orbbec attivo
+3. Controlla TF `link00 → link06` con `lookup_transform` → robot_state_publisher funzionante
+4. Quando tutti e 3 OK → pubblica `/core/ready` = True (una volta), logga conferma, esce
+
+### `setup.py` — modifica
+
+Aggiungere entry point per `core_ready`:
+```python
+'core_ready = spot_control.core_ready:main',
 ```
 
-### File da toccare
-- `wbc_coordinator.py` — param `scan_distance`, topic `/wbc/publish_arm`
-- `wbc_qp_controller.py` — flag `_publish_arm`, smette di pubblicare ik_enable quando False
-- `z1_FSM.py` — segnale `early_scan` in WAITING, skip body scan dopo handoff
-- `wbc_params.yaml` — `scan_distance: 0.7`
-
-### Sfide
-- Coordinazione FSM↔coordinator: chi segnala inizio/fine scan
-- Fallback se scan fallisce → comportamento attuale (body scan dopo handoff)
-- Timing stretto: body scan ~6-8s, Spot percorre 0.65m a ~0.1 m/s → 6-7s
-- Se Spot arriva a 5cm prima che scan finisca → attendere o forzare handoff?
-
-### Pre-requisito
-Validare prima le modifiche WBC attuali (goal in odom, 10 Hz, look-at stabile, QualityMonitor).
+I nuovi launch file sono già coperti da `glob('launch/*.py')`.
 
 ---
 
-## Planned: WBC Pitch + Height Integration
+## Terminali finali
 
-### Current limitation
-WBC `J_base` is **6×2**: only `[vx, wz]` — forward velocity + yaw. Spot cannot use pitch (forward tilt) or body height (squat/stand) as part of the holistic controller.
+```bash
+# T1: Core (driver hardware + TF statiche)
+ros2 launch spot_control teresa_core.launch.py
+# Aspettare: [core_ready] Core pronto — tutti i driver attivi.
 
-### Strategy (updated 11 May 2026)
+# T2: App (percezione + controllo + WBC)
+ros2 launch spot_control teresa_app.launch.py
+# Aspettare: [TF READY] SpotCore connesso — premi "s" per iniziare.
 
-**Phase 1 — Pitch as discrete compensation** (✅ solution found, implemented 11 May 2026):
-- Pitch is NOT integrated into the continuous WBC Jacobian (6×4)
-- Instead, pitch + height are sent as a single `geometry_msgs/Pose` to **`/my_spot/body_pose`**
-- The **native `spot_driver`** (not custom) subscribes to `body_pose` and maps:
-  - `position.z` → `BodyControlParams.height` (body height offset)
-  - `orientation` → `BodyControlParams.rotation` (pitch / roll quaternion)
-- Already used in `wbc_coordinator.py`: `_set_body_pose(height, pitch)` publishes to this topic
-- Used in **SEARCHING** state (height=-0.20m, pitch=0.26rad≈15° nose-down) for ground-level patient detection
-- Replaces the custom `SetStandHeight` service client — simpler, no `spot_msgs` dependency
-- Future: **WS_EXTENSION** can apply pitch dynamically to shift arm workspace forward/down
-- Reference: `spot_ros2.py:620` subscribes to `"body_pose"` (Pose), callback at line 2652 builds `BodyControlParams`
-
-**Phase 2 — Full WBC 6×4** (future, after Phase 1 validated):
-| New DOF | Spot command | Effect on EE |
-|---------|-------------|--------------|
-| `vy` (pitch) | discrete service or `cmd_vel.angular.y` | Pitch forward → EE lowers + forward; pitch backward → EE raises |
-| `vz` (height) | `cmd_vel.linear.z` or `SetStandHeight` | Squat → EE lowers; stand → EE raises |
-
-New solver: 6 equations × (6 arm + 4 base) = **10 DOF**.
-
-### Challenge: pitch and height are Z-redundant
-Both `vy` and `vz` affect the EE **vertical** position. Without a second task, the solver mixes them arbitrarily.
-
-Two strategies:
-1. **Add secondary tasks**: like yaw, add rows for preferred pitch (keep Spot level) and preferred height (keep Spot at nominal squat), weighted low so arm takes priority when well-conditioned
-2. **Mutual exclusion**: prefer height adjustment first (more stable), use pitch only when height alone isn't enough
-
-### Files to touch
-- `src/spot_control/spot_control/wbc_math.py` — extend `compute_j_base` to 6×4, extend `W` to 10×10, add 2 secondary task rows (→ 8×10)
-- `src/spot_control/spot_control/wbc_qp_controller.py` — add `vy`/`vz` to cmd_vel, new ROS params for pitch/height weights
-- `src/spot_control/spot_control/wbc_coordinator.py` — desired pitch/height, new WS_EXTENSION limits for pitch/height
-- `src/spot_control/config/wbc_params.yaml` — new params: `pitch_weight`, `height_weight`, `pitch_max`, `height_max`
-
-### Next steps
-1. Test WBC without pitch — verify current vx+wz+body_height is sufficient
-2. ✅ Pitch API found: `/my_spot/body_pose` topic (native spot_driver, no custom code needed)
-3. ✅ Phase 1 implemented: discrete pitch + height in `_set_body_pose()` for SEARCHING state
-4. Apply pitch in WS_EXTENSION: when arm can't reach target, tilt forward to shift workspace (todo)
-5. Derive analytical `J_base` for pitch + height (kinematic chain: Spot base → body frame → Z1 base → EE)
-6. Implement Phase 2: full WBC 6×4 (future)
+# T3: Keyboard
+ros2 run spot_control wbc_keyboard_node
+# Premere "s" → missione parte
+```
 
 ---
 
-## Notes
+## File da creare
 
-- WS_EXTENSION bounding box: forward 0.20 m, lateral 0.20 m, backward 0.50 m — anchored at WS_EXTENSION entry
-- `wbc_coordinator.py` has a dormant `_cb_z1_state` subscription (no-op after HANDOFF removal) — kept for future monitoring
-- Target paziente fissato in odom (media prime 3 misure) — mai più ricambiato durante APPROACHING
-- QualityMonitor: qualità = `max_q * (1 - posture_confidence)` + crescita lineare senza misure
-- **Future: QualityMonitor EMA target update** — target congelato dopo init può essere rumoroso (prime 3 misure con Spot lontano). Possibile miglioramento: aggiornamento lento del target via EMA (`α` molto basso, es. 0.05) per convergere gradualmente verso la stima migliore man mano che Spot si avvicina, senza perdere la stabilità del look-at. Il `try_best_update` attuale (confidence jump > 0.10) non basta perché la confidence sale gradualmente.
+| File | Ruolo |
+|---|---|
+| `src/spot_control/launch/teresa_core.launch.py` | Core launch: driver + TF statiche + core_ready |
+| `src/spot_control/launch/teresa_app.launch.py` | App launch: include i 4 sub-launch applicativi |
+| `src/spot_control/spot_control/core_ready.py` | Nodo monitor: controlla driver attivi → pubblica `/core/ready` |
+
+## File da modificare
+
+| File | Modifica |
+|---|---|
+| `src/spot_perception/launch/spot_perception.launch.py` | Aggiungere arg `use_orbbec_driver`; quando false, salta driver e TF, riduce TimerAction |
+| `src/spot_control/setup.py` | Aggiungere entry point `core_ready` |
+| `INIT.md` | Aggiornare sezione "Running Spot + Z1 WBC" con i 3 terminali |
+
+## File invariati
+
+`z1_realsense.launch.py`, `z1_perception.launch.py`, `z1_control.launch.py`, `wbc.launch.py` restano come sono — usabili standalone per debug, inclusi da `teresa_app.launch.py`.

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-WBC Launch — wbc_qp_controller + wbc_coordinator + tf_monitor + static TFs
+WBC Launch — wbc_qp_controller + wbc_coordinator
 
 PREREQUISITI:
   - spot_ros2 su SpotCore (TF odom→body)
+  - teresa_core.launch.py in esecuzione (driver + tf_monitor)
   - spot_perception.launch.py in esecuzione (Orbbec + YOLO)
   - z1_vision in esecuzione (z1_ik_to_jtc, z1_FSM)
 
@@ -55,18 +56,9 @@ def generate_launch_description():
         parameters=[params_file],
     )
 
-    tf_monitor_node = Node(
-        package='spot_control',
-        executable='tf_monitor',
-        name='tf_monitor',
-        output='screen',
-        parameters=[params_file],
-    )
-
     return LaunchDescription([
         z1_x_arg, z1_y_arg, z1_z_arg, dry_run_arg,
         LogInfo(msg=['WBC — Spot+Z1 holistic control']),
-        tf_monitor_node,
         qp_node,
         coord_node,
     ])

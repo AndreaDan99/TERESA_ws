@@ -1,30 +1,38 @@
 #!/usr/bin/env python3
 """
-TF Monitor — controlla che SpotCore pubblichi i TF necessari.
+TF Monitor — verifica 4 condizioni prima di dare il via libera al WBC.
 
-Aspetta in loop finché i frame odom→body non diventano disponibili,
-poi pubblica /wbc/tf_ready = True e notifica l'utente.
+Condizioni:
+  1. /joint_states ricevuto            → Z1 driver attivo
+  2. /orbbec/color/image_raw ricevuto  → Orbbec camera viva
+  3. /camera/color/image_raw ricevuto  → RealSense camera viva
+  4. 6 catene TF disponibili           → TF tree completo (escluso body→link00, app-level)
+
+Solo quando TUTTE e 4 sono vere → pubblica /wbc/tf_ready = True.
 
 Uso:
   ros2 run spot_control tf_monitor
-  ros2 run spot_control tf_monitor --ros-args -p body_frame:=my_spot/body -p odom_frame:=my_spot/odom
 """
 
 import rclpy
 from rclpy.node import Node
+
+from std_msgs.msg import Bool, String
+from sensor_msgs.msg import Image, JointState
+from tf2_ros import Buffer, TransformListener, TransformException
 from rclpy.duration import Duration
 import rclpy.time
 
-from std_msgs.msg import Bool, String
-from tf2_ros import Buffer, TransformListener, TransformException
-
-
-DIAG_MSG = (
-    'Diagnostica: ros2 topic list | grep tf\n'
-    '  Verifica: 1) spot_ros2 attivo su SpotCore?\n'
-    '            2) ROS_DOMAIN_ID uguale?\n'
-    '            3) spot_name="my_spot"?'
-)
+# TF chains to check (source, target, description)
+TF_CHAINS = [
+    ('my_spot/odom',          'my_spot/body',              'SpotCore DDS'),
+    ('my_spot/body',          'orbbec_link',               'Orbbec mount'),
+    ('orbbec_link',           'orbbec_color_optical_frame', 'Orbbec optical'),
+    ('link00',                'link06',                    'Z1 arm (robot_state_publisher)'),
+    ('link06',                'camera_link',               'Realsense mount'),
+    ('camera_link',           'camera_color_optical_frame',  'Realsense optical'),
+    # NOTE: my_spot/body → link00 is from wbc_qp (app), checked at runtime
+]
 
 
 class TFMonitorNode(Node):
@@ -32,58 +40,122 @@ class TFMonitorNode(Node):
     def __init__(self):
         super().__init__('tf_monitor')
 
-        self.declare_parameter('odom_frame', 'my_spot/odom')
-        self.declare_parameter('body_frame', 'my_spot/body')
-        self.declare_parameter('check_rate',  1.0)  # Hz
-        self.declare_parameter('timeout',     1.0)  # seconds per lookup
+        self.declare_parameter('check_rate', 1.0)
+        self.declare_parameter('tf_timeout', 1.0)
+        self.declare_parameter('joint_states_topic', '/joint_states')
+        self.declare_parameter('orbbec_topic', '/orbbec/color/image_raw')
+        self.declare_parameter('realsense_topic', '/camera/color/image_raw')
 
-        self._odom_frame  = self.get_parameter('odom_frame').value
-        self._body_frame  = self.get_parameter('body_frame').value
         self._check_rate  = float(self.get_parameter('check_rate').value)
-        self._timeout     = float(self.get_parameter('timeout').value)
+        self._tf_timeout  = float(self.get_parameter('tf_timeout').value)
+        self._js_topic    = self.get_parameter('joint_states_topic').value
+        self._orbbec_topic = self.get_parameter('orbbec_topic').value
+        self._rs_topic    = self.get_parameter('realsense_topic').value
 
+        # ── TF ────────────────────────────────────────────────────────
         self._tf = Buffer()
         TransformListener(self._tf, self)
-        self._ready = False
-        self._warn_count = 0
 
-        self._pub_ready  = self.create_publisher(Bool,   '/wbc/tf_ready',  10)
+        # ── Topic subscriptions ───────────────────────────────────────
+        self._js_ok = False
+        self._orbbec_ok = False
+        self._rs_ok = False
+
+        self.create_subscription(JointState, self._js_topic, self._cb_js, 10)
+        self.create_subscription(Image, self._orbbec_topic, self._cb_orbbec, 10)
+        self.create_subscription(Image, self._rs_topic, self._cb_realsense, 10)
+
+        # ── Publishers ────────────────────────────────────────────────
+        self._pub_ready = self.create_publisher(Bool, '/wbc/tf_ready', 10)
         self._pub_status = self.create_publisher(String, '/wbc/tf_status', 10)
 
-        self.create_timer(1.0 / self._check_rate, self._check)
+        # ── State ─────────────────────────────────────────────────────
+        self._done = False  # prevent re-publish
+        self._tf_failures: dict = {}  # track which TF chains fail
+
+        self.create_timer(1.0 / self._check_rate, self._tick)
 
         self.get_logger().info(
-            f'TF Monitor avviato.\n'
-            f'  Attendo {self._odom_frame} → {self._body_frame} ...\n'
-            f'  {DIAG_MSG}')
+            'TF Monitor avviato.\n'
+            '  4 condizioni: Z1 driver | Orbbec | RealSense | 6 catene TF\n'
+            '  Diagnostica manuale: bash src/spot_control/scripts/tf_diag.sh')
 
-    def _check(self) -> None:
-        if self._ready:
+    # ── Callbacks ─────────────────────────────────────────────────────
+
+    def _cb_js(self, _msg: JointState) -> None:
+        if not self._js_ok:
+            self._js_ok = True
+            self.get_logger().info('Z1 driver: joint_states OK')
+
+    def _cb_orbbec(self, _msg: Image) -> None:
+        if not self._orbbec_ok:
+            self._orbbec_ok = True
+            self.get_logger().info('Orbbec: /orbbec/color/image_raw OK')
+
+    def _cb_realsense(self, _msg: Image) -> None:
+        if not self._rs_ok:
+            self._rs_ok = True
+            self.get_logger().info('RealSense: /camera/color/image_raw OK')
+
+    # ── Tick ──────────────────────────────────────────────────────────
+
+    def _tick(self) -> None:
+        if self._done:
             return
 
-        try:
-            self._tf.lookup_transform(
-                self._odom_frame, self._body_frame,
-                rclpy.time.Time(), timeout=Duration(seconds=self._timeout))
-        except TransformException:
-            self._warn_count += 1
-            if self._warn_count == 1 or self._warn_count % 5 == 0:
-                self.get_logger().warn(
-                    f'TF {self._odom_frame} → {self._body_frame} '
-                    f'non ancora disponibile (tentativo {self._warn_count}).\n'
-                    f'  {DIAG_MSG}')
-            self._pub_status.publish(String(data='WAITING_TF'))
-            return
+        # ── TF check ──────────────────────────────────────────────────
+        tf_ok_count = 0
+        tf_total = len(TF_CHAINS)
+        for src, tgt, desc in TF_CHAINS:
+            key = f'{src}→{tgt}'
+            if key in self._tf_failures:
+                # already known bad, retry
+                pass
+            try:
+                self._tf.lookup_transform(
+                    src, tgt, rclpy.time.Time(),
+                    timeout=Duration(seconds=self._tf_timeout))
+                self._tf_failures.pop(key, None)
+                tf_ok_count += 1
+            except TransformException:
+                self._tf_failures[key] = desc
 
-        self._ready = True
-        self.get_logger().info(
-            f'========================================\n'
-            f' TF DISPONIBILE: {self._odom_frame} → {self._body_frame} OK\n'
-            f' SpotCore connesso via DDS.\n'
-            f' Ora premi "s" sul keyboard controller per avviare.\n'
-            f'========================================')
-        self._pub_ready.publish(Bool(data=True))
-        self._pub_status.publish(String(data='TF_READY'))
+        # Re-count after retry on previous failures
+        if self._tf_failures:
+            tf_ok_count = tf_total - len(self._tf_failures)
+
+        # ── Status ────────────────────────────────────────────────────
+        c1 = 'OK' if self._js_ok else 'WAIT'
+        c2 = 'OK' if self._orbbec_ok else 'WAIT'
+        c3 = 'OK' if self._rs_ok else 'WAIT'
+        c4 = f'{tf_ok_count}/{tf_total}'
+
+        status_line = (
+            f'[Z1:{c1}] [Orbbec:{c2}] [RealSense:{c3}] '
+            f'[TF:{c4}]')
+        self._pub_status.publish(String(data=status_line))
+
+        # ── Missing details ───────────────────────────────────────────
+        if self._tf_failures:
+            missing = ', '.join(f'{k}({v})' for k, v in self._tf_failures.items())
+            self.get_logger().info(
+                f'{status_line}  —  TF mancanti: {missing}',
+                throttle_duration_sec=3.0)
+        else:
+            self.get_logger().info(status_line, throttle_duration_sec=3.0)
+
+        # ── All conditions met? ───────────────────────────────────────
+        if self._js_ok and self._orbbec_ok and self._rs_ok and tf_ok_count == tf_total:
+            self._done = True
+            self.get_logger().info(
+                '========================================\n'
+                ' TUTTO PRONTO\n'
+                ' Z1 driver OK | Orbbec OK | RealSense OK | TF 6/6 OK\n'
+                ' /wbc/tf_ready = True\n'
+                ' Ora puoi lanciare i terminali applicativi.\n'
+                '========================================')
+            self._pub_ready.publish(Bool(data=True))
+            self._pub_status.publish(String(data='READY'))
 
 
 def main(args=None):

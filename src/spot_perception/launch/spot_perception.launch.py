@@ -7,8 +7,9 @@ PREREQUISITO: spot_ros2 già avviato su SpotCore (via DDS)
 """
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, TimerAction, DeclareLaunchArgument, LogInfo
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from launch.substitutions import PathJoinSubstitution
@@ -26,6 +27,13 @@ def generate_launch_description():
     )
 
     test_mode = LaunchConfiguration('test_mode')
+
+    use_orbbec_driver_arg = DeclareLaunchArgument(
+        'use_orbbec_driver',
+        default_value='true',
+        description='Lancia driver Orbbec + TF statiche. false se già in teresa_core'
+    )
+    use_orbbec_driver = LaunchConfiguration('use_orbbec_driver')
 
     # ============================================================
     # 1) ORBBEC CAMERA (Femto Bolt)
@@ -57,7 +65,8 @@ def generate_launch_description():
             'enable_accel': 'false',
             'enable_gyro': 'false',
             'publish_tf': 'false',
-        }.items()
+        }.items(),
+        condition=IfCondition(use_orbbec_driver),
     )
 
     # ============================================================
@@ -162,31 +171,36 @@ def generate_launch_description():
     # ============================================================
     return LaunchDescription([
         test_mode_arg,
+        use_orbbec_driver_arg,
 
-        LogInfo(msg=['🤖 Spot Perception System — Jetson + Orbbec Femto Bolt']),
+        LogInfo(msg=['Spot Perception System — Jetson + Orbbec Femto Bolt']),
         LogInfo(msg=['   Topics: /orbbec/color/image_raw + /orbbec/depth/image_raw']),
         LogInfo(msg=['   Frame output: orbbec_color_optical_frame']),
 
-        # Orbbec subito
+        # Orbbec subito (solo se use_orbbec_driver=true)
         orbbec_launch,
 
-        # TF statiche dopo 2s (aspetta Orbbec)
+        # TF statiche dopo 2s (solo se use_orbbec_driver=true)
         TimerAction(period=2.0, actions=[
             LogInfo(msg=['[2s] TF statiche: body → orbbec_link → orbbec_color_optical_frame']),
             static_tf_body_camera,
             static_tf_camera_optical,
-        ]),
+        ], condition=IfCondition(use_orbbec_driver)),
 
-        # Perception dopo 4s (aspetta TF + Orbbec warm-up)
-        TimerAction(period=4.0, actions=[
-            LogInfo(msg=['[4s] YOLO skeleton + Posture + BBox + Laying detector']),
+        # Perception: 4s se Orbbec parte qui, 1s se già avviato dal core
+        TimerAction(period=PythonExpression([
+            '4.0 if "', use_orbbec_driver, '" == "true" else 1.0'
+        ]), actions=[
+            LogInfo(msg=['YOLO skeleton + Posture + BBox + Laying detector']),
             yolo_skeleton_node,
             posture_analyzer_node,
             bbox_visualizer_node,
             laying_detector_node,
         ]),
 
-        TimerAction(period=5.0, actions=[
-            LogInfo(msg=['[5s] Sistema perception PRONTO']),
+        TimerAction(period=PythonExpression([
+            '5.0 if "', use_orbbec_driver, '" == "true" else 2.0'
+        ]), actions=[
+            LogInfo(msg=['Sistema perception PRONTO']),
         ]),
     ])
