@@ -75,21 +75,23 @@ RUN git clone --depth 1 --branch ${REALSENSE_VERSION} \
     rm -rf /tmp/librealsense
 
 # ─── Orbbec SDK per Femto Bolt (ARM64) ───────────────────────────────────────
-# Scarica OrbbecSDK v2 per Linux ARM64.
-ARG ORBBEC_SDK_VERSION=v2.0.5
-RUN wget -q \
-    https://github.com/orbbec/OrbbecSDK/releases/download/${ORBBEC_SDK_VERSION}/OrbbecSDK_${ORBBEC_SDK_VERSION}_linux_arm64.tar.gz \
-    -O /tmp/orbbec_sdk.tar.gz && \
-    mkdir -p /opt/orbbec_sdk && \
-    tar -xzf /tmp/orbbec_sdk.tar.gz -C /opt/orbbec_sdk --strip-components=1 && \
-    cp /opt/orbbec_sdk/lib/*.so* /usr/local/lib/ && \
-    ldconfig && \
-    rm /tmp/orbbec_sdk.tar.gz
+# La naming convention è cambiata: ora .zip con hash commit nel nome.
+# Ultima release testata: v1.10.27
+ARG ORBBEC_SDK_VERSION=v1.10.27
+RUN apt-get update && apt-get install -y --no-install-recommends unzip \
+    && rm -rf /var/lib/apt/lists/* \
+    && wget -q \
+    "https://github.com/orbbec/OrbbecSDK/releases/download/${ORBBEC_SDK_VERSION}/OrbbecSDK_C_C%2B%2B_${ORBBEC_SDK_VERSION}_20250925_0549823_linux_arm64_release.zip" \
+    -O /tmp/orbbec_sdk.zip \
+    && mkdir -p /opt/orbbec_sdk \
+    && unzip -q /tmp/orbbec_sdk.zip -d /opt/orbbec_sdk \
+    && cp /opt/orbbec_sdk/*/lib/*.so* /usr/local/lib/ 2>/dev/null \
+    || cp /opt/orbbec_sdk/lib/*.so* /usr/local/lib/ \
+    && ldconfig \
+    && rm /tmp/orbbec_sdk.zip
 
-# Regole udev Orbbec
-RUN if [ -f /opt/orbbec_sdk/misc/99-obsensor-libusb.rules ]; then \
-        cp /opt/orbbec_sdk/misc/99-obsensor-libusb.rules /etc/udev/rules.d/; \
-    fi
+# Regole udev Orbbec (cercate ricorsivamente, path cambiato nelle nuove release)
+RUN find /opt/orbbec_sdk -name '99-obsensor-libusb.rules' -exec cp {} /etc/udev/rules.d/ \; 2>/dev/null || true
 
 # ─── Python deps ─────────────────────────────────────────────────────────────
 RUN pip3 install --no-cache-dir \
