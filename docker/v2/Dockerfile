@@ -29,29 +29,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake git \
     python3-pip python3-colcon-common-extensions \
     python3-rosdep python3-vcstool \
-    # ROS2 control stack
+    # ROS2 control stack (NON in ros_base)
     ros-humble-ros2-control \
     ros-humble-ros2-controllers \
     ros-humble-joint-trajectory-controller \
     ros-humble-joint-state-broadcaster \
-    ros-humble-robot-state-publisher \
-    ros-humble-xacro \
     ros-humble-effort-controllers \
     ros-humble-position-controllers \
-    # Perception / TF
-    ros-humble-cv-bridge \
-    ros-humble-image-transport \
-    ros-humble-image-publisher \
-    ros-humble-camera-info-manager \
-    ros-humble-tf2-ros \
-    ros-humble-tf2-geometry-msgs \
+    # Extra ROS2 (NON in ros_base)
     ros-humble-tf-transformations \
-    ros-humble-visualization-msgs \
-    ros-humble-message-filters \
-    # Rviz2 (debug / visualization)
     ros-humble-rviz2 \
-    # Pinocchio (kinematics)
     ros-humble-pinocchio \
+    # NOTE: cv_bridge, image_transport, tf2_ros, xacro, robot_state_publisher,
+    # message_filters, visualization_msgs sono GIÀ nel base image (source-built).
     # Orbbec camera build deps
     libgflags-dev \
     nlohmann-json3-dev \
