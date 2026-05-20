@@ -1,82 +1,83 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # TERESA Jetson Docker — v2
-# Base: dustynv ROS2 Humble + CUDA per JetPack 5.x (L4T r35)
+# Base: dustynv ROS2 Humble + CUDA per JetPack 6.x (L4T r36 / Ubuntu 22.04)
 #
-# IMPORTANTE: le immagini dustynv buildano ROS2 da sorgente.
-# I pacchetti ros-humble-* NON vanno installati da apt — non esistono.
-# Quelli core (tf2, cv_bridge, image_transport, xacro, robot_state_publisher...)
-# sono già inclusi in ros_base. Solo pinocchio va aggiunto via /ros2_install.sh.
+# Su r36 (Jammy) i pacchetti ros-humble-* sono disponibili via apt.
+# Tutto (pinocchio, ros2-control, xacro, rviz2...) installato da apt.
+#
+# Build:
+#   docker build -t teresa_ws:v2 .
+#
+# Run:
+#   ./run.sh
 #
 # VERIFICA la versione L4T sulla Jetson prima di buildare:
 #   cat /etc/nv_tegra_release
-# Poi aggiorna il tag di conseguenza:
-#   r35.1.0 → JP 5.0.2
-#   r35.2.1 → JP 5.1
-#   r35.3.1 → JP 5.1.1
-#   r35.4.1 → JP 5.1.2  (default qui)
-#   r35.5.0 → JP 5.1.3
 # ─────────────────────────────────────────────────────────────────────────────
-FROM dustynv/ros:humble-ros-base-l4t-r35.4.1
+FROM dustynv/ros:humble-ros-base-l4t-r36.2.0
 
-# ─── Fix ROS2 GPG key (expired) ──────────────────────────────────────────────
-# La chiave serve a rosdep per risolvere le dipendenze di sistema (non i
-# pacchetti ROS). Seguiamo lo stesso pattern di dustynv/ros2_build.sh.
-RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
-    -o /usr/share/keyrings/ros-archive-keyring.gpg && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
-    http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" \
-    > /etc/apt/sources.list.d/ros2.list
-
-# ─── System deps ─────────────────────────────────────────────────────────────
-# Solo pacchetti NON-ROS. I pacchetti ROS2 core sono già nel base image.
+# ─── System + ROS2 deps (apt, funziona su Jammy) ────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3-pip \
-    python3-colcon-common-extensions \
-    python3-rosdep \
-    python3-vcstool \
-    # USB / device access
-    libusb-1.0-0-dev \
-    libudev-dev \
-    udev \
-    # build tools
-    cmake \
-    build-essential \
-    git \
-    wget \
-    ca-certificates \
-    # orbbec_camera build deps
+    # Build tools
+    build-essential cmake git \
+    python3-pip python3-colcon-common-extensions \
+    python3-rosdep python3-vcstool \
+    # ROS2 control stack
+    ros-humble-ros2-control \
+    ros-humble-ros2-controllers \
+    ros-humble-joint-trajectory-controller \
+    ros-humble-joint-state-broadcaster \
+    ros-humble-robot-state-publisher \
+    ros-humble-xacro \
+    ros-humble-effort-controllers \
+    ros-humble-position-controllers \
+    # Perception / TF
+    ros-humble-cv-bridge \
+    ros-humble-image-transport \
+    ros-humble-image-publisher \
+    ros-humble-camera-info-manager \
+    ros-humble-tf2-ros \
+    ros-humble-tf2-geometry-msgs \
+    ros-humble-tf-transformations \
+    ros-humble-visualization-msgs \
+    ros-humble-message-filters \
+    # Rviz2 (debug / visualization)
+    ros-humble-rviz2 \
+    # Pinocchio (kinematics)
+    ros-humble-pinocchio \
+    # Orbbec camera build deps
     libgflags-dev \
     nlohmann-json3-dev \
     libgoogle-glog-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# ─── librealsense2 per Jetson (RSUSB backend) ────────────────────────────────
-# Intel non fornisce binari apt ufficiali per ARM/Jetson → build from source.
-ARG REALSENSE_VERSION=v2.57.7
-RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev \
-    libglfw3-dev \
-    libgl1-mesa-dev \
-    libglu1-mesa-dev \
+    # Eigen / fmt (z1 hardware interface)
+    libeigen3-dev \
+    libfmt-dev \
+    # USB / udev (cameras + Z1 arm)
+    udev \
+    libusb-1.0-0-dev \
+    usbutils \
     && rm -rf /var/lib/apt/lists/*
 
-RUN git clone --depth 1 --branch ${REALSENSE_VERSION} \
-        https://github.com/IntelRealSense/librealsense.git /tmp/librealsense && \
-    cd /tmp/librealsense && \
-    mkdir build && cd build && \
+# ─── Intel RealSense SDK (arm64, RSUSB backend) ─────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libssl-dev libusb-1.0-0-dev libudev-dev \
+    pkg-config libgtk-3-dev \
+    libglfw3-dev libgl1-mesa-dev libglu1-mesa-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 --branch v2.57.7 \
+    https://github.com/IntelRealSense/librealsense.git /tmp/librealsense && \
+    mkdir -p /tmp/librealsense/build && cd /tmp/librealsense/build && \
     cmake .. \
-        -DFORCE_RSUSB_BACKEND=ON \
-        -DBUILD_PYTHON_BINDINGS=OFF \
-        -DBUILD_EXAMPLES=OFF \
-        -DBUILD_GRAPHICAL_EXAMPLES=OFF \
-        -DCMAKE_BUILD_TYPE=Release && \
-    make -j$(nproc) && \
-    make install && \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DBUILD_EXAMPLES=OFF \
+      -DBUILD_GRAPHICAL_EXAMPLES=OFF \
+      -DFORCE_RSUSB_BACKEND=ON && \
+    make -j$(nproc) && make install && \
     rm -rf /tmp/librealsense
 
-# ─── Orbbec SDK per Femto Bolt (ARM64) ───────────────────────────────────────
-# La naming convention è cambiata: ora .zip con hash commit nel nome.
-# Ultima release testata: v1.10.27
+# ─── Orbbec SDK per Femto Bolt (ARM64) ──────────────────────────────────────
 ARG ORBBEC_SDK_VERSION=v1.10.27
 RUN apt-get update && apt-get install -y --no-install-recommends unzip \
     && rm -rf /var/lib/apt/lists/* \
@@ -89,30 +90,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends unzip \
     && ldconfig \
     && rm /tmp/orbbec_sdk.zip
 
-# Regole udev Orbbec (cercate ricorsivamente, path cambiato nelle nuove release)
-RUN find /opt/orbbec_sdk -name '99-obsensor-libusb.rules' -exec cp {} /etc/udev/rules.d/ \; 2>/dev/null || true
+RUN find /opt/orbbec_sdk -name '99-obsensor-libusb.rules' \
+    -exec cp {} /etc/udev/rules.d/ \; 2>/dev/null || true
 
-# ─── Python deps ─────────────────────────────────────────────────────────────
+# ─── PyTorch for Jetson (CUDA, YOLO) ────────────────────────────────────────
 RUN pip3 install --no-cache-dir \
-    ultralytics==8.4.50 \
-    scipy>=1.10.0 \
-    numpy>=1.24.0 \
-    transforms3d>=0.4.1 \
-    opencv-python-headless>=4.8.0
+    torch torchvision torchaudio \
+    --index-url https://pypi.jetson-platform.net/simple/ \
+    || echo "WARN: Jetson PyTorch index failed — torch may already be installed"
 
-# ─── Pinocchio (build da sorgente via /ros2_install.sh) ──────────────────────
-# Pinocchio NON è incluso in ros_base — va buildato da sorgente.
-# /ros2_install.sh scarica le dipendenze, risolve rosdep e compila con colcon.
-RUN /ros2_install.sh pinocchio
+# ─── Python packages ────────────────────────────────────────────────────────
+RUN pip3 install --no-cache-dir \
+    ultralytics \
+    scipy \
+    transforms3d \
+    numpy \
+    opencv-python-headless
 
-# ─── rosdep init ─────────────────────────────────────────────────────────────
+# ─── rosdep init ────────────────────────────────────────────────────────────
 RUN rosdep init 2>/dev/null || true && rosdep update
 
-# ─── Workspace ───────────────────────────────────────────────────────────────
-# Il workspace viene montato come volume a runtime (-v /path/TERESA_ws:/ros2_ws).
+# ─── Workspace (mounted as volume at runtime) ───────────────────────────────
 WORKDIR /ros2_ws
 
-# ─── Entrypoint ──────────────────────────────────────────────────────────────
+# ─── Entrypoint ─────────────────────────────────────────────────────────────
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
