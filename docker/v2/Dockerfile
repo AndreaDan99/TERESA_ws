@@ -22,14 +22,9 @@
 FROM dustynv/ros:humble-ros-base-l4t-r35.4.1
 
 # ─── Fix ROS2 GPG key (expired) ──────────────────────────────────────────────
-RUN rm -f /usr/share/keyrings/ros-archive-keyring.gpg \
-          /etc/apt/sources.list.d/ros2.list && \
-    curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
-    | gpg --batch --no-tty --dearmor \
-    -o /usr/share/keyrings/ros-archive-keyring.gpg && \
-    echo "deb [arch=arm64 signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
-    http://packages.ros.org/ros2/ubuntu focal main" \
-    > /etc/apt/sources.list.d/ros2.list
+# Only update the key; preserve the base image's ros2.list sources
+RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+    -o /usr/share/keyrings/ros-archive-keyring.gpg
 
 # ─── System deps ─────────────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
