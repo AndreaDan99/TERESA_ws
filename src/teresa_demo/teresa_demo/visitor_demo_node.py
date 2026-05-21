@@ -38,7 +38,7 @@ class VisitorDemoNode(Node):
 
         self.declare_parameter('arm_home',  [0.0767, 0.0006, 0.3131,
                                              -0.0062, 0.4107, 0.0021, 0.9118])
-        self.declare_parameter('arm_poses', [])
+        self.declare_parameter('arm_poses', [0.0])
         self.declare_parameter('arm_pause',       2.0)
         self.declare_parameter('arm_ik_timeout', 15.0)
         self.declare_parameter('ik_goal_topic',   '/ik_goal_pose')
