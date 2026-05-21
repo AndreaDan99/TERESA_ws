@@ -147,18 +147,19 @@ WAITING_TF ──(/wbc/tf_ready)──► IDLE ──(/wbc/restart, tastiera)─
   - **4 TF statiche** centralizzate nel core:
     - `my_spot/body → orbbec_link` (0.30, 0, 0.15)
     - `orbbec_link → orbbec_color_optical_frame` (-1.5708, 0, -1.5708)
-    - `my_spot/body → link00` (z1_mount_x/y/z, default 0.20/0.0/0.20)
-    - `link06 → camera_link` (0, 0, 0.05)
+   - `my_spot/body → world` (z1_mount_x/y/z, default 0.20/0.0/0.20)
+     - `link06 → camera_link` (0, 0, 0.05)
   - `tf_monitor` (spostato da `wbc.launch.py`): 4 condizioni → `/wbc/tf_ready`
 
 - **`tf_monitor`** ora controlla **7 catene TF** (non più solo `odom→body`):
   1. `my_spot/odom → my_spot/body` (SpotCore DDS)
-  2. `my_spot/body → link00` (Z1 mount on Spot)
-  3. `my_spot/body → orbbec_link` (Orbbec mount)
-  4. `orbbec_link → orbbec_color_optical_frame` (Orbbec optical)
-  5. `link00 → link06` (Z1 arm, robot_state_publisher)
-  6. `link06 → camera_link` (RealSense mount)
-  7. `camera_link → camera_color_optical_frame` (RealSense optical)
+   2. `my_spot/body → world` (Z1 mount on Spot)
+   3. `my_spot/body → orbbec_link` (Orbbec mount)
+   4. `orbbec_link → orbbec_color_optical_frame` (Orbbec optical)
+   5. `world → link00` (Z1 URDF root, robot_state_publisher)
+   6. `link00 → link06` (Z1 arm chain)
+   7. `link06 → camera_link` (RealSense mount)
+   8. `camera_link → camera_color_optical_frame` (RealSense optical)
   - Più 3 topic: `/joint_states`, `/orbbec/color/image_raw`, `/camera/color/image_raw`
   - Solo quando TUTTE vere → `/wbc/tf_ready = True`
 
@@ -462,8 +463,8 @@ z1_FSM ──(Trigger srv)──► safe_controller_switch  ←──► impedan
 
 ```
 tf_monitor (da teresa_core.launch.py)
-  │  Check: 7 catene TF + 3 topic (1 Hz)
-  │    TF: odom→body, body→link00, body→orbbec_link, orbbec→optical,
+  │  Check: 8 catene TF + 3 topic (1 Hz)
+  │    TF: odom→body, body→world, world→link00, body→orbbec_link, orbbec→optical,
   │         link00→link06, link06→camera_link, camera_link→camera_optical
   │    Topic: /joint_states, /orbbec/color/image_raw, /camera/color/image_raw
   └─► /wbc/tf_ready  (Bool, True when ALL conditions met)

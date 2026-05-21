@@ -7,8 +7,9 @@ Avvia TUTTI i driver hardware + TF statiche + tf_monitor con 4 condizioni.
 Include:
   - Orbbec Femto Bolt driver (dal config di spot_perception)
   - TF statiche: my_spot/body → orbbec_link → orbbec_color_optical_frame
+  - TF statica: my_spot/body → world (Z1 mount, connette Spot al world frame URDF)
   - z1_realsense.launch.py (Z1 bringup + RealSense + camera TF, senza RViz)
-  - tf_monitor (4 condizioni: 3 topic + 7 TF → /wbc/tf_ready)
+  - tf_monitor (4 condizioni: 3 topic + 8 TF → /wbc/tf_ready)
 
 Uso:
   ros2 launch spot_control teresa_core.launch.py
@@ -96,15 +97,16 @@ def generate_launch_description():
         }.items()
     )
 
-    # ── TF statica Z1 mount: my_spot/body → link00 ─────────────────
-    static_tf_body_link00 = Node(
+    # ── TF statica Z1 mount: my_spot/body → world ─────────────────
+    # world = root frame of Z1 URDF (parent of link00).
+    static_tf_body_world = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        name='spot_to_link00',
+        name='spot_to_world',
         arguments=[
             '--x', z1_mount_x, '--y', z1_mount_y, '--z', z1_mount_z,
             '--qx', '0', '--qy', '0', '--qz', '0', '--qw', '1',
-            '--frame-id', 'my_spot/body', '--child-frame-id', 'link00',
+            '--frame-id', 'my_spot/body', '--child-frame-id', 'world',
         ]
     )
 
@@ -142,7 +144,7 @@ def generate_launch_description():
         static_tf_body_orbbec,
         static_tf_orbbec_optical,
 
-        static_tf_body_link00,
+        static_tf_body_world,
 
         static_tf_link06_camera,
 

@@ -24,17 +24,20 @@ my_spot/odom                        ← world-fixed odometry (spot_ros2 su SpotC
     └── my_spot/body                ← Spot body frame (dinamico: segue body_pose)
             ├── orbbec_link         ← TF statica (0.30, 0, 0.15)
             │     └── orbbec_color_optical_frame  ← TF statica (-1.5708, 0, -1.5708)
-            └── link00              ← TF statica (z1_mount_x, 0, z1_mount_z) = Z1 base
-                  └── link01 ... link06  ← Z1 arm chain (robot_state_publisher)
-                        └── camera_link  ← TF statica (0, 0, 0.05)
-                              └── camera_color_optical_frame  ← intrinseca RealSense
+            └── world               ← TF statica (z1_mount_x, 0, z1_mount_z) = Z1 base
+                  └── link00        ← Z1 URDF root (robot_state_publisher, fixed joint)
+                        └── link01 ... link06  ← Z1 arm chain
+                              └── camera_link  ← TF statica (0, 0, 0.05)
+                                    └── camera_color_optical_frame  ← RealSense driver
 ```
 
 **Key points:**
 - `my_spot/odom` NON si muove con Spot (frame world-fixed, pubblicato da spot_ros2)
 - `my_spot/body` si muove con Spot (height, pitch, yaw sono campi di `body_pose`)
-- `link00` = `'world'` nell'IK solver — è il frame base del modello cinematico Z1
-- Le TF statiche `body → orbbec_link` e `body → link00` sono pubblicate da `teresa_core.launch.py`
+- `world` è il frame root del modello cinematico Z1 nell'URDF — figlio di `body` via TF statica
+- `link00` è figlio di `world` (fixed joint nell'URDF, robot_state_publisher)
+- `link00` = `'world'` nell'IK solver — sono coincidenti (joint fixed con offset zero)
+- Le TF statiche `body → orbbec_link` e `body → world` sono pubblicate da `teresa_core.launch.py`
 
 ---
 

@@ -26,10 +26,11 @@ import rclpy.time
 # TF chains to check (source, target, description)
 TF_CHAINS = [
     ('my_spot/odom',          'my_spot/body',              'SpotCore DDS'),
-    ('my_spot/body',          'link00',                    'Z1 mount on Spot'),
+    ('my_spot/body',          'world',                     'Z1 mount on Spot'),
+    ('world',                 'link00',                    'Z1 arm root (robot_state_publisher)'),
     ('my_spot/body',          'orbbec_link',               'Orbbec mount'),
     ('orbbec_link',           'orbbec_color_optical_frame', 'Orbbec optical'),
-    ('link00',                'link06',                    'Z1 arm (robot_state_publisher)'),
+    ('link00',                'link06',                    'Z1 arm chain'),
     ('link06',                'camera_link',               'Realsense mount'),
     ('camera_link',           'camera_color_optical_frame',  'Realsense optical'),
 ]
@@ -77,7 +78,7 @@ class TFMonitorNode(Node):
 
         self.get_logger().info(
             'TF Monitor avviato.\n'
-            '  4 condizioni: Z1 driver | Orbbec | RealSense | 7 catene TF\n'
+            '  4 condizioni: Z1 driver | Orbbec | RealSense | 8 catene TF\n'
             '  Diagnostica manuale: bash src/spot_control/scripts/tf_diag.sh')
 
     # ── Callbacks ─────────────────────────────────────────────────────
