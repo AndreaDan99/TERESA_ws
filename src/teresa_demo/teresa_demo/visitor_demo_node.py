@@ -53,8 +53,12 @@ class VisitorDemoNode(Node):
         self._search_pause_per_point = float(p('search_pause_per_point'))
 
         self._arm_home = self._parse_pose(p('arm_home'))
-        raw_poses = p('arm_poses')
-        self._arm_poses = [self._parse_pose(rp) for rp in raw_poses] if raw_poses else []
+        raw_poses = [float(v) for v in p('arm_poses')]
+        self._arm_poses = []
+        for i in range(0, len(raw_poses), 7):
+            chunk = raw_poses[i:i+7]
+            if len(chunk) == 7:
+                self._arm_poses.append(chunk)
         self._arm_pause = float(p('arm_pause'))
         self._arm_timeout = float(p('arm_ik_timeout'))
 

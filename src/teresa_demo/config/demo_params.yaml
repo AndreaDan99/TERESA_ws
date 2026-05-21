@@ -7,14 +7,13 @@ visitor_demo:
     search_yaw_offsets:       [0.0, 0.17, -0.17]       # center, +10°, -10° [rad]
     search_pause_per_point:   3.0                       # [s] dwell per grid point
 
-    # ── Z1 arm Cartesian poses (position x,y,z + orientation qx,qy,qz,qw) ──
-    # All poses are in world=link00 frame. Orientation uses home quaternion.
+    # ── Z1 arm Cartesian poses (position x,y,z + orientation qx,qy,z,qw per 7) ──
+    # Flat list: pose0[7], pose1[7], pose2[7], pose3[7]. Orientation = home quaternion.
     arm_home: [0.0767, 0.0006, 0.3131, -0.0062, 0.4107, 0.0021, 0.9118]
-    arm_poses:
-      - [0.30, -0.10, 0.25, -0.0062, 0.4107, 0.0021, 0.9118]   # front-left
-      - [0.30,  0.10, 0.25, -0.0062, 0.4107, 0.0021, 0.9118]   # front-right
-      - [0.30,  0.00, 0.35, -0.0062, 0.4107, 0.0021, 0.9118]   # front-up
-      - [0.30,  0.00, 0.15, -0.0062, 0.4107, 0.0021, 0.9118]   # front-down
+    arm_poses: [0.30, -0.10, 0.25, -0.0062, 0.4107, 0.0021, 0.9118,
+                0.30,  0.10, 0.25, -0.0062, 0.4107, 0.0021, 0.9118,
+                0.30,  0.00, 0.35, -0.0062, 0.4107, 0.0021, 0.9118,
+                0.30,  0.00, 0.15, -0.0062, 0.4107, 0.0021, 0.9118]
     arm_pause:       2.0                                    # [s] hold at each pose
     arm_ik_timeout:  15.0                                   # [s] skip pose if IK fails
 
