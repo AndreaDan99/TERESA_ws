@@ -225,6 +225,11 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        node.get_logger().info('Returning robots to starting position...')
+        node._set_body_pose(0.0, 0.0, 0.0)
+        node._send_ik_goal(
+            node._arm_home, node._arm_home[3:])
+        node.get_logger().info('Home commands sent.')
         node.destroy_node()
         rclpy.shutdown()
 
