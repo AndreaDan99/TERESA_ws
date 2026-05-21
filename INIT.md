@@ -14,7 +14,73 @@ git status --short
 
 ---
 
-## Recent Changes (20 May 2026)
+## Recent Changes (21 May 2026)
+
+### `teresa_perception.launch.py` — unified perception launch
+
+**Before:** 2 terminali separati per `spot_perception` (Orbbec) e `z1_perception` (RealSense).
+
+**After:** `teresa_perception.launch.py` usa `IncludeLaunchDescription` per richiamare entrambi i launch originali in un unico terminale. Comportamento identico, zero duplicazione.
+
+```bash
+ros2 launch spot_control teresa_perception.launch.py
+ros2 launch spot_control teresa_perception.launch.py use_orbbec_driver:=true
+```
+
+Argomenti: `use_orbbec_driver` (default `false`, driver già in `teresa_core`), `test_mode`, `use_tracker`, `use_surface`.
+
+### `teresa_demo` package — visitor demonstration
+
+Nuovo package standalone per dimostrazioni senza telecamere/WBC/percezione. Spot e Z1 si muovono contemporaneamente in pattern di searching.
+
+**Files:** `src/teresa_demo/`
+| File | Ruolo |
+|------|-------|
+| `visitor_demo_node.py` | Orchestratore con due loop paralleli: Spot griglia 3×3 body_pose + Z1 arm state machine |
+| `visitor_demo.launch.py` | Z1 bringup + `z1_ik_to_jtc` + demo node (nessuna TF statica, nessuna telecamera) |
+| `demo_params.yaml` | Griglia Spot (9 punti) + 4 pose braccio + topic IK |
+
+**Comportamento:**
+- **Spot**: griglia 3×3: 3 yaw × 3 pitch, 3s per punto, loop continuo (stessi parametri del WBC SEARCHING)
+- **Braccio**: home → front-left → home → front-right → home → front-up → home → front-down → loop
+- A **Ctrl-C**: entrambi tornano in posizione di partenza (Spot in piedi, braccio in home)
+
+**Uso:**
+```bash
+ros2 launch teresa_demo visitor_demo.launch.py
+# Richiede spot_ros2 su SpotCore (per body_pose topic)
+```
+
+### Compatibilità ROS 2 Jazzy
+
+Il workspace gira su **Jazzy** (non Humble). Due fix necessari:
+- **Liste annidate YAML**: `[[x,y,z,...], [...]]` non supportato dal parser parametri Jazzy → flattenato a lista singola con parsing a blocchi di 7 nel codice
+- **Default `[]`**: interpretato come `BYTE_ARRAY` invece di `DOUBLE_ARRAY` → usare `[0.0]` per fissare il tipo
+
+### Flusso WBC attuale (5 terminali, senza `teresa_app`)
+
+`teresa_app.launch.py` NON esiste ancora. Il flusso attuale usa i singoli launch:
+
+```
+T0: SpotCore — spot_ros2 attivo (TF odom→body)
+T1: ros2 launch spot_control teresa_core.launch.py        (driver + TF + tf_monitor)
+T2: ros2 launch spot_control teresa_perception.launch.py  (Orbbec + RealSense perception)
+T3: ros2 launch z1_vision z1_control.launch.py            (IK + switch + mux + FSM)
+T4: ros2 launch spot_control wbc.launch.py                (WBC QP + coordinator)
+T5: ros2 run spot_control wbc_keyboard_node               (tastiera)
+```
+
+### Files nuovi/modificati
+
+| File | Modifica |
+|------|----------|
+| `spot_control/launch/teresa_perception.launch.py` | **Nuovo** — unifica spot_perception + z1_perception |
+| `teresa_demo/` | **Nuovo** — intero package demo visitatori |
+| `teresa_demo/visitor_demo_node.py` | **Nuovo** — orchestratore Spot + Z1 parallelo |
+| `teresa_demo/launch/visitor_demo.launch.py` | **Nuovo** — launch self-contained |
+| `teresa_demo/config/demo_params.yaml` | **Nuovo** — parametri demo |
+
+---
 
 ### TF monitor & keyboard-controlled startup — 7 catene TF + 3 topic
 
@@ -274,13 +340,13 @@ Two main pipelines coexist:
 
 ```bash
 # Source ROS2 first (required every shell)
-source /opt/ros/humble/setup.bash
+source /opt/ros/jazzy/setup.bash
 
 # Build the full workspace
 colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
 
 # Build specific packages
-colcon build --packages-select z1_vision spot_control spot_perception
+colcon build --packages-select z1_vision spot_control spot_perception teresa_demo
 
 # Source install after build
 source install/setup.bash
@@ -299,11 +365,11 @@ ros2 launch z1_vision z1_perception.launch.py
 ros2 launch z1_vision z1_control.launch.py
 ```
 
-### Running Spot + Z1 WBC (SpotCore + 3 PC terminali)
+### Running Spot + Z1 WBC (SpotCore + 5 terminali)
 
 **Prerequisites on Spot:**
 - `spot_ros2` running on SpotCore (publishes `my_spot/odom → my_spot/body` TF)
-- Spot in **sit** position (ignores `/my_spot/cmd_vel` for safety)
+- Spot in **stand** position (body_pose richiede Spot in piedi)
 
 **PC terminals (in order):**
 
@@ -312,11 +378,19 @@ ros2 launch z1_vision z1_control.launch.py
 ros2 launch spot_control teresa_core.launch.py
 # Aspettare: [TUTTO PRONTO] /wbc/tf_ready = True
 
-# T2: App — percezione + controllo Z1 + WBC
-ros2 launch spot_control teresa_app.launch.py
+# T2: Perception — Orbbec + RealSense YOLO perception (unico launch)
+ros2 launch spot_control teresa_perception.launch.py
+# Aspettare: nodi perception pronti
+
+# T3: Z1 Control — IK + safe switch + impedance + mux + FSM
+ros2 launch z1_vision z1_control.launch.py
+# FSM parte dopo 5s → HOMING → WAITING
+
+# T4: WBC — QP controller + coordinator
+ros2 launch spot_control wbc.launch.py
 # Aspettare: "[TF READY] SpotCore connesso — premi s per iniziare"
 
-# T3: Keyboard controller (richiede TTY interattivo)
+# T5: Keyboard controller (richiede TTY interattivo)
 ros2 run spot_control wbc_keyboard_node
 # Premere "s" → missione parte
 
@@ -493,8 +567,9 @@ When `dry_run:=true` on WBC launch, all outputs go to debug topics:
 |---------|------|
 | `src/teresa_utils/` | Shared orientation & transform utilities (no ROS node) |
 | `src/z1_vision/` | Z1 arm: FSM, IK, impedance, YOLO tracking, workspace checker |
-| `src/spot_control/` | Spot navigation, WBC coordinator, WBC QP controller, ik_goal_mux |
+| `src/spot_control/` | Spot navigation, WBC coordinator, WBC QP controller, ik_goal_mux, perception launcher |
 | `src/spot_perception/` | Orbbec perception: YOLO skeleton, posture classifier, laying detector |
+| `src/teresa_demo/` | Visitor demo: Spot + Z1 simultaneous search movements (no cameras/WBC) |
 | `src/spot_msgs/` | Custom ROS2 messages (Trajectory action only; SetStandHeight deprecated in favor of body_pose topic) |
 | `src/z1_ros2/` | Unitree Z1 hardware interface, URDF, MoveIt2, bringup configs |
 | `src/realsense-ros/` | Intel RealSense ROS2 driver |
