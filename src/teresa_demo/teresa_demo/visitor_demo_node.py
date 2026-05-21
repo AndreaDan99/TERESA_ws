@@ -11,10 +11,12 @@ import rclpy
 from rclpy.node import Node
 
 from geometry_msgs.msg import Pose, PoseStamped, Twist
+from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool
 
 
 class _ArmState:
+    INIT          = 'INIT'
     SEND_HOME     = 'SEND_HOME'
     WAIT_IK_HOME  = 'WAIT_IK_HOME'
     HOME_PAUSE    = 'HOME_PAUSE'
@@ -64,11 +66,12 @@ class VisitorDemoNode(Node):
         self._grid_idx = 0
 
         # ── Arm state machine ─────────────────────────────────────────────
-        self._arm_state = _ArmState.SEND_HOME
+        self._arm_state = _ArmState.INIT
         self._arm_pose_idx = 0
         self._arm_state_t0 = None
         self._ik_done = False
         self._arm_ik_t0 = None
+        self._have_js = False
 
         # ── Publishers ────────────────────────────────────────────────────
         self._pub_body_pose = self.create_publisher(Pose, '/my_spot/body_pose', 10)
@@ -81,6 +84,8 @@ class VisitorDemoNode(Node):
         # ── Subscriptions ─────────────────────────────────────────────────
         self._sub_ik_done = self.create_subscription(
             Bool, p('ik_done_topic'), self._cb_ik_done, 10)
+        self._sub_js = self.create_subscription(
+            JointState, '/joint_states', self._cb_js, 10)
 
         # ── Timers ────────────────────────────────────────────────────────
         self._spot_timer = self.create_timer(
@@ -93,13 +98,20 @@ class VisitorDemoNode(Node):
             f'{self._search_pause_per_point}s = '
             f'{len(self._grid) * self._search_pause_per_point}s cycle\n'
             f'  Arm:  {len(self._arm_poses)} poses + home, '
-            f'pause={self._arm_pause}s')
+            f'pause={self._arm_pause}s\n'
+            f'  Waiting for /joint_states before starting arm...')
 
     # ── Callbacks ─────────────────────────────────────────────────────────
 
     def _cb_ik_done(self, msg: Bool) -> None:
         if msg.data:
             self._ik_done = True
+
+    def _cb_js(self, msg: JointState) -> None:
+        if not self._have_js:
+            self._have_js = True
+            self.get_logger().info(
+                '/joint_states received — arm ready to start')
 
     # ── Spot loop (timer) ─────────────────────────────────────────────────
 
@@ -113,7 +125,12 @@ class VisitorDemoNode(Node):
     def _arm_tick(self) -> None:
         now = self.get_clock().now().nanoseconds * 1e-9
 
-        if self._arm_state == _ArmState.SEND_HOME:
+        if self._arm_state == _ArmState.INIT:
+            if self._have_js:
+                self.get_logger().info('Arm state machine starting')
+                self._arm_state = _ArmState.SEND_HOME
+
+        elif self._arm_state == _ArmState.SEND_HOME:
             self._send_ik_goal(self._arm_home, self._arm_home[3:])
             self._arm_ik_t0 = now
             self._arm_state = _ArmState.WAIT_IK_HOME
