@@ -257,20 +257,33 @@ class WBCQPControllerNode(Node):
                 f'TF disponibile: {self._odom_frame} → {self._body_frame} OK. '
                 f'SpotCore connesso via DDS.')
 
-        # 4. Goal is already in odom frame (coordinator publishes in odom).
-        goal_odom = self._goal
+        # 4. Resolve goal to both odom (for position error) and link00 (for look-at).
+        #    Coordinator publishes in odom frame.
+        #    Z1 FSM publishes in world/link00 frame (WS_EXTENSION path).
+        goal_in = self._goal
+        goal_frame = goal_in.header.frame_id
 
-        # 5. Transform goal from odom → link00 for stable look-at
-        #    (direction from arm base to target, independent of EE position).
-        goal_stamped = PoseStamped()
-        goal_stamped.header.frame_id = self._odom_frame
-        goal_stamped.header.stamp    = rclpy.time.Time().to_msg()
-        goal_stamped.pose            = goal_odom.pose
-        goal_link00 = self._tf_transform(goal_stamped, self._z1_base_frame)
-        if goal_link00 is None:
-            return
+        # Goal position in odom frame (for dp comparison with EE in odom)
+        if goal_frame in ('world', 'link00', self._z1_base_frame):
+            goal_stamped = PoseStamped()
+            goal_stamped.header.frame_id = self._z1_base_frame
+            goal_stamped.header.stamp    = rclpy.time.Time().to_msg()
+            goal_stamped.pose            = goal_in.pose
+            goal_odom = self._tf_transform(goal_stamped, self._odom_frame)
+            if goal_odom is None:
+                return
+            goal_link00 = goal_stamped
+        else:
+            goal_odom = goal_in
+            goal_stamped = PoseStamped()
+            goal_stamped.header.frame_id = goal_frame
+            goal_stamped.header.stamp    = rclpy.time.Time().to_msg()
+            goal_stamped.pose            = goal_in.pose
+            goal_link00 = self._tf_transform(goal_stamped, self._z1_base_frame)
+            if goal_link00 is None:
+                return
 
-        # 6. EE position error → desired spatial velocity (Pinocchio: [ang(3), lin(3)])
+        # 5. EE position error → desired spatial velocity (Pinocchio: [ang(3), lin(3)])
         dp = np.array([
             goal_odom.pose.position.x - ee_in_odom.transform.translation.x,
             goal_odom.pose.position.y - ee_in_odom.transform.translation.y,

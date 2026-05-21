@@ -102,9 +102,9 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='spot_to_link00',
         arguments=[
-            z1_mount_x, z1_mount_y, z1_mount_z,
-            '0', '0', '0', '1',
-            'my_spot/body', 'link00',
+            '--x', z1_mount_x, '--y', z1_mount_y, '--z', z1_mount_z,
+            '--qx', '0', '--qy', '0', '--qz', '0', '--qw', '1',
+            '--frame-id', 'my_spot/body', '--child-frame-id', 'link00',
         ]
     )
 
