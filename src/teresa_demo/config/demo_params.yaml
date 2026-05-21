@@ -1,0 +1,24 @@
+visitor_demo:
+  ros__parameters:
+
+    # ── Spot body_pose grid (same as WBC SEARCHING) ─────────────────
+    search_body_height:       -0.20
+    search_pitch_angles:      [0.087, 0.17, 0.26]      # 5°, 10°, 15° [rad]
+    search_yaw_offsets:       [0.0, 0.17, -0.17]       # center, +10°, -10° [rad]
+    search_pause_per_point:   3.0                       # [s] dwell per grid point
+
+    # ── Z1 arm Cartesian poses (position x,y,z + orientation qx,qy,qz,qw) ──
+    # All poses are in world=link00 frame. Orientation uses home quaternion.
+    arm_home: [0.0767, 0.0006, 0.3131, -0.0062, 0.4107, 0.0021, 0.9118]
+    arm_poses:
+      - [0.30, -0.10, 0.25, -0.0062, 0.4107, 0.0021, 0.9118]   # front-left
+      - [0.30,  0.10, 0.25, -0.0062, 0.4107, 0.0021, 0.9118]   # front-right
+      - [0.30,  0.00, 0.35, -0.0062, 0.4107, 0.0021, 0.9118]   # front-up
+      - [0.30,  0.00, 0.15, -0.0062, 0.4107, 0.0021, 0.9118]   # front-down
+    arm_pause:       2.0                                    # [s] hold at each pose
+    arm_ik_timeout:  15.0                                   # [s] skip pose if IK fails
+
+    # IK topics (must match z1_ik_to_jtc config)
+    ik_goal_topic:   '/ik_goal_pose'
+    ik_enable_topic: '/ik_enable'
+    ik_done_topic:   '/ik_done'
