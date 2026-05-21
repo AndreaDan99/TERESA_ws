@@ -11,16 +11,23 @@ Prerequisito: spot_ros2 in esecuzione su SpotCore (TF odom→body).
 
 Uso:
   ros2 launch teresa_demo visitor_demo.launch.py
+  ros2 launch teresa_demo visitor_demo.launch.py joint_offset:='0.0 0.69 0.0 0.0 0.0 0.0'
 """
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, LogInfo
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+
+    # ── Argomenti ──────────────────────────────────────────────────────
+    joint_offset_arg = DeclareLaunchArgument(
+        'joint_offset',
+        default_value='0.0 0.69 0.0 0.0 0.0 0.0',
+        description='Joint encoder offset [rad] — joint2 folded ~40° for Spot mount')
 
     # ── Z1 bringup (no RViz, JTC attivo, senza gripper) ──────────────
     z1_bringup = IncludeLaunchDescription(
@@ -31,10 +38,11 @@ def generate_launch_description():
             ])
         ]),
         launch_arguments={
-            'sim_ignition': 'false',
-            'starting_controller': 'joint_trajectory_controller',
-            'with_gripper': 'false',
-            'rviz': 'false',
+            'sim_ignition':         'false',
+            'starting_controller':  'joint_trajectory_controller',
+            'with_gripper':         'false',
+            'rviz':                 'false',
+            'joint_offset':         LaunchConfiguration('joint_offset'),
         }.items(),
     )
 
@@ -63,6 +71,8 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        joint_offset_arg,
+
         LogInfo(msg=['Visitor Demo — Spot + Z1 simultaneous search movements']),
 
         z1_bringup,
