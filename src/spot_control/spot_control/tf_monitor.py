@@ -16,6 +16,7 @@ Uso:
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile
 
 from std_msgs.msg import Bool, String
 from sensor_msgs.msg import Image, JointState
@@ -67,7 +68,9 @@ class TFMonitorNode(Node):
         self.create_subscription(Image, self._rs_topic, self._cb_realsense, 10)
 
         # ── Publishers ────────────────────────────────────────────────
-        self._pub_ready = self.create_publisher(Bool, '/wbc/tf_ready', 10)
+        self._pub_ready = self.create_publisher(
+            Bool, '/wbc/tf_ready',
+            QoSProfile(depth=10, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self._pub_status = self.create_publisher(String, '/wbc/tf_status', 10)
 
         # ── State ─────────────────────────────────────────────────────

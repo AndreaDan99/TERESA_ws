@@ -75,6 +75,8 @@ class WBCKeyboardControllerNode(Node):
         self._tf_system_ready = False
         self.create_subscription(Bool, '/wbc/tf_ready', self._cb_tf_ready, 10)
 
+        self._last_wbc_state: str | None = None
+
         self._kc_state: KCState               = KCState.IDLE
         self._start_odom:   PoseStamped | None = None
         self._start_yaw:    float              = 0.0
@@ -95,7 +97,9 @@ class WBCKeyboardControllerNode(Node):
             f'  "c" = sit  |  "a" = stand  |  ESC = stop')
 
     def _cb_wbc_state(self, msg: String) -> None:
-        self.get_logger().info(f'WBC state → {msg.data}')
+        if msg.data != self._last_wbc_state:
+            self._last_wbc_state = msg.data
+            self.get_logger().info(f'WBC state → {msg.data}')
 
     def _cb_tf_ready(self, msg: Bool) -> None:
         if msg.data and not self._tf_system_ready:
