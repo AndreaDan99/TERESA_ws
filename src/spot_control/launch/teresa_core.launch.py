@@ -65,9 +65,8 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='spot_to_orbbec',
         arguments=[
-            '0.30', '0.0', '0.15',
-            '0', '0', '0',
-            'my_spot/body', 'orbbec_link',
+            '--x', '0.30', '--y', '0.0', '--z', '0.15',
+            '--frame-id', 'my_spot/body', '--child-frame-id', 'orbbec_link',
         ]
     )
 
@@ -76,9 +75,9 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='orbbec_to_optical',
         arguments=[
-            '0', '0', '0',
-            '-1.5708', '0', '-1.5708',
-            'orbbec_link', 'orbbec_color_optical_frame',
+            '--x', '0', '--y', '0', '--z', '0',
+            '--roll', '-1.5708', '--pitch', '0', '--yaw', '-1.5708',
+            '--frame-id', 'orbbec_link', '--child-frame-id', 'orbbec_color_optical_frame',
         ]
     )
 
@@ -116,9 +115,9 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='link06_to_camera_link',
         arguments=[
-            '0.0', '0.0', '0.05',
-            '0', '0', '0', '1',
-            'link06', 'camera_link',
+            '--x', '0.0', '--y', '0.0', '--z', '0.05',
+            '--qx', '0', '--qy', '0', '--qz', '0', '--qw', '1',
+            '--frame-id', 'link06', '--child-frame-id', 'camera_link',
         ]
     )
 

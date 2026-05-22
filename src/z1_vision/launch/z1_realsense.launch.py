@@ -124,6 +124,7 @@ def generate_launch_description():
                 'pointcloud.enable': 'true',
                 'colorizer.enable': 'false',
                 'align_depth.enable': 'true',
+                'log_level': 'info',
             }.items()
         ),
         
