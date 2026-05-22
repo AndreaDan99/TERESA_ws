@@ -54,7 +54,7 @@ class WBCQPControllerNode(Node):
         self.declare_parameter('urdf_path', '')
         self.declare_parameter('odom_frame',    'my_spot/odom')
         self.declare_parameter('body_frame',    'my_spot/body')
-        self.declare_parameter('z1_base_frame', 'link00')
+        self.declare_parameter('z1_base_frame', 'world')
         self.declare_parameter('ee_frame',      'link06')
         self.declare_parameter('lam_arm',       1.0)
         self.declare_parameter('lam_base',      1.0)
@@ -267,7 +267,7 @@ class WBCQPControllerNode(Node):
         if goal_frame in ('world', 'link00', self._z1_base_frame):
             goal_stamped = PoseStamped()
             goal_stamped.header.frame_id = self._z1_base_frame
-            goal_stamped.header.stamp    = self.get_clock().now().to_msg()
+            goal_stamped.header.stamp    = rclpy.time.Time().to_msg()
             goal_stamped.pose            = goal_in.pose
             goal_odom = self._tf_transform(goal_stamped, self._odom_frame)
             if goal_odom is None:
@@ -277,7 +277,7 @@ class WBCQPControllerNode(Node):
             goal_odom = goal_in
             goal_stamped = PoseStamped()
             goal_stamped.header.frame_id = goal_frame
-            goal_stamped.header.stamp    = self.get_clock().now().to_msg()
+            goal_stamped.header.stamp    = rclpy.time.Time().to_msg()
             goal_stamped.pose            = goal_in.pose
             goal_link00 = self._tf_transform(goal_stamped, self._z1_base_frame)
             if goal_link00 is None:
