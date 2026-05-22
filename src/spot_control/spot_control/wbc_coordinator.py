@@ -29,8 +29,9 @@ from rclpy.node import Node
 from rclpy.duration import Duration
 import rclpy.time
 
-from geometry_msgs.msg import PoseStamped, TransformStamped, Twist, Vector3Stamped, Pose
+from geometry_msgs.msg import PoseStamped, TransformStamped, Twist, Vector3Stamped, Pose, Point
 from std_msgs.msg import Bool, String, Float32
+from visualization_msgs.msg import Marker
 from tf2_ros import Buffer, TransformListener, TransformException
 import tf2_geometry_msgs  # noqa: F401
 
@@ -238,6 +239,7 @@ class WBCCoordinatorNode(Node):
         self._pub_uncert   = self.create_publisher(Float32,     '/wbc/target_uncertainty', 10)
         self._pub_yaw      = self.create_publisher(Float32,     '/wbc/desired_yaw',        10)
         self._pub_spot_ctrl = self.create_publisher(Bool,       '/wbc/spot_control',       10)
+        self._pub_dbg_marker = self.create_publisher(Marker, '/wbc/debug_marker', 10)
 
         self.create_timer(0.2, self._tick)   # 5 Hz FSM
         self._set_state(CoordState.WAITING_TF)
@@ -378,6 +380,8 @@ class WBCCoordinatorNode(Node):
 
         s = String(); s.data = self._state
         self._pub_state.publish(s)
+
+        self._pub_debug_marker()
 
     def _check_lying_timeout(self) -> None:
         # Once committed (handoff done), don't abort on Orbbec loss — RealSense is in charge.
@@ -572,6 +576,34 @@ class WBCCoordinatorNode(Node):
         else:
             return PoseStamped()  # should not happen
         return msg
+
+    def _pub_debug_marker(self) -> None:
+        """Publish a green line from body (odom) to goal (odom) for RViz debugging."""
+        body = self._tf_lookup(self._odom_frame, self._body_frame)
+        if body is None:
+            return
+        if not self._quality.initialized:
+            return
+        p = self._quality.get_position()
+        m = Marker()
+        m.header.frame_id = self._odom_frame
+        m.header.stamp = self.get_clock().now().to_msg()
+        m.ns = 'wbc_debug'
+        m.id = 0
+        m.type = Marker.LINE_STRIP
+        m.action = Marker.ADD
+        m.scale.x = 0.05
+        m.color.a = 1.0
+        m.color.r = 0.0
+        m.color.g = 1.0
+        m.color.b = 0.0
+        m.points = [
+            Point(x=body.transform.translation.x,
+                  y=body.transform.translation.y,
+                  z=body.transform.translation.z),
+            Point(x=float(p[0]), y=float(p[1]), z=float(p[2])),
+        ]
+        self._pub_dbg_marker.publish(m)
 
     def _set_state(self, new_state: str) -> None:
         if new_state != self._state:
