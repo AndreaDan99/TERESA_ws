@@ -317,8 +317,8 @@ class WBCCoordinatorNode(Node):
 
     def _cb_ik_done(self, msg: Bool) -> None:
         if self._state == CoordState.WS_EXTENSION and msg.data:
-            self._set_state(CoordState.SCANNING)
             self._set_wbc_enabled(False)
+            self._set_state(CoordState.SCANNING)
         elif self._state == CoordState.PRE_APPROACH and msg.data:
             self.get_logger().info('IK done → arm oriented → APPROACHING')
             self._pub_spot_ctrl.publish(Bool(data=True))
@@ -415,8 +415,8 @@ class WBCCoordinatorNode(Node):
         if dist is not None and dist < self._handoff_dist:
             self.get_logger().info(
                 f'Handoff: dist={dist:.2f}m < {self._handoff_dist:.2f}m → SCANNING')
-            self._set_state(CoordState.SCANNING)
             self._set_wbc_enabled(False)
+            self._set_state(CoordState.SCANNING)
 
     def _tick_searching(self) -> None:
         lock_ok = (self._posture == 'LYING'
