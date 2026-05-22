@@ -196,7 +196,7 @@ class WBCQPControllerNode(Node):
         try:
             return self._tf.lookup_transform(
                 source, target,
-                self.get_clock().now(), timeout=Duration(seconds=timeout_sec))
+                rclpy.time.Time(), timeout=Duration(seconds=timeout_sec))
         except TransformException as e:
             if not self._tf_ready:
                 self.get_logger().warn(
