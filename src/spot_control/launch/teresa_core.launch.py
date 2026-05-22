@@ -2,13 +2,15 @@
 """
 TERESA Core Launch
 ==================
-Avvia TUTTI i driver hardware + TF statiche + tf_monitor con 4 condizioni.
+Avvia TUTTI i driver hardware + TF statiche + tf_monitor.
 
 Include:
   - Orbbec Femto Bolt driver (dal config di spot_perception)
   - TF statiche: my_spot/body → orbbec_link → orbbec_color_optical_frame
   - TF statica: my_spot/body → world (Z1 mount, connette Spot al world frame URDF)
-  - z1_realsense.launch.py (Z1 bringup + RealSense + camera TF, senza RViz)
+  - TF statica: link06 → camera_link (RealSense mount)
+  - Z1 bringup (z1.launch.py: robot_state_publisher + JTC + joint_states)
+  - realsense2_camera_node (nodo diretto, parametri espliciti, senza nesting)
   - tf_monitor (4 condizioni: 3 topic + 8 TF → /wbc/tf_ready)
 
 Uso:
@@ -81,19 +83,40 @@ def generate_launch_description():
         ]
     )
 
-    # ── Z1 bringup + RealSense + camera TF (senza RViz) ──────────────
-    z1_realsense_launch = IncludeLaunchDescription(
+    # ── Z1 bringup ────────────────────────────────────────────────────
+    z1_bringup_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
-                FindPackageShare('z1_vision'),
+                FindPackageShare('z1_bringup'),
                 'launch',
-                'z1_realsense.launch.py',
+                'z1.launch.py',
             ])
         ]),
         launch_arguments={
-            'use_rviz': 'false',
-            'use_camera_tf': 'false',
+            'sim_ignition': 'false',
+            'starting_controller': 'joint_trajectory_controller',
+            'with_gripper': 'false',
+            'rviz': 'false',
+            'joint_offset': '0.0 0.69 0.0 0.0 0.0 0.0',
         }.items()
+    )
+
+    # ── RealSense camera ──────────────────────────────────────────────
+    realsense_node = Node(
+        package='realsense2_camera',
+        executable='realsense2_camera_node',
+        namespace='camera',
+        name='camera',
+        parameters=[{
+            'enable_color': True,
+            'enable_depth': True,
+            'pointcloud.enable': True,
+            'colorizer.enable': False,
+            'align_depth.enable': True,
+        }],
+        output='screen',
+        emulate_tty=True,
+        arguments=['--ros-args', '--log-level', 'info'],
     )
 
     # ── TF statica Z1 mount: my_spot/body → world ─────────────────
@@ -147,7 +170,8 @@ def generate_launch_description():
 
         static_tf_link06_camera,
 
-        z1_realsense_launch,
+        z1_bringup_launch,
+        realsense_node,
 
         tf_monitor_node,
 
