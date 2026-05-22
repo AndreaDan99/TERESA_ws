@@ -30,7 +30,7 @@ TF_CHAINS = [
     ('world',                 'link00',                    'Z1 arm root (robot_state_publisher)'),
     ('my_spot/body',          'orbbec_link',               'Orbbec mount'),
     ('orbbec_link',           'orbbec_color_optical_frame', 'Orbbec optical'),
-    ('link00',                'link06',                    'Z1 arm chain'),
+    ('world',                 'link06',                    'Z1 arm chain'),
     ('link06',                'camera_link',               'Realsense mount'),
     ('camera_link',           'camera_color_optical_frame',  'Realsense optical'),
 ]
@@ -42,7 +42,7 @@ class TFMonitorNode(Node):
         super().__init__('tf_monitor')
 
         self.declare_parameter('check_rate', 1.0)
-        self.declare_parameter('tf_timeout', 1.0)
+        self.declare_parameter('tf_timeout', 3.0)
         self.declare_parameter('joint_states_topic', '/joint_states')
         self.declare_parameter('orbbec_topic', '/orbbec/color/image_raw')
         self.declare_parameter('realsense_topic', '/camera/color/image_raw')
