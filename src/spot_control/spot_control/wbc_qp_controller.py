@@ -235,20 +235,37 @@ class WBCQPControllerNode(Node):
         if not self._enabled or self._goal is None or self._q_meas is None:
             return
 
-        # 1. EE pose in odom (for error computation)
-        ee_in_odom = self._tf_lookup(self._odom_frame, self._ee_frame)
-        if ee_in_odom is None:
-            return
-
-        # 2. EE position in body frame (for J_base)
+        # 1. EE pose in body frame (PC-only, always reliable)
         ee_in_body = self._tf_lookup(self._body_frame, self._ee_frame)
         if ee_in_body is None:
             return
 
-        # 3. Rotation body→odom (to align J_base with J_arm world frame)
+        # 2. body position in odom (single hop, more reliable than full chain)
         body_in_odom = self._tf_lookup(self._odom_frame, self._body_frame)
         if body_in_odom is None:
             return
+
+        # 3. Compose ee_in_odom from body_in_odom * ee_in_body
+        #    (avoids cross-machine TF chain that fails without clock sync)
+        _q = body_in_odom.transform.rotation
+        _qv = np.array([_q.x, _q.y, _q.z])
+        _qw = float(_q.w)
+        _p_eeb = np.array([
+            ee_in_body.transform.translation.x,
+            ee_in_body.transform.translation.y,
+            ee_in_body.transform.translation.z])
+        _p_eeb_rot = _p_eeb + 2.0 * np.cross(_qv, np.cross(_qv, _p_eeb) + _qw * _p_eeb)
+        _p_eeodom = np.array([
+            body_in_odom.transform.translation.x,
+            body_in_odom.transform.translation.y,
+            body_in_odom.transform.translation.z]) + _p_eeb_rot
+
+        ee_in_odom = TransformStamped()
+        ee_in_odom.header.frame_id = self._odom_frame
+        ee_in_odom.child_frame_id = self._ee_frame
+        ee_in_odom.transform.translation.x = float(_p_eeodom[0])
+        ee_in_odom.transform.translation.y = float(_p_eeodom[1])
+        ee_in_odom.transform.translation.z = float(_p_eeodom[2])
 
         # First successful TF lookup in this session → confirm connectivity
         if not self._tf_ready:
