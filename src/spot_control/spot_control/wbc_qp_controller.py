@@ -54,7 +54,7 @@ class WBCQPControllerNode(Node):
         self.declare_parameter('urdf_path', '')
         self.declare_parameter('odom_frame',    'my_spot/odom')
         self.declare_parameter('body_frame',    'my_spot/body')
-        self.declare_parameter('z1_base_frame', 'link00')
+        self.declare_parameter('z1_base_frame', 'world')
         self.declare_parameter('ee_frame',      'link06')
         self.declare_parameter('lam_arm',       1.0)
         self.declare_parameter('lam_base',      1.0)
