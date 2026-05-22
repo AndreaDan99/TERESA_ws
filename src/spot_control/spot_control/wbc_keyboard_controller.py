@@ -94,7 +94,7 @@ class WBCKeyboardControllerNode(Node):
         self.get_logger().info(
             f'WBC Keyboard Controller ready — in attesa TF SpotCore...\n'
             f'  "s" = avvia missione  |  "r" = torna a start  |  "u" = aggiorna start\n'
-            f'  "c" = sit  |  "a" = stand  |  ESC = stop')
+            f'  "c" = sit  |  "a" = stand  |  ESC = STOP emergenza')
 
     def _cb_wbc_state(self, msg: String) -> None:
         if msg.data != self._last_wbc_state:
@@ -106,6 +106,13 @@ class WBCKeyboardControllerNode(Node):
             self._tf_system_ready = True
             self.get_logger().info(
                 '[TF READY] SpotCore connesso — premi "s" per iniziare.')
+            return
+        if not msg.data and self._tf_system_ready:
+            self._tf_system_ready = False
+            self.get_logger().error(
+                '[TF LOST] TF degradation detected — "s" blocked.\n'
+                '  ATTENDERE: check tf_monitor for details.\n'
+                '  Premere ESC per emergency stop.')
 
     def _keyboard_loop(self) -> None:
         fd = sys.stdin.fileno()
@@ -129,6 +136,8 @@ class WBCKeyboardControllerNode(Node):
                     self._call_trigger(self._sit_client, 'Sit')
                 elif ch == 'a':
                     self._call_trigger(self._stand_client, 'Stand')
+                elif ch == '\x1b':  # ESC
+                    self._on_emergency_stop()
                 elif ch == '\x03':  # Ctrl+C
                     rclpy.shutdown()
                     break
@@ -162,6 +171,15 @@ class WBCKeyboardControllerNode(Node):
         except TransformException as e:
             self.get_logger().warn(f'Cannot save start pose: {e}')
             return False
+
+    def _on_emergency_stop(self) -> None:
+        self.get_logger().error('EMERGENCY STOP — disabling WBC + zeroing cmd_vel')
+        self._restart_pub.publish(Bool(data=False))
+        self._cmd_pub.publish(Twist())
+        with self._lock:
+            self._kc_state = KCState.IDLE
+            self._goal_odom = None
+            self._is_returning = False
 
     def _on_start(self) -> None:
         if not self._tf_system_ready:

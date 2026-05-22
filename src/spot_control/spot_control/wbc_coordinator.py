@@ -345,6 +345,12 @@ class WBCCoordinatorNode(Node):
                 '  Premi "s" sul keyboard controller per avviare la missione.')
             self._tf_ready = True
             self._set_state(CoordState.IDLE)
+        elif not msg.data and self._state != CoordState.WAITING_TF:
+            self.get_logger().error(
+                '⚠️  TF perse — tornando in WAITING_TF. '
+                'Spot e braccio fermati.')
+            self._tf_ready = False
+            self._set_state(CoordState.WAITING_TF)
 
     # ── FSM tick ──────────────────────────────────────────────────────
 
@@ -570,6 +576,9 @@ class WBCCoordinatorNode(Node):
     def _set_state(self, new_state: str) -> None:
         if new_state != self._state:
             self.get_logger().info(f'WBC FSM: {self._state} → {new_state}')
+            if new_state == CoordState.WAITING_TF:
+                self._set_wbc_enabled(False)
+                self._set_body_pose(0.0)
             if new_state == CoordState.IDLE:
                 self._quality.reset()
                 self._set_body_pose(0.0)   # ripristina altezza nominale

@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-TF Monitor — verifica 4 condizioni prima di dare il via libera al WBC.
+TF Monitor — monitora continuamente TF e topic hardware.
+Pubblica /wbc/tf_ready = True/False a ogni cambiamento di stato.
+QoS latched: i subscriber tardivi ricevono subito l'ultimo valore.
 
 Condizioni:
   1. /joint_states ricevuto            → Z1 driver attivo
   2. /orbbec/color/image_raw ricevuto  → Orbbec camera viva
-  3. /camera/color/image_raw ricevuto  → RealSense camera viva
-  4. 7 catene TF disponibili           → TF tree completo
+  3. /camera/camera/color/image_raw   → RealSense camera viva
+  4. 8 catene TF disponibili           → TF tree completo
 
-Solo quando TUTTE e 4 sono vere → pubblica /wbc/tf_ready = True.
+Se una condizione fallisce → pubblica False immediatamente.
 
 Uso:
   ros2 run spot_control tf_monitor
@@ -42,7 +44,7 @@ class TFMonitorNode(Node):
     def __init__(self):
         super().__init__('tf_monitor')
 
-        self.declare_parameter('check_rate', 1.0)
+        self.declare_parameter('check_rate', 0.5)
         self.declare_parameter('tf_timeout', 0.2)
         self.declare_parameter('joint_states_topic', '/joint_states')
         self.declare_parameter('orbbec_topic', '/orbbec/color/image_raw')
@@ -74,7 +76,8 @@ class TFMonitorNode(Node):
         self._pub_status = self.create_publisher(String, '/wbc/tf_status', 10)
 
         # ── State ─────────────────────────────────────────────────────
-        self._done = False  # prevent re-publish
+        self._last_ready: bool | None = None  # track previous ready state
+        self._was_ever_ready = False
         self._tf_failures: dict = {}  # track which TF chains fail
 
         self.create_timer(1.0 / self._check_rate, self._tick)
@@ -104,17 +107,11 @@ class TFMonitorNode(Node):
     # ── Tick ──────────────────────────────────────────────────────────
 
     def _tick(self) -> None:
-        if self._done:
-            return
-
         # ── TF check ──────────────────────────────────────────────────
         tf_ok_count = 0
         tf_total = len(TF_CHAINS)
         for src, tgt, desc in TF_CHAINS:
             key = f'{src}→{tgt}'
-            if key in self._tf_failures:
-                # already known bad, retry
-                pass
             try:
                 self._tf.lookup_transform(
                     src, tgt, rclpy.time.Time(),
@@ -122,7 +119,8 @@ class TFMonitorNode(Node):
                 self._tf_failures.pop(key, None)
                 tf_ok_count += 1
             except TransformException:
-                self._tf_failures[key] = desc
+                if key not in self._tf_failures:
+                    self._tf_failures[key] = desc
 
         # Re-count after retry on previous failures
         if self._tf_failures:
@@ -149,17 +147,31 @@ class TFMonitorNode(Node):
             self.get_logger().info(status_line, throttle_duration_sec=3.0)
 
         # ── All conditions met? ───────────────────────────────────────
-        if self._js_ok and self._orbbec_ok and self._rs_ok and tf_ok_count == tf_total:
-            self._done = True
-            self.get_logger().info(
-                '========================================\n'
-                ' TUTTO PRONTO\n'
-                ' Z1 driver OK | Orbbec OK | RealSense OK | TF 7/7 OK\n'
-                ' /wbc/tf_ready = True\n'
-                ' Ora puoi lanciare i terminali applicativi.\n'
-                '========================================')
-            self._pub_ready.publish(Bool(data=True))
-            self._pub_status.publish(String(data='READY'))
+        all_ready = (self._js_ok and self._orbbec_ok and self._rs_ok
+                     and tf_ok_count == tf_total)
+
+        # Publish only on state change (or first time)
+        if all_ready != self._last_ready:
+            self._last_ready = all_ready
+            if all_ready:
+                if not self._was_ever_ready:
+                    self.get_logger().info(
+                        '========================================\n'
+                        ' TUTTO PRONTO\n'
+                        ' Z1 driver OK | Orbbec OK | RealSense OK | TF 7/7 OK\n'
+                        ' /wbc/tf_ready = True\n'
+                        ' Ora puoi lanciare i terminali applicativi.\n'
+                        '========================================')
+                    self._was_ever_ready = True
+                else:
+                    self.get_logger().info('TF restorate — /wbc/tf_ready = True')
+                self._pub_ready.publish(Bool(data=True))
+                self._pub_status.publish(String(data='READY'))
+            else:
+                self.get_logger().error(
+                    '⚠️  TF PERSI — /wbc/tf_ready = False  ⚠')
+                self._pub_ready.publish(Bool(data=False))
+                self._pub_status.publish(String(data='DEGRADED'))
 
 
 def main(args=None):
