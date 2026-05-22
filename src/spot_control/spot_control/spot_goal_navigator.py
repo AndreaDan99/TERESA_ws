@@ -11,7 +11,7 @@ import rclpy
 import rclpy.duration
 import rclpy.time
 from rclpy.node import Node
-from geometry_msgs.msg import Pose, PoseStamped, Twist
+from geometry_msgs.msg import Pose, PoseStamped, TransformStamped, Twist
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformListener, TransformException
 import tf2_geometry_msgs  # noqa: F401
