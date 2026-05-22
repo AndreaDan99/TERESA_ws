@@ -137,6 +137,8 @@ class WBCQPControllerNode(Node):
         self._desired_yaw: float | None = None  # target Spot yaw [rad, odom]
         self._spot_control = True  # cmd_vel enabled by default
         self._tf_ready   = False  # TF available flag
+        self._last_vx     = 0.0
+        self._last_wz     = 0.0
 
         # ── Sub / Pub ─────────────────────────────────────────────────
         self.create_subscription(Bool,        '/wbc/enable',               self._cb_enable,      10)
@@ -231,6 +233,14 @@ class WBCQPControllerNode(Node):
 
     # ── Main update ───────────────────────────────────────────────────
 
+    def _pub_cached_cmd_vel(self) -> None:
+        """Re-publish last valid cmd_vel when TF fails — keeps Spot moving."""
+        if self._spot_control and (self._last_vx != 0.0 or self._last_wz != 0.0):
+            t = Twist()
+            t.linear.x = float(self._last_vx)
+            t.angular.z = float(self._last_wz)
+            self._pub_vel.publish(t)
+
     def _update(self) -> None:
         if not self._enabled or self._goal is None or self._q_meas is None:
             return
@@ -238,11 +248,13 @@ class WBCQPControllerNode(Node):
         # 1. EE pose in body frame (PC-only, always reliable)
         ee_in_body = self._tf_lookup(self._body_frame, self._ee_frame)
         if ee_in_body is None:
+            self._pub_cached_cmd_vel()
             return
 
         # 2. body position in odom (single hop, more reliable than full chain)
         body_in_odom = self._tf_lookup(self._odom_frame, self._body_frame)
         if body_in_odom is None:
+            self._pub_cached_cmd_vel()
             return
 
         # 3. Compose ee_in_odom from body_in_odom * ee_in_body
@@ -288,6 +300,7 @@ class WBCQPControllerNode(Node):
             goal_stamped.pose            = goal_in.pose
             goal_odom = self._tf_transform(goal_stamped, self._odom_frame)
             if goal_odom is None:
+                self._pub_cached_cmd_vel()
                 return
             goal_link00 = goal_stamped
         else:
@@ -298,6 +311,7 @@ class WBCQPControllerNode(Node):
             goal_stamped.pose            = goal_in.pose
             goal_link00 = self._tf_transform(goal_stamped, self._z1_base_frame)
             if goal_link00 is None:
+                self._pub_cached_cmd_vel()
                 return
 
         # 5. EE position error → desired spatial velocity (Pinocchio: [ang(3), lin(3)])
@@ -373,6 +387,8 @@ class WBCQPControllerNode(Node):
         v_scale = self._v_min + (1.0 - self._v_min) / (1.0 + k * quality)
         vx *= v_scale
         wz *= v_scale
+        self._last_vx = vx
+        self._last_wz = wz
 
         # 9. Integrate q_dot → q_new → FK → new EE pose in Pinocchio world (= link00)
         q_new = q.copy()

@@ -77,7 +77,7 @@ wbc_coordinator:
     confidence_margin: 0.10  # min confidence improvement to update target
     quality_growth: 0.05     # [m/s] quality increase when no confidence data
     quality_min: 0.01        # [m] floor
-    quality_max: 0.50        # [m] ceiling
+    quality_max: 0.20        # [m] ceiling (reduced: keeps v_scale ≥ 0.33)
     quality_buf_size: 3      # number of initial measurements to freeze target
 
     # WS_EXTENSION bounding box (relative to Spot position at WS_EXTENSION entry)
