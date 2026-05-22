@@ -194,9 +194,11 @@ class WBCQPControllerNode(Node):
     def _tf_lookup(self, source: str, target: str,
                    timeout_sec: float = 1.0) -> TransformStamped | None:
         try:
+            # Use slightly-past time to avoid extrapolation errors
+            now = self.get_clock().now() - Duration(seconds=0.05)
             return self._tf.lookup_transform(
-                source, target,
-                rclpy.time.Time(), timeout=Duration(seconds=timeout_sec))
+                source, target, now,
+                timeout=Duration(seconds=max(0.5, timeout_sec)))
         except TransformException as e:
             if not self._tf_ready:
                 self.get_logger().warn(
