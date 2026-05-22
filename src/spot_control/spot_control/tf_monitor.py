@@ -42,7 +42,7 @@ class TFMonitorNode(Node):
         super().__init__('tf_monitor')
 
         self.declare_parameter('check_rate', 1.0)
-        self.declare_parameter('tf_timeout', 3.0)
+        self.declare_parameter('tf_timeout', 0.2)
         self.declare_parameter('joint_states_topic', '/joint_states')
         self.declare_parameter('orbbec_topic', '/orbbec/color/image_raw')
         self.declare_parameter('realsense_topic', '/camera/camera/color/image_raw')
