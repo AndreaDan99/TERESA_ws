@@ -176,17 +176,26 @@ ARC_GRID completato → `fused_torso_xyz()` + `kp_visibility_stats()`:
 
 ---
 
-## Fase 5 — Ciclo FAST (5 punti ecografici)
+## Fase 5 — Ciclo FAST con Body Pose Optimization
 
 `skip_impedance = true` — nessun contatto, solo posizionamento.
 
+Il coordinator riceve i 5 FAST points dal `wbc_approach_scanner`. Per ogni punto esegue un grid search offline (3 altezze × 4 pitch) per trovare la combinazione che porta il target più vicino al centro del workspace Z1 (`sweet_spot: [0.35, 0, 0.30]` in link00).
+
 Per ognuno dei 5 punti (Hub, Subxiphoid, RUQ, LUQ, Suprapubic):
 ```
-CHECKING_WORKSPACE → APPROACHING → WAIT_IK_DONE
-  → SCAN_PRELIFT → SCAN_PAUSE → next point
+Coordinator:     _set_body_pose(h*, p*) → attendere settle 1.5s
+                 → /wbc/body_ready = True
+FSM:             SCAN_PAUSE attende body_ready
+                 → CHECKING_WORKSPACE → APPROACHING → WAIT_IK_DONE
+                 → SCAN_PRELIFT → pub /z1/next_point_idx → SCAN_PAUSE
 ```
 
-Dopo tutti i 5 punti: `HOMING → WAITING` (completato).
+Vincoli Spot: altezza [-0.20, -0.15] m, pitch [0°, 15°], yaw invariato.
+
+Dopo tutti i 5 punti: Spot torna a `handoff_height (-0.15m)`, FSM → `HOMING → WAITING`.
+
+I target FSM sono in world frame — quando Spot cambia body_pose, il target si aggiorna automaticamente via TF tree.
 
 ---
 
@@ -197,8 +206,8 @@ Dopo tutti i 5 punti: `HOMING → WAITING` (completato).
 | **SEARCHING** | Grid 3×3 body_pose | Fermo in home | ✅ Attiva | In attesa |
 | **PRE_APPROACH** | Raddrizzato | Fermo in home | — | ✅ Tracker LOCKED×5 |
 | **APPROACHING** | Navigator → goal | ARC_GRID (8 pose) + look-at | — | ✅ Raccolta 3D |
-| **SCANNING** | Fermo, handoff | Fase 3 (se necessaria) | — | ✅ FAST points |
-| **FAST** | Fermo | 5 punti ecografici | — | — |
+| **SCANNING** | Body pose per FAST (grid search) | Fase 3 (se necessaria) | — | ✅ FAST points |
+| **FAST** | Grid search ottimizza (h,p) per ogni punto | 5 punti ecografici | — | — |
 
 ---
 
@@ -208,7 +217,7 @@ Dopo tutti i 5 punti: `HOMING → WAITING` (completato).
 
 | Nodo | Ruolo |
 |------|-------|
-| `wbc_coordinator` | FSM: WAITING_TF → IDLE → SEARCHING → PRE_APPROACH → APPROACHING → SCANNING → WS_EXTENSION. QualityMonitor. Body pose control. |
+| `wbc_coordinator` | FSM: WAITING_TF → IDLE → SEARCHING → PRE_APPROACH → APPROACHING → SCANNING → WS_EXTENSION. QualityMonitor. Body pose control. FAST body pose grid search. |
 | `wbc_qp_controller` | Arm: WBC look-at (J_arm damped pseudo-inverse). Spot: P-controller (1 TF `odom→body`). Quality-based velocity scaling. |
 | `wbc_spot_navigator` | Navigatore semplificato per APPROACHING. Legge `/wbc/ee_goal` in odom, rotate → drive → stop. P-controller robusto. |
 | `wbc_approach_scanner` | Body scan durante APPROACHING. ARC_GRID (8 pose, ±8° wrist, ±4cm grid) con BodySearchScanner + ScanManager. Fase 3 condizionale in SCANNING. Pubblica `/z1/fast_points` e `/z1/fast_ready`. |

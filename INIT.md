@@ -72,6 +72,19 @@ T5: ros2 run spot_control wbc_keyboard_node               # tastiera
 colcon build --packages-select spot_control z1_vision
 ```
 
+### FAST Body Pose Optimization (23 May)
+
+**Obiettivo:** Spot non resta fermo a `handoff_height=-0.15m` per tutti i 5 punti FAST. Per ogni punto, il coordinator esegue un grid search offline su 3 altezze × 4 pitch per trovare la combinazione che porta il target più vicino al centro workspace Z1 (`sweet_spot: [0.35, 0, 0.30]` in link00). Spot si aggiusta **prima** che il braccio esegua il punto.
+
+**Modifiche:**
+- `wbc_coordinator.py`: subscriber `/z1/fast_points` (PoseArray dal wbc_approach_scanner). Grid search `_optimize_body_poses()` — 1 TF lookup world→odom, poi matematica locale su 3×4 combinazioni. Publisher `/wbc/body_ready` dopo settle 1.5s.
+- `z1_FSM.py`: dopo ogni punto FAST, pubblica `/z1/next_point_idx` per segnalare al coordinator il prossimo punto. In `SCAN_PAUSE`, attende `/wbc/body_ready=True` prima di procedere. Timeout fallback 3s.
+- `wbc_params.yaml`: `body_grid_heights: [-0.20, -0.18, -0.15]`, `body_grid_pitches: [0.0, 0.087, 0.17, 0.26]`, `body_sweet_spot: [0.35, 0.0, 0.30]`, `body_settle_time: 1.5`.
+
+**Vincoli:** altezza [-0.20, -0.15] m; pitch [0°, 15°]; yaw mai cambiato.
+
+**Paper note:** questa non è WBC in senso stretto (Spot e braccio non si muovono simultaneamente). È più precisamente **whole-body planning** o **cooperative mobile manipulation**. Vedi `PLAN.md` per i paper angle suggeriti.
+
 ---
 
 ## Recent Changes (21 May 2026)
