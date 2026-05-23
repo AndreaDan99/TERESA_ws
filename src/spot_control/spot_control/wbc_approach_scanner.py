@@ -150,10 +150,7 @@ class WBCApproachScanner(Node):
     # ── Callbacks ──────────────────────────────────────────────────────
 
     def _cb_enable(self, msg: Bool) -> None:
-        if msg.data and not self._enabled:
-            self._enabled = True
-            self._start_arc_grid()
-        elif not msg.data:
+        if not msg.data:
             self._enabled = False
 
     def _cb_torso(self, msg: PoseStamped) -> None:
@@ -172,7 +169,10 @@ class WBCApproachScanner(Node):
         self._ik_done = msg.data
 
     def _cb_wbc_state(self, msg: String) -> None:
-        if msg.data == 'SCANNING' and self._phase == 'WAIT_PHASE3':
+        if msg.data == 'APPROACHING' and not self._enabled:
+            self._enabled = True
+            self._start_arc_grid()
+        elif msg.data == 'SCANNING' and self._phase == 'WAIT_PHASE3':
             if self._phase3_needed:
                 self._start_phase3()
 
