@@ -5,7 +5,7 @@ from rclpy.node import Node
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 
-from std_msgs.msg import Bool, Float32MultiArray, String
+from std_msgs.msg import Bool, Float32MultiArray, Int32, String
 from std_srvs.srv import Trigger
 from geometry_msgs.msg import PoseStamped, PointStamped, PoseArray
 from visualization_msgs.msg import Marker
@@ -126,6 +126,7 @@ class Z1FSM(Node):
         self.declare_parameter("workspace_safety_margin", 0.05)
         self.declare_parameter("arm_base_pos",            [0.0, 0.0, 0.0])
         self.declare_parameter("wbc_startup_timeout",      30.0)
+        self.declare_parameter("body_ready_timeout",        3.0)
 
         urdf_path = self.get_parameter("urdf_path").value
         if not urdf_path:
@@ -265,6 +266,7 @@ class Z1FSM(Node):
         self._body_scan_done: bool                         = False
         self._precomputed_fast_points: PoseArray | None   = None  # from WBC
         self._fast_ready: bool                            = False # from WBC
+        self._body_ready: bool                            = False # from WBC coordinator
         self._body_scanner:   BodySearchScanner | None     = None
         self._scan_torso_estimate: np.ndarray | None       = None
         self._scan_phase1_anchor:  np.ndarray | None       = None  # stima torso fine fase 1
@@ -296,12 +298,15 @@ class Z1FSM(Node):
                                  self._on_fast_points, 10)
         self.create_subscription(Bool, '/z1/fast_ready',
                                  self._on_fast_ready, 10)
+        self.create_subscription(Bool, '/wbc/body_ready',
+                                 self._on_body_ready, 10)
 
         # ── Publishers ──────────────────────────────────────────────────
         self.pub_ik_enable        = self.create_publisher(Bool,        self.ik_enable_topic,              10)
         self.pub_ik_goal          = self.create_publisher(PoseStamped, self.ik_goal_topic,                 10)
         self.pub_state            = self.create_publisher(String,      self.state_topic,                   10)
         self.pub_impedance_enable = self.create_publisher(Bool,        self.impedance_enable_topic,        10)
+        self.pub_next_point       = self.create_publisher(Int32,       '/z1/next_point_idx',               10)
         self.pub_out_of_workspace = self.create_publisher(Bool,        self.target_out_of_workspace_topic, 10)
         self.pub_ik_goal_marker      = self.create_publisher(Marker, '/ik_goal_marker',       10)
         self.pub_tracker_reset       = self.create_publisher(Bool,  '/tracker_reset',        10)
@@ -389,6 +394,9 @@ class Z1FSM(Node):
         if msg.data:
             self._fast_ready = True
             self.get_logger().info('FAST ready from WBC')
+
+    def _on_body_ready(self, msg: Bool) -> None:
+        self._body_ready = msg.data
 
     def _on_keyboard_cmd(self, msg: String):
         """Riceve comandi da z1_keyboard_safety via /z1_keyboard_cmd."""
@@ -1627,6 +1635,12 @@ class Z1FSM(Node):
             if self._scan_mgr.tick_prelift(self):
                 # Ritornati al centro: pausa prima del prossimo punto FAST
                 if self._scan_mgr.mode != self._scan_mgr.MODE_SINGLE:
+                    # Signal coordinator: next FAST point index
+                    nxt = Int32()
+                    nxt.data = (-1 if self._scan_mgr.is_complete
+                                else self._scan_mgr.idx)
+                    self.pub_next_point.publish(nxt)
+                    self._body_ready = False
                     self.set_state(self.SCAN_PAUSE)
                 else:
                     self.set_state(self.APPROACHING)
@@ -1634,12 +1648,23 @@ class Z1FSM(Node):
         # ── SCAN_PAUSE ────────────────────────────────────────────────────
         elif self.state == self.SCAN_PAUSE:
             if self._scan_pause_start is not None:
-                elapsed = self.get_clock().now().nanoseconds * 1e-9 - self._scan_pause_start
-                if elapsed >= self._scan_pause_s:
-                    self.get_logger().info(
-                        f'▶  SCAN_PAUSE terminata → APPROACHING {self._scan_mgr.current_name}'
-                    )
-                    self.set_state(self.APPROACHING)
+                # Wait for body_ready from coordinator (with timeout fallback)
+                if self._body_ready or not self._scan_on_start:
+                    elapsed = self.get_clock().now().nanoseconds * 1e-9 - self._scan_pause_start
+                    if elapsed >= self._scan_pause_s:
+                        self.get_logger().info(
+                            f'▶  SCAN_PAUSE terminata → APPROACHING '
+                            f'{self._scan_mgr.current_name}'
+                        )
+                        self.set_state(self.APPROACHING)
+                else:
+                    elapsed = self.get_clock().now().nanoseconds * 1e-9 - self._scan_pause_start
+                    timeout = float(self.get_parameter('body_ready_timeout').value)
+                    if elapsed > timeout:
+                        self.get_logger().warn(
+                            f'⏰ body_ready timeout ({timeout:.1f}s) → procedo comunque'
+                        )
+                        self._body_ready = True  # force proceed
 
         # ── REQUESTING_WS_EXT ────────────────────────────────────────────
         elif self.state == self.REQUESTING_WS_EXT:

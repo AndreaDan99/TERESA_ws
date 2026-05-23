@@ -29,8 +29,8 @@ from rclpy.node import Node
 from rclpy.duration import Duration
 import rclpy.time
 
-from geometry_msgs.msg import PoseStamped, TransformStamped, Twist, Vector3Stamped, Pose, Point
-from std_msgs.msg import Bool, String, Float32
+from geometry_msgs.msg import PoseStamped, TransformStamped, Twist, Vector3Stamped, Pose, Point, PoseArray
+from std_msgs.msg import Bool, String, Float32, Int32
 from visualization_msgs.msg import Marker
 from tf2_ros import Buffer, TransformListener, TransformException
 import tf2_geometry_msgs  # noqa: F401
@@ -167,6 +167,12 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('search_pause_per_point',    3.0)    # [s] pause per grid point
         self.declare_parameter('search_lock_confidence',    0.85)   # conf to lock and sample
         self.declare_parameter('search_lock_samples',       5)     # samples to average before exit
+
+        # FAST body pose optimization
+        self.declare_parameter('body_grid_heights',       [-0.20, -0.18, -0.15])
+        self.declare_parameter('body_grid_pitches',       [0.0, 0.087, 0.17, 0.26])
+        self.declare_parameter('body_sweet_spot',         [0.35, 0.0, 0.30])
+        self.declare_parameter('body_settle_time',        1.5)
         self.declare_parameter('pre_approach_duration',        5.0)   # [s] arm look-at before Spot walks
 
         p = lambda n: self.get_parameter(n).value
@@ -184,6 +190,10 @@ class WBCCoordinatorNode(Node):
         self._search_pitch_angles   = self._read_float_array('search_pitch_angles')
         self._search_yaw_offsets    = self._read_float_array('search_yaw_offsets')
         self._search_pause_per_point = float(p('search_pause_per_point'))
+        self._body_grid_heights   = self._read_float_array('body_grid_heights')
+        self._body_grid_pitches   = self._read_float_array('body_grid_pitches')
+        self._body_sweet_spot     = np.array([float(x) for x in p('body_sweet_spot')])
+        self._body_settle_time    = float(p('body_settle_time'))
         self._search_lock_confidence = float(p('search_lock_confidence'))
         self._search_lock_samples   = int(p('search_lock_samples'))
         self._pre_approach_duration = float(p('pre_approach_duration'))
@@ -226,6 +236,12 @@ class WBCCoordinatorNode(Node):
         self._torso_tracker_state: str = ''       # LOCKED / TRACKING / IDLE
         self._torso_detected_ticks: int = 0       # consecutive LOCKED ticks
 
+        # FAST body pose optimization
+        self._fast_points: PoseArray | None = None
+        self._optimal_height: dict = {}            # idx → height
+        self._optimal_pitch: dict = {}             # idx → pitch
+        self._body_settle_start: float = 0.0       # timestamp when settle started
+
         # ── Sub / Pub ─────────────────────────────────────────────────
         self.create_subscription(String,       '/human_pose/posture',        self._cb_posture,    10)
         self.create_subscription(Float32,      p('posture_confidence_topic'), self._cb_conf,       10)
@@ -238,6 +254,8 @@ class WBCCoordinatorNode(Node):
         self.create_subscription(Vector3Stamped, '/laying_human/body_axis',  self._cb_body_axis,  10)
         self.create_subscription(Bool,           '/wbc/restart',             self._cb_restart,    10)
         self.create_subscription(Bool,           '/wbc/tf_ready',            self._cb_tf_ready,    10)
+        self.create_subscription(PoseArray,      '/z1/fast_points',          self._cb_fast_points, 10)
+        self.create_subscription(Int32,          '/z1/next_point_idx',       self._cb_next_point,  10)
 
         self._pub_goal     = self.create_publisher(PoseStamped, p('wbc_goal_topic'),        10)
         self._pub_enable   = self.create_publisher(Bool,        p('wbc_enable_topic'),     10)
@@ -246,6 +264,7 @@ class WBCCoordinatorNode(Node):
         self._pub_yaw      = self.create_publisher(Float32,     '/wbc/desired_yaw',        10)
         self._pub_spot_ctrl = self.create_publisher(Bool,       '/wbc/spot_control',       10)
         self._pub_dbg_marker = self.create_publisher(Marker, '/wbc/debug_marker', 10)
+        self._pub_body_ready = self.create_publisher(Bool, '/wbc/body_ready', 10)
 
         self.create_timer(0.2, self._tick)   # 5 Hz FSM
         self._set_state(CoordState.WAITING_TF)
@@ -389,11 +408,14 @@ class WBCCoordinatorNode(Node):
             self._tick_approaching()
         elif self._state == CoordState.WS_EXTENSION:
             self._tick_ws_extension()
+        elif self._state == CoordState.SCANNING:
+            self._tick_scannning()
 
         s = String(); s.data = self._state
         self._pub_state.publish(s)
 
         self._pub_debug_marker()
+        self._tick_fast_settle()
 
     def _check_lying_timeout(self) -> None:
         # Once committed (handoff done), don't abort on Orbbec loss — RealSense is in charge.
@@ -417,6 +439,9 @@ class WBCCoordinatorNode(Node):
 
     def _tick_waiting_tf(self) -> None:
         pass  # attesa passiva — _cb_tf_ready farà la transizione
+
+    def _tick_scannning(self) -> None:
+        pass  # passive — FSM handles FAST, body pose via settle tick
 
     def _tick_approaching(self) -> None:
         if self._approach_point_odom is None:
@@ -611,8 +636,42 @@ class WBCCoordinatorNode(Node):
             return PoseStamped()  # should not happen
         return msg
 
-    def _pub_debug_marker(self) -> None:
-        """Publish a green line from body (odom) to goal (odom) for RViz debugging."""
+    # ── FAST body pose optimization ────────────────────────────────────
+
+    def _cb_fast_points(self, msg: PoseArray) -> None:
+        """Receive FAST points from wbc_approach_scanner — run grid search."""
+        if len(msg.poses) < 1:
+            return
+        self._fast_points = msg
+        self.get_logger().info(f'FAST points received ({len(msg.poses)} poses)')
+        self._optimize_body_poses()
+        # Apply first body pose
+        self._apply_fast_body_pose(0)
+
+    def _cb_next_point(self, msg: Int32) -> None:
+        """FSM signals next FAST point index."""
+        idx = msg.data
+        if idx < 0:
+            self.get_logger().info('FAST done — restoring handoff height')
+            self._set_body_pose(self._handoff_body_height, 0.0)
+            self._pub_body_ready.publish(Bool(data=True))
+            return
+        if self._state == CoordState.SCANNING:
+            self._apply_fast_body_pose(idx)
+
+    def _optimize_body_poses(self) -> None:
+        """Grid search: for each FAST point, find optimal (h, p)."""
+        if self._fast_points is None:
+            return
+
+        heights = self._body_grid_heights
+        pitches = self._body_grid_pitches
+        sweet = self._body_sweet_spot
+
+        # Mount offset: where is world relative to body?
+        mount = np.array([self._mount_x, self._mount_y, self._mount_z])
+
+        # Get current body in odom (position + yaw)
         body = self._tf_lookup(self._odom_frame, self._body_frame)
         if body is None:
             return
@@ -658,7 +717,8 @@ class WBCCoordinatorNode(Node):
                 self._last_search_pitch = entry[2]
                 self._set_body_pose(self._search_body_height, entry[2], entry[3])
             if new_state == CoordState.SCANNING:
-                self._set_body_pose(self._handoff_body_height)
+                if self._fast_points is None:
+                    self._set_body_pose(self._handoff_body_height)
             if new_state == CoordState.PRE_APPROACH:
                 self._set_body_pose(0.0, 0.0)
                 self._torso_detected_ticks = 0

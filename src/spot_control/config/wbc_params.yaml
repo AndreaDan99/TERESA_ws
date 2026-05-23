@@ -109,6 +109,12 @@ wbc_coordinator:
     # PRE_APPROACH — arm pre-orientation before Spot starts walking
     pre_approach_duration: 5.0   # [s] pausa per orientare il braccio (WBC arm-only)
 
+    # FAST body pose optimization — grid search per ogni punto
+    body_grid_heights: [-0.20, -0.18, -0.15]        # [m] altezze da provare
+    body_grid_pitches: [0.0, 0.087, 0.17, 0.26]    # [rad] 0°, 5°, 10°, 15°
+    body_sweet_spot: [0.35, 0.0, 0.30]              # [m] centro workspace Z1 in link00
+    body_settle_time: 1.5                             # [s] attesa dopo body_pose
+
     # Topics
     posture_confidence_topic: '/human_pose/posture_confidence'
     approach_point_topic:     '/laying_human/approach_point'
