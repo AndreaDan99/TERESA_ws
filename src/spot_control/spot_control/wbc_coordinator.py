@@ -222,6 +222,10 @@ class WBCCoordinatorNode(Node):
         self._search_total_duration: float = 0.0  # total grid duration [s]
         self._last_search_pitch: float = 0.0      # avoid redundant body_pose publishes
 
+        # PRE_APPROACH active search with RealSense
+        self._torso_tracker_state: str = ''       # LOCKED / TRACKING / IDLE
+        self._torso_detected_ticks: int = 0       # consecutive LOCKED ticks
+
         # ── Sub / Pub ─────────────────────────────────────────────────
         self.create_subscription(String,       '/human_pose/posture',        self._cb_posture,    10)
         self.create_subscription(Float32,      p('posture_confidence_topic'), self._cb_conf,       10)
@@ -229,6 +233,8 @@ class WBCCoordinatorNode(Node):
         self.create_subscription(String,       p('z1_fsm_state_topic'),      self._cb_z1_state,   10)
         self.create_subscription(Bool,         '/ik_done',                   self._cb_ik_done,    10)
         self.create_subscription(Bool,         '/wbc/ws_request',            self._cb_ws_req,     10)
+        self.create_subscription(Bool,         '/z1/fast_ready',             self._cb_fast_ready, 10)
+        self.create_subscription(String,      '/torso_tracker_state',      self._cb_torso_state, 10)
         self.create_subscription(Vector3Stamped, '/laying_human/body_axis',  self._cb_body_axis,  10)
         self.create_subscription(Bool,           '/wbc/restart',             self._cb_restart,    10)
         self.create_subscription(Bool,           '/wbc/tf_ready',            self._cb_tf_ready,    10)
@@ -321,15 +327,18 @@ class WBCCoordinatorNode(Node):
         if self._state == CoordState.WS_EXTENSION and msg.data:
             self._set_wbc_enabled(False)
             self._set_state(CoordState.SCANNING)
-        elif self._state == CoordState.PRE_APPROACH and msg.data:
-            self.get_logger().info('IK done → arm oriented → APPROACHING')
-            self._pub_spot_ctrl.publish(Bool(data=True))
-            self._set_state(CoordState.APPROACHING)
+        # PRE_APPROACH → APPROACHING is now triggered by RealSense
+        # detection (5 tick LOCKED) in _tick_pre_approach
 
     def _cb_ws_req(self, msg: Bool) -> None:
         if self._state == CoordState.SCANNING and msg.data:
             self._set_state(CoordState.WS_EXTENSION)
             self._set_wbc_enabled(True)
+
+    def _cb_fast_ready(self, msg: Bool) -> None:
+        if msg.data and self._state == CoordState.SCANNING:
+            self.get_logger().info('FAST ready — disabling WBC')
+            self._set_wbc_enabled(False)
 
     def _cb_restart(self, msg: Bool) -> None:
         if msg.data and self._state == CoordState.IDLE:
@@ -339,6 +348,9 @@ class WBCCoordinatorNode(Node):
             self.get_logger().info('Keyboard stop → IDLE')
             self._set_state(CoordState.IDLE)
             self._set_wbc_enabled(False)
+
+    def _cb_torso_state(self, msg: String) -> None:
+        self._torso_tracker_state = msg.data
 
     def _cb_tf_ready(self, msg: Bool) -> None:
         if msg.data and self._state == CoordState.WAITING_TF:
@@ -410,17 +422,19 @@ class WBCCoordinatorNode(Node):
         if self._approach_point_odom is None:
             return
 
+        # Publish goal for spot_goal_navigator (Spot) and look-at (arm)
         self._pub_goal.publish(self._filtered_goal())
+        # WBC does NOT move Spot — navigator handles cmd_vel
+        self._pub_spot_ctrl.publish(Bool(data=False))
 
-        # Handoff triggered purely by distance — when Spot reaches the
-        # approach_point (within handoff_distance tolerance), hand control
-        # to z1_FSM regardless of Orbbec confidence.
+        # Handoff triggered purely by distance
         dist = self._distance_to_patient()
         if dist is not None and dist < self._handoff_dist:
             self.get_logger().info(
                 f'Handoff: dist={dist:.2f}m < {self._handoff_dist:.2f}m → SCANNING')
-            self._set_wbc_enabled(False)
             self._set_state(CoordState.SCANNING)
+            # WBC kept enabled for wbc_approach_scanner phase 3;
+            # will be disabled when /z1/fast_ready arrives
 
     def _tick_searching(self) -> None:
         lock_ok = (self._posture == 'LYING'
@@ -484,7 +498,27 @@ class WBCCoordinatorNode(Node):
 
     def _tick_pre_approach(self) -> None:
         self._pub_goal.publish(self._filtered_goal())
-        # exits on /ik_done via _cb_ik_done
+
+        elapsed = (self.get_clock().now() - self._pre_approach_start).nanoseconds * 1e-9 \
+            if self._pre_approach_start is not None else 0.0
+
+        # Wait for 5 consecutive RealSense LOCKED ticks, max 5 seconds
+        if self._torso_tracker_state == 'LOCKED':
+            self._torso_detected_ticks += 1
+            if self._torso_detected_ticks >= 5:
+                self.get_logger().info('RealSense LOCKED ×5 → APPROACHING')
+                self._pub_spot_ctrl.publish(Bool(data=False))
+                self._set_wbc_enabled(True)
+                self._set_state(CoordState.APPROACHING)
+                return
+        else:
+            self._torso_detected_ticks = 0
+
+        if elapsed > 5.0:
+            self.get_logger().warn('PRE_APPROACH timeout (5s) → APPROACHING (fallback)')
+            self._pub_spot_ctrl.publish(Bool(data=False))
+            self._set_wbc_enabled(True)
+            self._set_state(CoordState.APPROACHING)
 
     def _tick_ws_extension(self) -> None:
         # Goal published directly by z1_FSM via /wbc/ee_goal.
@@ -627,6 +661,7 @@ class WBCCoordinatorNode(Node):
                 self._set_body_pose(self._handoff_body_height)
             if new_state == CoordState.PRE_APPROACH:
                 self._set_body_pose(0.0, 0.0)
+                self._torso_detected_ticks = 0
             if new_state == CoordState.WS_EXTENSION:
                 self._save_ws_ext_anchor()
             self._state = new_state

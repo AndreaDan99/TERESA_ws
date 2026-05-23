@@ -56,9 +56,27 @@ def generate_launch_description():
         parameters=[params_file],
     )
 
+    navigator_node = Node(
+        package='spot_control',
+        executable='wbc_spot_navigator',
+        name='wbc_spot_navigator',
+        output='screen',
+        parameters=[params_file],
+    )
+
+    scanner_node = Node(
+        package='spot_control',
+        executable='wbc_approach_scanner',
+        name='wbc_approach_scanner',
+        output='screen',
+        parameters=[params_file],
+    )
+
     return LaunchDescription([
         z1_x_arg, z1_y_arg, z1_z_arg, dry_run_arg,
         LogInfo(msg=['WBC — Spot+Z1 holistic control']),
         qp_node,
         coord_node,
+        navigator_node,
+        scanner_node,
     ])

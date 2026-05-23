@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from std_msgs.msg import Bool, Float32MultiArray, String
 from std_srvs.srv import Trigger
-from geometry_msgs.msg import PoseStamped, PointStamped
+from geometry_msgs.msg import PoseStamped, PointStamped, PoseArray
 from visualization_msgs.msg import Marker
 
 from tf_transformations import quaternion_matrix, quaternion_from_matrix
@@ -263,6 +263,8 @@ class Z1FSM(Node):
         self._ws_ext_confirmed:   bool                      = False
 
         self._body_scan_done: bool                         = False
+        self._precomputed_fast_points: PoseArray | None   = None  # from WBC
+        self._fast_ready: bool                            = False # from WBC
         self._body_scanner:   BodySearchScanner | None     = None
         self._scan_torso_estimate: np.ndarray | None       = None
         self._scan_phase1_anchor:  np.ndarray | None       = None  # stima torso fine fase 1
@@ -290,6 +292,10 @@ class Z1FSM(Node):
         self.create_subscription(String,            '/torso_tracker_state',    self._on_tracker_state, 10)
         self.create_subscription(String,
             self.get_parameter('wbc_state_topic').value, self._on_wbc_state, 10)
+        self.create_subscription(PoseArray, '/z1/fast_points',
+                                 self._on_fast_points, 10)
+        self.create_subscription(Bool, '/z1/fast_ready',
+                                 self._on_fast_ready, 10)
 
         # ── Publishers ──────────────────────────────────────────────────
         self.pub_ik_enable        = self.create_publisher(Bool,        self.ik_enable_topic,              10)
@@ -372,6 +378,17 @@ class Z1FSM(Node):
     def _on_wbc_state(self, msg: String):
         self._wbc_state_str = msg.data
         self._wbc_wait_start = None   # WBC connected, clear timeout
+
+    def _on_fast_points(self, msg: PoseArray) -> None:
+        """Receive precomputed FAST points from WBC approach scanner."""
+        if len(msg.poses) >= 1:
+            self._precomputed_fast_points = msg
+            self.get_logger().info(f'FAST points from WBC ({len(msg.poses)} points)')
+
+    def _on_fast_ready(self, msg: Bool) -> None:
+        if msg.data:
+            self._fast_ready = True
+            self.get_logger().info('FAST ready from WBC')
 
     def _on_keyboard_cmd(self, msg: String):
         """Riceve comandi da z1_keyboard_safety via /z1_keyboard_cmd."""
@@ -1136,6 +1153,12 @@ class Z1FSM(Node):
                     self._wbc_state_str = ''
                     self._wbc_wait_start = None
                 if self._wbc_state_str and self._wbc_state_str != 'SCANNING':
+                    return
+                # If WBC approach scanner completed and fast_ready, skip body scan
+                if self._fast_ready and self._precomputed_fast_points is not None:
+                    self.get_logger().info('FAST points from WBC → skipping BODY_SCANNING')
+                    self._body_scan_done = True
+                    self.set_state(self.HOMING)
                     return
                 self.set_state(self.BODY_SCANNING)
                 return
