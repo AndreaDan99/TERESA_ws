@@ -3,12 +3,12 @@
 WBC Approach Scanner — multi-view body scan + WBC look-at during motion.
 
 During APPROACHING:
-  Arc grid (±4cm) around home position, each point oriented with
-  WBC look-at toward torso. No wrist sweep needed — look-at handles
-  camera orientation.
+  Phase 1: home position with wrist sweep (±8°) — find torso center
+  Phase 2: arc grid (±4cm) with wrist — multi-view 3D mapping
+  Each point oriented with WBC look-at toward torso estimate.
 
 During SCANNING (only if keypoints have low confidence):
-  Adaptive refinement grid (±5cm lateral or ±10cm body-axis).
+  Phase 3: adaptive refinement grid (±5cm lateral or ±10cm body-axis).
 
 Subscribes to /torso_scan_point for BodySearchScanner data feed.
 Uses real BodySearchScanner + ScanManager (same logic as FSM).
@@ -27,6 +27,7 @@ import rclpy.time
 from geometry_msgs.msg import Pose, PoseStamped, PoseArray
 from std_msgs.msg import Bool, Float32MultiArray, String
 from tf2_ros import Buffer, TransformListener, TransformException
+from tf_transformations import quaternion_matrix, quaternion_from_matrix
 
 from teresa_utils.orientation import compute_ee_orientation
 
@@ -35,10 +36,16 @@ from z1_vision.z1_scan_manager import ScanManager
 
 
 # ── Reduced motion parameters (Spot is moving during scan) ────────────
+WRIST_NY = 2             # wrist grid Y steps
+WRIST_NZ = 2             # wrist grid Z steps
+WRIST_ANG_DEG = 8.0      # ± wrist angle [deg]
+
 ARC_EXT_Y = 0.04          # arc Y offset [m]  (head→feet axis)
 ARC_EXT_X = 0.04          # arc X offset [m]  (lateral)
 ARC_NY = 2                # arc grid Y points
 ARC_NX = 2                # arc grid X points
+ARC_WRIST_NY = 1          # wrist grid per arc point
+ARC_WRIST_NZ = 1
 
 P3_SKIP_THR   = 0.50      # min KP confidence to skip phase 3
 P3_ASYM_THR   = 0.15      # asymmetry threshold
@@ -67,6 +74,26 @@ def _make_pose_stamped(pos: np.ndarray, orientation: np.ndarray,
     p.pose.orientation.z = float(orientation[2])
     p.pose.orientation.w = float(orientation[3])
     return p
+
+
+def _wrist_poses_at(pos: np.ndarray, R_base: np.ndarray,
+                    ny: int, nz: int, ang_deg: float) -> list:
+    """Generate wrist-angle grid poses at given position with base rotation."""
+    ang = math.radians(ang_deg)
+    alphas = np.linspace(-ang, ang, ny) if ny > 1 else np.array([0.0])
+    betas  = np.linspace(-ang, ang, nz) if nz > 1 else np.array([0.0])
+    poses = []
+    for alpha in alphas:
+        ca, sa = math.cos(alpha), math.sin(alpha)
+        Ry = np.array([[ca, 0, sa], [0, 1, 0], [-sa, 0, ca]])
+        for beta in betas:
+            cb, sb = math.cos(beta), math.sin(beta)
+            Rz = np.array([[cb, -sb, 0], [sb, cb, 0], [0, 0, 1]])
+            R_new = R_base @ Ry @ Rz
+            T = np.eye(4); T[:3, :3] = R_new
+            q = quaternion_from_matrix(T)
+            poses.append(_make_pose_stamped(pos, q))
+    return poses
 
 
 class WBCApproachScanner(Node):
@@ -155,7 +182,7 @@ class WBCApproachScanner(Node):
     # ── Phase control ──────────────────────────────────────────────────
 
     def _start_arc_grid(self) -> None:
-        """Build arc grid poses, each with look-at orientation."""
+        """Build scan poses: home wrist sweep + arc grid with wrist."""
         self._phase = 'ARC_GRID'
         self._ik_done = False
         self._phase3_needed = False
@@ -203,30 +230,40 @@ class WBCApproachScanner(Node):
             stability_k=SCAN_STABILITY_K,
         )
         self._scanner.reset()
-        self.get_logger().info(f'PHASE_3: {len(poses_p3)} poses ({len(transit or set())} transit)')
+        self.get_logger().info(
+            f'PHASE_3: {len(poses_p3)} poses ({len(transit or set())} transit)')
 
     # ── Pose generation ────────────────────────────────────────────────
 
     def _gen_arc_grid_poses(self) -> list:
-        """Arc grid ±4cm around home, each with look-at toward torso."""
+        """Phase 1: home wrist sweep, Phase 2: arc grid with wrist."""
         center = self._home_pos
         torso = (self._torso_pos if self._torso_pos is not None
                  else center + np.array([0.35, 0, 0]))
-
-        ys = np.linspace(center[1] - ARC_EXT_Y, center[1] + ARC_EXT_Y, ARC_NY)
-        xs = np.linspace(center[0], center[0] + ARC_EXT_X, ARC_NX)
+        R_home = quaternion_matrix(self._home_ori)[:3, :3]
 
         poses: list = []
+
+        # Phase 1: home position with wrist sweep (±8°, 2×2 = 4 poses)
+        poses.extend(_wrist_poses_at(center, R_home,
+                     WRIST_NY, WRIST_NZ, WRIST_ANG_DEG))
+
+        # Phase 2: arc grid (±4cm) with look-at + wrist per point
+        ys = np.linspace(center[1] - ARC_EXT_Y, center[1] + ARC_EXT_Y, ARC_NY)
+        xs = np.linspace(center[0], center[0] + ARC_EXT_X, ARC_NX)
         for x in xs:
             for y in ys:
                 pos = np.array([float(x), float(y), float(center[2])])
                 d = torso - pos
                 norm = float(np.linalg.norm(d))
                 if norm < 1e-6:
-                    q = self._home_ori
+                    R_base = R_home
                 else:
-                    q = compute_ee_orientation(d / norm, self._home_ori.tolist())
-                poses.append(_make_pose_stamped(pos, q))
+                    q_base = compute_ee_orientation(d / norm,
+                                                    self._home_ori.tolist())
+                    R_base = quaternion_matrix(q_base)[:3, :3]
+                poses.extend(_wrist_poses_at(
+                    pos, R_base, ARC_WRIST_NY, ARC_WRIST_NZ, WRIST_ANG_DEG))
         return poses
 
     def _gen_phase3_poses(self) -> tuple[list | None, set | None]:
@@ -240,10 +277,10 @@ class WBCApproachScanner(Node):
         shoulders = stats.get('shoulders', 1.0)
         hips      = stats.get('hips', 1.0)
         per_kp    = stats.get('per_kp', np.zeros(4))
-        kp5  = float(per_kp[0])   # spalla lontana +X
-        kp6  = float(per_kp[1])   # spalla vicina  -X
-        kp11 = float(per_kp[2])   # fianco lontano +X
-        kp12 = float(per_kp[3])   # fianco vicino  -X
+        kp5  = float(per_kp[0])
+        kp6  = float(per_kp[1])
+        kp11 = float(per_kp[2])
+        kp12 = float(per_kp[3])
 
         if shoulders > P3_SKIP_THR and hips > P3_SKIP_THR:
             return None, None
@@ -274,7 +311,6 @@ class WBCApproachScanner(Node):
         q = (self._home_ori if norm < 1e-6
              else compute_ee_orientation(d / norm, self._home_ori.tolist()))
 
-        # Home transit pose (movement only) + scan pose
         home_p = _make_pose_stamped(self._home_pos, self._home_ori)
         scan_p = _make_pose_stamped(pos, q)
         transit = {0}
@@ -353,7 +389,7 @@ class WBCApproachScanner(Node):
         self._phase = 'DONE'
         self._enabled = False
 
-        if self._scan_torso_estimate is None or self._scan_mgr is None:
+        if self._scan_torso_estimate is None:
             self.get_logger().warn('No scan data — empty FAST')
             self._pub_fast.publish(PoseArray())
             self._pub_ready.publish(Bool(data=True))
@@ -361,7 +397,6 @@ class WBCApproachScanner(Node):
 
         torso = self._scan_torso_estimate
 
-        # Build PoseArray with simple offsets from torso center
         fast = PoseArray()
         fast.header.frame_id = self._z1_base_frame
         offsets = [
