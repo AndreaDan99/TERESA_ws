@@ -267,3 +267,41 @@ Nessuno. La grid search è un metodo privato del coordinator (~40 righe).
 ## File invariati
 
 `wbc_math.py`, `wbc_qp_controller.py`, `z1_scan_manager.py`, `z1_ik_to_jtc.py`, `ik_goal_mux.py`.
+
+---
+
+## Nota (23 May 2026) — Paper angle e semplificazioni
+
+### Body Pose Optimization: Whole-Body Planning, non WBC
+
+L'ottimizzazione body pose per FAST points è più precisamente un **whole-body planning** o **cooperative mobile manipulation**, non un WBC in senso stretto:
+
+| | WBC classico | Body Pose Optimization |
+|---|:---:|:---:|
+| Movimento | Braccio + Spot **contemporaneamente** | Spot si muove **prima**, braccio **dopo** |
+| Matematica | Jacobian olistica in tempo reale | Grid search offline |
+| Obiettivo | Minimizzare errore EE | Trovare configurazione ottimale |
+
+**Paper angle suggerito:**
+
+> **"Hierarchical Whole-Body Framework for Autonomous Ultrasound"**
+> 
+> Livello 1 (reactive): APPROACHING — arm look-at + Spot P-controller
+> Livello 2 (planning): FAST — body pose optimization per ogni punto
+
+Oppure più onesto: **"Decoupled Mobile Manipulation with Pre-Planned Body Reconfiguration"**.
+
+### Nota implementativa
+
+Il FSM pubblica target in `world` frame. Quando Spot cambia body_pose, `world` segue automaticamente via TF — l'IK solver riceve il target corretto **senza nessuna modifica ai target FSM**. Il FSM non deve leggere target dal coordinator — deve solo segnalare quando è pronto per il prossimo punto (`/z1/next_point_idx`) e attendere che Spot si sia assestato (`/wbc/body_ready`).
+
+Il grid search è completamente offline: 1 solo TF lookup per trasformare i 5 punti da world a odom, poi tutta matematica locale. Nessun problema di clock desync.
+
+### Vincoli di movimento
+
+| Parametro | Range | Note |
+|-----------|-------|------|
+| Altezza | `[-0.20, -0.15]` m | 5 cm range, Spot resta basso |
+| Pitch | `[0°, 15°]` | Massimo 15° |
+| Yaw | **mai cambiato** | Fissato dal WBC during APPROACHING |
+| Settle time | 1.5s | Tra body_pose e inizio punto FAST |
