@@ -146,7 +146,9 @@ Navigator semplificato: riceve `/wbc/ee_goal` in odom, trasforma in body frame, 
 - Ogni punto combinato con WBC look-at orientation
 - Pubblica `/wbc/ik_goal_pose` e `/wbc/ik_enable`
 
-**Handoff:** `dist < 0.05m → SCANNING`. WBC rimane enabled (scanner potrebbe fare fase 3).
+**Handoff:**
+- Soft handoff a 20cm: se scanner non ha finito ARC_GRID → Spot aspetta
+- Hard handoff a 5cm: `APPROACHING → SCANNING`. WBC viene disabilitato (scanner fase 3 gestita via `/wbc/state`).
 
 ---
 
@@ -244,16 +246,20 @@ HOMING → WAITING → BODY_SCANNING → CHECKING_WORKSPACE → APPROACHING
 
 ### WBC look-at + body scan (APPROACHING)
 
+Durante PRE_APPROACH solo il WBC QP pubblica look-at (scanner non attivo).
+In APPROACHING il `wbc_approach_scanner` prende il controllo completo del braccio via
+`/wbc/state='APPROACHING'`, pubblicando posizioni griglia + orientamento look-at.
+Il WBC QP non esegue IK goals in APPROACHING — evita conflitti sullo stesso topic.
+
 ```
-/wbc/ee_goal (odom)  ←  Coordinator (target fisso da Orbbec lock)
-        │
-        ├──► wbc_spot_navigator     → /my_spot/cmd_vel → Spot
-        │
-        ├──► wbc_qp_controller      → orientamento braccio (WBC look-at)
-        │
-        └──► wbc_approach_scanner   → /wbc/ik_goal_pose (pos grid + ori torso)
-                                      BodySearchScanner + ScanManager
-                                      feed da /torso_scan_point (RealSense)
+PRE_APPROACH:
+  WBC QP → /wbc/ik_goal_pose (look-at puro, braccio fermo in home)
+
+APPROACHING:
+  wbc_spot_navigator     → /my_spot/cmd_vel → Spot
+  wbc_approach_scanner   → /wbc/ik_goal_pose (pos grid + ori torso)
+                           BodySearchScanner + ScanManager
+                           feed da /torso_scan_point (RealSense)
 ```
 
 ---

@@ -85,6 +85,21 @@ colcon build --packages-select spot_control z1_vision
 
 **Paper note:** questa non è WBC in senso stretto (Spot e braccio non si muovono simultaneamente). È più precisamente **whole-body planning** o **cooperative mobile manipulation**. Vedi `PLAN.md` per i paper angle suggeriti.
 
+### Soft Handoff a 20cm + Risoluzione conflitto IK goal
+
+**Soft handoff:** Spot non arriva subito a 5cm. A 20cm si ferma (navigator in pausa via `/wbc/spot_control=False`) finché lo scanner non completa ARC_GRID. Quando i FAST points sono pronti, il navigator viene sbloccato e Spot completa gli ultimi 15cm.
+
+**Conflitto IK goal risolto:** il WBC QP e il `wbc_approach_scanner` pubblicavano entrambi su `/wbc/ik_goal_pose`, causando conflitti. Ora:
+- **PRE_APPROACH**: solo WBC QP pubblica look-at (scanner non ancora attivo)
+- **APPROACHING**: solo scanner pubblica grid+look-at (WBC QP non esegue IK)
+- **SCANNING**: solo scanner per fase 3 (attivata via `/wbc/state='SCANNING'`, non via `/wbc/enable`)
+
+**Modifiche:**
+- `wbc_approach_scanner.py`: si attiva su `/wbc/state='APPROACHING'` invece che `/wbc/enable=True`
+- `wbc_coordinator.py`: non abilita WBC in APPROACHING; soft handoff a 20cm se scanner non ancora pronto
+- `wbc_spot_navigator.py`: subscriber `/wbc/spot_control` — se False, zero cmd_vel (pausa)
+- `wbc_params.yaml`: `soft_handoff_distance: 0.20`
+
 ---
 
 ## Recent Changes (21 May 2026)
