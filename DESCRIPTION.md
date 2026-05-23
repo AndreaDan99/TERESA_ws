@@ -13,7 +13,7 @@ Due pipeline coesistono:
 | Pipeline | Robot | Camera | Ruolo |
 |----------|-------|--------|-------|
 | **Z1 standalone** | Unitree Z1 arm | RealSense D435 | FAST ultrasound scanning (no Spot) |
-| **Spot + Z1 (WBC)** | Boston Dynamics Spot + Z1 arm | Orbbec Femto Bolt | Spot naviga verso il paziente, Z1 esegue ecografia |
+| **Spot + Z1 (WBC)** | Boston Dynamics Spot + Z1 arm | Orbbec Femto Bolt + RealSense D435 | Spot naviga verso il paziente, Z1 esegue ecografia |
 
 ---
 
@@ -47,13 +47,13 @@ my_spot/odom                        ← world-fixed odometry (spot_ros2 su SpotC
 # T1: Core — driver hardware + TF statiche + tf_monitor
 ros2 launch spot_control teresa_core.launch.py
 
-# T2: Perception — Orbbec + RealSense YOLO perception
+# T2: Perception — Orbbec + RealSense YOLO
 ros2 launch spot_control teresa_perception.launch.py
 
-# T3: Z1 Control — IK + safe switch + impedance + mux + FSM
-ros2 launch z1_vision z1_control.launch.py
+# T3: Z1 Control — IK + switch + mux + FSM
+ros2 launch z1_vision z1_control.launch.py use_impedance:=false
 
-# T4: WBC — QP controller + coordinator
+# T4: WBC — QP + coordinator + navigator + approach scanner
 ros2 launch spot_control wbc.launch.py
 
 # T5: Keyboard controller
@@ -62,15 +62,16 @@ ros2 run spot_control wbc_keyboard_node
 
 ---
 
-## Fase 1 — Avvio e connessione
+## Fase 0 — Avvio e connessione TF
 
 ### tf_monitor (da teresa_core)
-Controlla 7 catene TF e 3 topic hardware a 1 Hz:
-- TF: `odom→body`, `body→link00`, `body→orbbec_link`, `orbbec_link→optical`,
-  `link00→link06`, `link06→camera_link`, `camera_link→camera_optical`
-- Topic: `/joint_states`, `/orbbec/color/image_raw`, `/camera/color/image_raw`
+Controlla 8 catene TF e 3 topic hardware ogni 2s:
+- TF: `odom→body`, `body→world`, `world→link00`, `body→orbbec_link`, `orbbec_link→optical`,
+  `world→link06`, `link06→camera_link`, `camera_link→camera_optical`
+- Topic: `/joint_states`, `/orbbec/color/image_raw`, `/camera/camera/color/image_raw`
 
-Quando tutto pronto → `/wbc/tf_ready = True`
+Pubblica `/wbc/tf_ready = True/False` a ogni tick. QoS normale (no latched).
+Se TF degradano → pubblica `False` → coordinator torna in `WAITING_TF` → keyboard blocca `s`.
 
 ### Coordinator FSM
 ```
@@ -79,12 +80,12 @@ WAITING_TF ──(/wbc/tf_ready)──► IDLE
 
 ### Z1 FSM
 ```
-HOMING → WAITING (aspetta segnale WBC per BODY_SCANNING)
+HOMING → WAITING (aspetta segnale WBC + FAST points per BODY_SCANNING)
 ```
 
 ---
 
-## Fase 2 — SEARCHING (Spot cerca il paziente)
+## Fase 1 — SEARCHING (Spot cerca il paziente)
 
 `IDLE → SEARCHING` (premi `s` sulla tastiera, `/wbc/restart = True`)
 
@@ -106,216 +107,121 @@ HOMING → WAITING (aspetta segnale WBC per BODY_SCANNING)
 - Media → `QualityMonitor.set_target()` → target fissato in **odom**
 - `SEARCHING → PRE_APPROACH`
 
-**Bracico:** non coinvolto. Solo Spot + Orbbec.
+**Braccio:** non coinvolto. Solo Spot + Orbbec.
 
 ---
 
-## Fase 3 — PRE_APPROACH (braccio si orienta, Spot fermo)
+## Fase 2 — PRE_APPROACH (RealSense active detection)
 
 `SEARCHING → PRE_APPROACH`
 
 - Spot si raddrizza: `body_pose(height=0.0, pitch=0.0)`
-- WBC abilitato: `/wbc/enable = True`, `/wbc/spot_control = False` (solo braccio)
-
-### Catena goal PRE_APPROACH
-
-```
-wbc_coordinator:    _filtered_goal()  →  /wbc/ee_goal  [frame: my_spot/odom]
-wbc_qp_controller:  _update() riceve goal in odom
-                      │
-                      ├─ goal_odom = goal (odom, invariato)
-                      ├─ TF odom→link00 → goal_link00 (per orientazione look-at)
-                      ├─ dp = goal_odom - ee_odom (posizione in odom)
-                      └─ WBC split → /wbc/ik_goal_pose → mux → z1_ik_to_jtc
-```
-
-Il braccio punta verso il target in look-at. Spot non cammina.
-Quando `/ik_done = True` → `PRE_APPROACH → APPROACHING`.
+- RealSense YOLO tracker già attivo (da T2), pubblica `/torso_tracker_state` e `/torso_target_ee`
+- Coordinator conta 5 tick consecutivi di `LOCKED` da RealSense
+- Timeout 5s → APPROACHING comunque (fallback)
+- `LOCKED ×5 → APPROACHING`
+- `/wbc/enable=True` → `wbc_approach_scanner` inizia ARC_GRID
 
 ---
 
-## Fase 4 — APPROACHING (Spot cammina + braccio punta)
+## Fase 3 — APPROACHING (navigator + scanner + WBC look-at)
 
 `PRE_APPROACH → APPROACHING`
 
-- `/wbc/spot_control = True`: Spot cammina e ruota
-- WBC QP produce: `[q_dot(6), vx, wz]` a 10 Hz
-- `v_scale` basato su `QualityMonitor.quality` (mai zero, `v_min=0.15`)
+### Spot: wbc_spot_navigator
+Navigator semplificato: riceve `/wbc/ee_goal` in odom, trasforma in body frame, rotate → drive → stop. P-controller robusto (1 TF hop `odom→body`), indipendente dal WBC.
 
-### Catena goal APPROACHING (identica a PRE_APPROACH)
+### Braccio: WBC QP + wbc_approach_scanner
 
-```
-wbc_coordinator:    _filtered_goal()  →  /wbc/ee_goal  [frame: my_spot/odom]
-wbc_qp_controller:  _update()
-                      │
-                      ├─ goal_odom = goal (odom — target fissato, non cambia)
-                      ├─ TF odom→link00 → goal_link00 (si aggiorna automaticamente
-                      │   mentre Spot cammina, perché la TF odom→body cambia)
-                      ├─ dp = goal_odom - ee_odom (errore cala quando Spot avanza)
-                      └─ WBC split → /wbc/ik_goal_pose + /my_spot/cmd_vel
-```
+**WBC QP Controller:**
+- Arm: damped pseudo-inverse (J_arm) per orientamento look-at verso target odom
+- Spot: P-controller indipendente — `vx = kp_lin_base × dist`, `wz = kp_ang_base × angle`
+- Quality scaling: `v_scale = v_min + (1-v_min)/(1 + quality/ref)`
+- `/wbc/spot_control=False` — WBC non muove Spot (lo fa il navigator)
+- Cache cmd_vel: se TF lookup fallisce, ripubblica l'ultimo comando valido
 
-**Perché funziona:** il target è fissato in odom (world-fixed). Mentre Spot cammina, la TF `odom→link00` aggiorna automaticamente la posizione del target nel frame del braccio. L'errore `dp` cala genuinamente perché Spot si avvicina fisicamente al target.
+**wbc_approach_scanner:**
+- ARC_GRID (8 pose): Fase 1 (home × wrist ±8°, 4 pose) + Fase 2 (arc ±4cm × wrist, 4 pose)
+- BodySearchScanner reale con feed da `/torso_scan_point` (score, confidenze, keypoint 3D)
+- Ogni punto combinato con WBC look-at orientation
+- Pubblica `/wbc/ik_goal_pose` e `/wbc/ik_enable`
 
-Quando `distanza < handoff_distance (0.05m)` → `APPROACHING → SCANNING`.
+**Handoff:** `dist < 0.05m → SCANNING`. WBC rimane enabled (scanner potrebbe fare fase 3).
 
 ---
 
-## Fase 5 — SCANNING (Spot fermo, Z1 prende il controllo)
+## Fase 4 — SCANNING (FAST points + fase 3 condizionale)
 
 `APPROACHING → SCANNING`
 
-- **WBC disabilitato**: `/wbc/enable = False`
-- Coordinator pubblica `/wbc/state = 'SCANNING'`
-- Spot si abbassa per handoff: `body_pose(height=-0.15m)`
-- Z1 FSM in WAITING vede `wbc_state='SCANNING'` → `BODY_SCANNING`
+- WBC rimane **enabled** per consentire allo scanner di eseguire fase 3
+- Spot si abbassa: `body_pose(height=-0.15m)`
 
-### BODY_SCANNING (Z1 FSM)
+### wbc_approach_scanner
+ARC_GRID completato → `fused_torso_xyz()` + `kp_visibility_stats()`:
 
-Multi-fase con body_search_scanner:
-1. **Fase 1** — wrist sweep in posizione home
-2. **Fase 2** — arc grid + wrist sweep con look-at dinamico
-3. **Fase 3** — raffinamento adattivo sui keypoint
+- **Se tutti i keypoint visibili** (conf > 0.50): pubblica subito `/z1/fast_points` + `/z1/fast_ready=True`
+- **Se keypoint deboli** (spalle o fianchi < 0.50): attende SCANNING → PHASE_3 adattiva:
+  - Fianchi nascosti: +P3_EXT_Y body-axis, +P3_FAR_HIP_Z verticale
+  - Spalle asimmetriche: ±P3_EXT_X laterale
+  - Al termine: pubblica `/z1/fast_points` + `/z1/fast_ready=True`
 
-Il torso tracker YOLO (RealSense) pubblica `/torso_scan_point`.
-Alla fine: `_finish_body_scan()` calcola:
+### Coordinator
+- Riceve `/z1/fast_ready=True` → `_set_wbc_enabled(False)` (scanner completato)
 
-- Centro torso 3D fuso (media pesata di tutti i punti scan)
-- 4 keypoint 3D (spalle, fianchi)
-- **5 punti FAST** come offset relativi al `torso_center` in frame **`world`** (= link00):
-  - idx 0: Hub (centro, offset `(0,0,0)`)
-  - idx 1: Subxiphoid
-  - idx 2: RUQ (Morrison's pouch)
-  - idx 3: LUQ (Koller's pouch)
-  - idx 4: Suprapubic
-
-FSM torna: `HOMING → WAITING` (con `_body_scan_done = True`).
+### Z1 FSM
+- In WAITING, riceve `/wbc/state='SCANNING'` + `/z1/fast_ready=True` + `/z1/fast_points`
+- → **Salta BODY_SCANNING** (già fatto dallo scanner)
+- → `HOMING → WAITING → CHECKING_WORKSPACE → FAST`
 
 ---
 
-## Fase 6 — Ciclo FAST: un punto alla volta
+## Fase 5 — Ciclo FAST (5 punti ecografici)
 
-Per ognuno dei 5 punti, FSM esegue:
+`skip_impedance = true` — nessun contatto, solo posizionamento.
 
-### 6a. Path normale: target nel workspace
-
+Per ognuno dei 5 punti (Hub, Subxiphoid, RUQ, LUQ, Suprapubic):
 ```
-CHECKING_WORKSPACE
-  ├─ WorkspaceChecker verifica: |target_link00| ≤ max_reach − safety_margin?
-  ├─ Se SI → was_clipped=False → APPROACHING
-  └─ APPROACHING: pub_ik_goal → /z1/ik_goal_pose [frame: world/link00]
+CHECKING_WORKSPACE → APPROACHING → WAIT_IK_DONE
+  → SCAN_PRELIFT → SCAN_PAUSE → next point
 ```
 
-**Catena frame:**
-```
-Z1_FSM:               _make_approach_pose() → /z1/ik_goal_pose  [world]
-ik_goal_mux:           inoltra a /ik_goal_pose (priorità WBC se abilitato)
-z1_ik_to_jtc:          usa posizione raw come coordinate link00/Pinocchio
-```
-
-**Perché funziona:** FSM pubblica in `world` (= link00). L'IK solver (`z1_ik_to_jtc`) ignora `header.frame_id` e interpreta sempre la posizione come coordinate nel frame base Pinocchio (= `world`/`link00`). Frame coerente.
-
-Dopo APPROACHING: `WAIT_IK_DONE → ... → IMPEDANCE_RUNNING → ... → SCAN_PRELIFT → next point`.
-
-### 6b. Path alternativo: target fuori workspace → WS_EXTENSION
-
-Se `was_clipped = True` (target oltre `max_reach - safety_margin`):
-
-```
-CHECKING_WORKSPACE (was_clipped=True)
-  │
-  ├─ FSM pubblica approach_goal su /wbc/ee_goal [frame: world/link00]
-  ├─ FSM pubblica /wbc/ws_request = True
-  └─ FSM → REQUESTING_WS_EXT
-```
-
-```
-REQUESTING_WS_EXT
-  │
-  ├─ Coordinator riceve /wbc/ws_request → SCANNING → WS_EXTENSION
-  │   _set_wbc_enabled(True) — riattiva WBC
-  │
-  ├─ WBC QP _update():
-  │     goal_in = self._goal  da /wbc/ee_goal
-  │     goal_in.header.frame_id = 'world'  ← pubblicato da FSM
-  │     │
-  │     ├─ Il QP riconosce frame_id = 'world' → goal è già in link00
-  │     ├─ Trasforma world→odom per il calcolo dp (posizione goal in odom)
-  │     ├─ Usa goal direttamente in link00 per orientazione look-at
-  │     └─ WBC split → /wbc/ik_goal_pose + /my_spot/cmd_vel
-  │
-  ├─ Coordinator _tick_ws_extension(): monitora bounding box di sicurezza
-  │   (ancorato alla posizione Spot all'ingresso WS_EXTENSION)
-  │
-  └─ Quando /ik_done = True → WS_EXTENSION → SCANNING
-       WBC disabilitato, FSM → CHECKING_WORKSPACE (riprova)
-```
-
-**Frame handling in WS_EXTENSION:**
-- Il FSM pubblica in `world`/`link00` (il suo frame nativo)
-- Il WBC QP controlla `header.frame_id`: se è `world`/`link00`, sa che il goal è già nel frame braccio e lo trasforma solo per `dp` (in odom)
-- Se invece il goal arriva in `odom` (da coordinator durante PRE_APPROACH/APPROACHING), lo trasforma a `link00` come al solito
-
-Questo preserva la separazione: FSM lavora sempre in `world`, coordinator lavora sempre in `odom`, il QP fa da ponte accettando entrambi.
+Dopo tutti i 5 punti: `HOMING → WAITING` (completato).
 
 ---
 
-## Catena pubblicazione goal — tabella riassuntiva
+## Tabella riassuntiva
 
-| Fase | Publisher | Topic | Frame | Consumer | Frame usato |
-|------|-----------|-------|-------|----------|-------------|
-| PRE_APPROACH | Coordinator | `/wbc/ee_goal` | `my_spot/odom` | WBC QP | odom → link00 |
-| APPROACHING | Coordinator | `/wbc/ee_goal` | `my_spot/odom` | WBC QP | odom → link00 |
-| FAST (normale) | Z1 FSM | `/z1/ik_goal_pose` | `world` | z1_ik_to_jtc | usato come link00 |
-| WS_EXTENSION | Z1 FSM | `/wbc/ee_goal` | `world` | WBC QP | link00 diretto (riconosciuto da frame_id) |
-
-Routing:
-- `/z1/ik_goal_pose` (FSM) → `ik_goal_mux` → `/ik_goal_pose` → `z1_ik_to_jtc`
-- `/wbc/ik_goal_pose` (QP) → `ik_goal_mux` → `/ik_goal_pose` → `z1_ik_to_jtc`
-- Il mux dà priorità al WBC quando `/wbc/enable = True`
+| Fase | Spot | Braccio | Orbbec | RealSense |
+|------|:----:|:-------:|:------:|:---------:|
+| **SEARCHING** | Grid 3×3 body_pose | Fermo in home | ✅ Attiva | In attesa |
+| **PRE_APPROACH** | Raddrizzato | Fermo in home | — | ✅ Tracker LOCKED×5 |
+| **APPROACHING** | Navigator → goal | ARC_GRID (8 pose) + look-at | — | ✅ Raccolta 3D |
+| **SCANNING** | Fermo, handoff | Fase 3 (se necessaria) | — | ✅ FAST points |
+| **FAST** | Fermo | 5 punti ecografici | — | — |
 
 ---
 
-## Convenzioni IK
+## Architettura WBC
 
-- **Solver**: Pinocchio damped pseudo-inverse Jacobian, `LOCAL_WORLD_ALIGNED` frame
-- **Frame base**: `'world'` = `link00` (dal modello URDF Z1)
-- **`z1_ik_to_jtc` ignora `header.frame_id`**: usa la posizione raw del goal come coordinate Pinocchio
-- **Traiettoria**: smoothstep quintic (10t³−15t⁴+6t⁵), zero vel/acc ai capi
-- **Timing**: `T = max_joint_displacement / max_joint_vel`, clippato a `[traj_min_time, traj_max_time]`
-- **Joint unwrapping**: `_make_target_near()` evita rotazioni >π tra waypoint
-- **URDF**: auto-risolto via `ament_index` (fallback in `z1_ik_jtc_params.yaml`)
+### Componenti (lanciati da `wbc.launch.py`)
 
-### Coordinate choice — perché due frame diversi
+| Nodo | Ruolo |
+|------|-------|
+| `wbc_coordinator` | FSM: WAITING_TF → IDLE → SEARCHING → PRE_APPROACH → APPROACHING → SCANNING → WS_EXTENSION. QualityMonitor. Body pose control. |
+| `wbc_qp_controller` | Arm: WBC look-at (J_arm damped pseudo-inverse). Spot: P-controller (1 TF `odom→body`). Quality-based velocity scaling. |
+| `wbc_spot_navigator` | Navigatore semplificato per APPROACHING. Legge `/wbc/ee_goal` in odom, rotate → drive → stop. P-controller robusto. |
+| `wbc_approach_scanner` | Body scan durante APPROACHING. ARC_GRID (8 pose, ±8° wrist, ±4cm grid) con BodySearchScanner + ScanManager. Fase 3 condizionale in SCANNING. Pubblica `/z1/fast_points` e `/z1/fast_ready`. |
 
-| Publisher | Frame | Motivazione |
-|-----------|-------|-------------|
-| Coordinator → WBC QP | `odom` | Target world-fixed, invariante ai movimenti Spot. WBC usa `dp` per navigazione |
-| Z1 FSM → z1_ik_to_jtc | `world`/`link00` | L'IK risolve rispetto alla base del braccio. Naturale per il FSM |
-
-Il WBC QP accetta entrambi i frame in ingresso e li risolve internamente:
-- Goal in `odom` → lo trasforma a `link00` per la cinematica del braccio
-- Goal in `world`/`link00` → lo trasforma a `odom` per il calcolo dell'errore di posizione
-
----
-
-## Parametri critici (da tenere sincronizzati)
-
-| Parametro | File | File | Valore |
-|-----------|------|------|--------|
-| `workspace_safety_margin` | `wbc_params.yaml` | `z1_fsm_params.yaml` | `0.05` m |
-| `home_orientation` | `wbc_params.yaml` | `z1_fsm_params.yaml` | `[-0.0062, 0.4107, 0.0021, 0.9118]` |
-| `ik_goal_topic` | `wbc_params.yaml` | `z1_fsm_params.yaml` | `/z1/ik_goal_pose` (passa da mux, non diretto!) |
-
----
-
-## FSM stati
-
-### WBC Coordinator FSM
+### Coordinator FSM
 ```
 WAITING_TF → IDLE → SEARCHING → PRE_APPROACH → APPROACHING → SCANNING → WS_EXTENSION
-                                              ↑                            │
-                                              └────────────────────────────┘
+                ↑         ↑                                    │            │
+                └─────────┴────────────────────────────────────┘            │
+                (/wbc/restart=False da keyboard o TF loss)                  │
+                                                                           │
+                └──────────────────────────────────────────────────────────┘
+                                        (/wbc/ws_request)
 ```
 
 ### Z1 FSM states
@@ -325,6 +231,20 @@ HOMING → WAITING → BODY_SCANNING → CHECKING_WORKSPACE → APPROACHING
     └──── SCAN_PRELIFT ← ... ← IMPEDANCE_RUNNING ← WAIT_IK_DONE
                                           ↕
                                     REQUESTING_WS_EXT  (→ CHECKING_WORKSPACE)
+```
+
+### WBC look-at + body scan (APPROACHING)
+
+```
+/wbc/ee_goal (odom)  ←  Coordinator (target fisso da Orbbec lock)
+        │
+        ├──► wbc_spot_navigator     → /my_spot/cmd_vel → Spot
+        │
+        ├──► wbc_qp_controller      → orientamento braccio (WBC look-at)
+        │
+        └──► wbc_approach_scanner   → /wbc/ik_goal_pose (pos grid + ori torso)
+                                      BodySearchScanner + ScanManager
+                                      feed da /torso_scan_point (RealSense)
 ```
 
 ---
@@ -350,27 +270,21 @@ JTC è il default di sicurezza.
 
 ---
 
-## World frame convention
-
-```
-X → verso il paziente (direzione approccio)
-Y → testa-piedi (asse corpo paziente)
-Z → destra-sinistra (laterale)
-```
-
-L'orientamento EE (X_ee) punta sempre verso il target. Calcolato via rotazione minima da home (Rodrigues) preservando la configurazione del polso.
-
----
-
 ## File chiave
 
 | File | Ruolo |
 |------|-------|
-| `wbc_coordinator.py` | FSM Spot+Z1: WAITING_TF→IDLE→SEARCHING→PRE_APPROACH→APPROACHING→SCANNING→WS_EXTENSION, QualityMonitor |
-| `wbc_qp_controller.py` | WBC olistico 10 Hz: split braccio + base, quality scaling, gestione multi-frame goal |
-| `wbc_math.py` | Matematica pura: J_base (6×2), J_holistic (6×8), WBC split, WBC split with yaw |
-| `z1_FSM.py` | FSM braccio: HOMING→WAITING→BODY_SCANNING→CHECKING_WORKSPACE→APPROACHING→IMpedance→FAST cycle |
+| `teresa_core.launch.py` | Core launch: driver Orbbec+RealSense+Z1 + TF statiche + tf_monitor |
+| `teresa_perception.launch.py` | Perception launch: Orbbec YOLO posture + RealSense YOLO torso tracker |
+| `wbc.launch.py` | WBC launch: coordinator + QP + navigator + approach scanner |
+| `wbc_coordinator.py` | FSM Spot+Z1: WAITING_TF→IDLE→SEARCHING→PRE_APPROACH→APPROACHING→SCANNING→WS_EXTENSION, QualityMonitor, active perception |
+| `wbc_qp_controller.py` | WBC: arm damped pseudo-inverse look-at + Spot P-controller, quality scaling |
+| `wbc_spot_navigator.py` | Navigator semplificato: rotate → drive → stop verso goal odom |
+| `wbc_approach_scanner.py` | Body scan durante APPROACHING: ARC_GRID (8 pose) + fase 3 condizionale |
+| `wbc_math.py` | Matematica pura: J_base, J_holistic, manipulability, WBC split |
+| `z1_FSM.py` | FSM braccio: HOMING→WAITING→BODY_SCANNING→CHECKING_WORKSPACE→APPROACHING→FAST cycle |
 | `z1_ik_to_jtc.py` | Pinocchio IK + smoothstep trajectory → JTC action |
 | `z1_scan_manager.py` | Calcolo 5 punti FAST da keypoint torso |
 | `ik_goal_mux.py` | Priority mux: WBC goals vs Z1 FSM goals |
-| `tf_monitor.py` | Monitor 7 TF + 3 topic → `/wbc/tf_ready` |
+| `tf_monitor.py` | Monitor continuo 8 TF + 3 topic → `/wbc/tf_ready` True/False |
+| `wbc_keyboard_controller.py` | Keyboard: `s`=start, `r`=return, ESC=emergency stop |

@@ -14,6 +14,66 @@ git status --short
 
 ---
 
+## Recent Changes (23 May 2026)
+
+### WBC refactoring — Spot/braccio decoupled + body scan anticipato
+
+**Before:** WBC olistico fragile — arm e Spot dipendevano da `wbc_split(J_hol, v_des)` con TF cross-machine. Errori TF (clock desync SpotCore/PC) bloccavano sia braccio che Spot. Body scan eseguito dopo handoff (10-15s extra).
+
+**After:**
+- **Spot P-controller**: `wbc_qp_controller` ora usa un P-controller indipendente (`vx = kp_lin_base × dist`, `wz = kp_ang_base × angle`) basato solo su `odom→body` (1 TF hop). Il braccio mantiene il WBC look-at (`J_arm` damped pseudo-inverse). Quality scaling invariato.
+- **Cmd_vel cache**: quando un TF lookup fallisce, il QP ripubblica l'ultimo `cmd_vel` valido invece di andare muto. Spot non perde mai il contatto.
+- **PRE_APPROACH active perception**: il coordinator ora attende 5 tick consecutivi di RealSense `LOCKED` (invece di timer fisso 5s). Timeout fallback 5s.
+- **`wbc_spot_navigator.py`**: navigatore semplificato per APPROACHING. Legge `/wbc/ee_goal` in odom, rotate → drive → stop. P-controller robusto. Il WBC non muove più Spot (`/wbc/spot_control=False` in APPROACHING).
+- **`wbc_approach_scanner.py`**: body scan eseguito **durante APPROACHING** invece che dopo. ARC_GRID (8 pose: fase 1 home × wrist ±8° + fase 2 arc ±4cm × wrist). BodySearchScanner reale con feed da `/torso_scan_point`. Pubblica `/z1/fast_points` e `/z1/fast_ready`.
+- **Fase 3 condizionale**: se keypoint hanno confidenza < 0.50 dopo ARC_GRID, si esegue fase 3 adattiva in SCANNING. Altrimenti skip.
+- **Z1 FSM saltata**: la FSM riceve `/z1/fast_ready=True` + `/z1/fast_points` → salta `BODY_SCANNING` → va direttamente a `CHECKING_WORKSPACE → FAST`.
+- **Riduzione movimenti**: wrist ±8° (era ±12°), arc grid ±4cm (era ±6cm). Meno movimento durante navigazione.
+- **TF monitor continuo**: pubblica `/wbc/tf_ready` True/False a ogni tick (2s). Se TF degradano → coordinator torna in `WAITING_TF` → keyboard blocca `s`.
+- **ESC emergency stop**: tasto ESC sul keyboard → `/wbc/restart=False` + `cmd_vel=0`, stop immediato.
+
+### Files nuovi
+
+| File | Ruolo |
+|------|-------|
+| `spot_control/wbc_spot_navigator.py` | Navigator semplificato per Spot in APPROACHING |
+| `spot_control/wbc_approach_scanner.py` | Body scan multi-view + WBC look-at + FAST points |
+| `rviz/wbc_debug.rviz` | RViz config: TF tree + goal marker + debug line body→goal |
+
+### Files modificati
+
+| File | Modifica |
+|------|----------|
+| `wbc_qp_controller.py` | P-controller Spot (1 TF) + cache cmd_vel |
+| `wbc_coordinator.py` | PRE_APPROACH active perception, APPROACHING spot_control=False, SCANNING con WBC enabled per fase 3 |
+| `wbc_params.yaml` | +kp_lin_base, +kp_ang_base; quality_max 0.50→0.20 |
+| `wbc.launch.py` | +wbc_spot_navigator + wbc_approach_scanner |
+| `setup.py` | +entry points per nuovi nodi |
+| `z1_FSM.py` | +subscriber /z1/fast_ready, skip BODY_SCANNING |
+| `teresa_core.launch.py` | static_transform_publisher in formato Jazzy; realsense2_camera_node lanciato direttamente (no nesting) |
+| `tf_monitor.py` | Monitor continuo (no _done flag), world→link06 check, topic corretto /camera/camera/color/image_raw |
+| `wbc_keyboard_controller.py` | ESC stop, display pulito, gestione TF loss |
+| `z1_realsense.launch.py` | +log_level:info per compatibilità Jazzy |
+| `DESCRIPTION.md` | Aggiornato con architettura corrente |
+
+### Flusso operativo (5 terminali)
+
+```bash
+T1: ros2 launch spot_control teresa_core.launch.py        # driver + TF + monitor
+T2: ros2 launch spot_control teresa_perception.launch.py  # Orbbec + RealSense
+T3: ros2 launch z1_vision z1_control.launch.py use_impedance:=false  # IK + FSM
+T4: ros2 launch spot_control wbc.launch.py                # WBC + navigator + scanner
+T5: ros2 run spot_control wbc_keyboard_node               # tastiera
+```
+
+### Build
+
+```bash
+colcon build --packages-select spot_control z1_vision
+```
+
+---
+
 ## Recent Changes (21 May 2026)
 
 ### `teresa_perception.launch.py` — unified perception launch
