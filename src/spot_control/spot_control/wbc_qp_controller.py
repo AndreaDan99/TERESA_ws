@@ -61,6 +61,8 @@ class WBCQPControllerNode(Node):
         self.declare_parameter('damping',       1e-3)
         self.declare_parameter('kp_pos',        1.0)
         self.declare_parameter('kp_ang',        0.5)
+        self.declare_parameter('kp_lin_base',   0.5)
+        self.declare_parameter('kp_ang_base',   0.8)
         self.declare_parameter('quality_ref',   0.05)
         self.declare_parameter('v_min',         0.15)
         self.declare_parameter('k_yaw',         0.5)
@@ -89,6 +91,8 @@ class WBCQPControllerNode(Node):
         self._lam_base      = float(p('lam_base'))
         self._damping       = float(p('damping'))
         self._kp_pos        = float(p('kp_pos'))
+        self._kp_lin_base   = float(p('kp_lin_base'))
+        self._kp_ang_base   = float(p('kp_ang_base'))
         self._quality_ref   = float(p('quality_ref'))
         self._v_min         = float(p('v_min'))
         self._k_yaw         = float(p('k_yaw'))
@@ -349,8 +353,9 @@ class WBCQPControllerNode(Node):
 
         J_hol = compute_j_holistic(J_arm, J_base_odom)
 
-        # 8. Manipulability + WBC split (with yaw task if target yaw is known)
+        # 8. Arm: WBC damped pseudo-inverse (keep look-at orientation quality)
         m = manipulability(J_arm)
+        yaw_error = 0.0
         if self._desired_yaw is not None:
             from tf_transformations import euler_from_quaternion
             _, _, θ_cur = euler_from_quaternion([
@@ -360,7 +365,7 @@ class WBCQPControllerNode(Node):
                 body_in_odom.transform.rotation.w,
             ])
             yaw_error = normalize_angle(self._desired_yaw - θ_cur)
-            q_dot, vx, wz = wbc_split_with_yaw(
+            q_dot, _, _ = wbc_split_with_yaw(
                 J_hol, v_des, m,
                 yaw_error=yaw_error,
                 k_yaw=self._k_yaw,
@@ -370,8 +375,7 @@ class WBCQPControllerNode(Node):
                 q_dot_max=self._q_dot_max,
             )
         else:
-            yaw_error = 0.0
-            q_dot, vx, wz = wbc_split(
+            q_dot, _, _ = wbc_split(
                 J_hol, v_des, m,
                 lam_arm=self._lam_arm, lam_base=self._lam_base,
                 damping=self._damping,
@@ -379,7 +383,14 @@ class WBCQPControllerNode(Node):
                 q_dot_max=self._q_dot_max,
             )
 
-        # 8.5. Quality-based velocity scaling — never zero, Spot always moves.
+        # 9. Base: robust P-controller (1 TF hop: odom→body, decoupled from arm)
+        dp_body = R_body_to_odom.T @ dp
+        dist_b = float(np.linalg.norm(dp_body))
+        angle_b = math.atan2(dp_body[1], dp_body[0])
+        vx = float(np.clip(self._kp_lin_base * dist_b, 0.0, self._vx_max))
+        wz = float(np.clip(self._kp_ang_base * angle_b, -self._wz_max, self._wz_max))
+
+        # 10. Quality-based velocity scaling — never zero, Spot always moves.
         # quality [m] = EMA(|new_meas - fixed_target|) + growth when Orbbec lost.
         # v_min = minimum velocity fraction (never stops before handoff).
         quality = self._sigma_max   # now quality [m], not standard deviation

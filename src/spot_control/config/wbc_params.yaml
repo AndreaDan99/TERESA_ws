@@ -29,6 +29,10 @@ wbc_qp_controller:
     # Trades off with EE position tracking via the extended 7×8 Jacobian.
     k_yaw: 0.5
 
+    # Base P-controller (decoupled from arm)
+    kp_lin_base: 0.5   # [m/s per m] forward gain
+    kp_ang_base: 0.8   # [rad/s per rad] angular gain
+
     # Velocity limits
     vx_max:    0.4   # [m/s]
     wz_max:    0.5   # [rad/s]
