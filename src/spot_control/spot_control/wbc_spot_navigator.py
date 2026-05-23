@@ -15,6 +15,7 @@ import rclpy.duration
 import rclpy.time
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped, Twist
+from std_msgs.msg import Bool
 from tf2_ros import Buffer, TransformListener, TransformException
 
 
@@ -60,6 +61,8 @@ class WBCSpotNavigator(Node):
         # ── Sub / Pub ──────────────────────────────────────────────────
         self.create_subscription(
             PoseStamped, self._p.goal_topic, self._cb_goal, 10)
+        self.create_subscription(
+            Bool, '/wbc/spot_control', self._cb_spot_control, 10)
         self._pub_vel = self.create_publisher(
             Twist, self._p.cmd_vel_topic, 10)
 
@@ -67,6 +70,7 @@ class WBCSpotNavigator(Node):
         self._state = 'IDLE'          # IDLE | ROTATING | DRIVING | STOPPED
         self._goal_odom: PoseStamped | None = None
         self._latest_goal: PoseStamped | None = None
+        self._spot_control = True  # enabled by default
 
         period = 1.0 / self._p.update_rate
         self.create_timer(period, self._control_loop)
@@ -77,6 +81,9 @@ class WBCSpotNavigator(Node):
 
     def _cb_goal(self, msg: PoseStamped) -> None:
         self._latest_goal = msg
+
+    def _cb_spot_control(self, msg: Bool) -> None:
+        self._spot_control = msg.data
 
     def _update_goal_odom(self) -> None:
         goal_raw = self._latest_goal
@@ -99,6 +106,9 @@ class WBCSpotNavigator(Node):
             pass
 
     def _control_loop(self) -> None:
+        if not self._spot_control:
+            self._pub_vel.publish(Twist())
+            return
         self._update_goal_odom()
         goal = self._goal_odom
         if goal is None:

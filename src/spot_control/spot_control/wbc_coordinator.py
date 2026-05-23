@@ -159,6 +159,7 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('ws_ext_lat_limit',             0.20)
         self.declare_parameter('ws_ext_bwd_limit',             0.50)
         self.declare_parameter('handoff_body_height',         -0.15)  # [m] offset from nominal
+        self.declare_parameter('soft_handoff_distance',      0.20)   # [m] pause for scanner
         self.declare_parameter('min_body_height',             -0.20)
         self.declare_parameter('max_body_height',              0.0)
         self.declare_parameter('search_body_height',          -0.20)  # [m] body lowered during search
@@ -184,6 +185,7 @@ class WBCCoordinatorNode(Node):
         self._ws_ext_lat_lim  = float(p('ws_ext_lat_limit'))
         self._ws_ext_bwd_lim  = float(p('ws_ext_bwd_limit'))
         self._handoff_body_height = float(p('handoff_body_height'))
+        self._soft_handoff_dist   = float(p('soft_handoff_distance'))
         self._min_body_height     = float(p('min_body_height'))
         self._max_body_height     = float(p('max_body_height'))
         self._search_body_height    = float(p('search_body_height'))
@@ -449,17 +451,28 @@ class WBCCoordinatorNode(Node):
 
         # Publish goal for spot_goal_navigator (Spot) and look-at (arm)
         self._pub_goal.publish(self._filtered_goal())
-        # WBC does NOT move Spot — navigator handles cmd_vel
-        self._pub_spot_ctrl.publish(Bool(data=False))
 
-        # Handoff triggered purely by distance
         dist = self._distance_to_patient()
-        if dist is not None and dist < self._handoff_dist:
-            self.get_logger().info(
-                f'Handoff: dist={dist:.2f}m < {self._handoff_dist:.2f}m → SCANNING')
-            self._set_state(CoordState.SCANNING)
-            # WBC kept enabled for wbc_approach_scanner phase 3;
-            # will be disabled when /z1/fast_ready arrives
+        if dist is None:
+            return
+
+        # ── Soft handoff (20cm): pause Spot if scanner not done ─────
+        if dist < self._soft_handoff_dist and dist >= self._handoff_dist:
+            if self._fast_points is None:
+                self._pub_spot_ctrl.publish(Bool(data=False))  # pause navigator
+            else:
+                self._pub_spot_ctrl.publish(Bool(data=True))   # scanner done, resume
+        elif dist < self._handoff_dist:
+            if self._fast_points is None:
+                self._pub_spot_ctrl.publish(Bool(data=False))  # wait for scanner
+            else:
+                # Hard handoff (5cm)
+                self.get_logger().info(
+                    f'Handoff: dist={dist:.2f}m < {self._handoff_dist:.2f}m → SCANNING')
+                self._pub_spot_ctrl.publish(Bool(data=False))
+                self._set_state(CoordState.SCANNING)
+        else:
+            self._pub_spot_ctrl.publish(Bool(data=True))  # navigator active
 
     def _tick_searching(self) -> None:
         lock_ok = (self._posture == 'LYING'
