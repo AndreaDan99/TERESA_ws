@@ -5,6 +5,36 @@ Per la descrizione del sistema corrente vedi [`DESCRIPTION.md`](DESCRIPTION.md).
 
 ---
 
+## 26 May 2026 (cont.) — Hybrid Search 360°
+
+### Coordinated Spot + arm SEARCHING
+- **Nuovi stati FSM**: `SEMI_LOCKING` e `LOCKING`. Rimosso `HANDOFF` (mai usato).
+- **SEARCHING**: ricerca ibrida Spot + braccio. Spot: 18 posizioni incrementali (6 yaw × 3 pitch = 360°). Braccio: 7 pose QP-based esplorative in loop (SEARCH_GRID mode, δ=0.15, safe joint limits). Due sensori in parallelo: Orbbec (postura LYING) e RealSense (torso 3D).
+- **Lock ibrido**: Orbbec full lock (conf ≥ 70%) o RealSense semi-lock (guida Spot verso il torso, braccio congelato, 3s finestra pulita per Orbbec).
+- **FSM tick**: 5 Hz → 10 Hz. Lock confidence: 85% → 70%.
+- **LOCKING**: braccio torna in home + 5 campioni approach_point in parallelo. Tolleranza 1s (10 tick) se Orbbec perde momentaneamente LYING. Rientro in SEARCHING dalla posizione corrente (non da zero).
+- **SEMI_LOCKING**: early exit se RealSense perde il torso durante l'attesa.
+
+### QP Controller — SEARCH_GRID mode
+- `_gen_search_poses()`: 7 pose dal null-space con target virtuale body-X, δ=0.15, safe joint limits.
+- `_pause_search()` / `_resume_search()` per SEMI_LOCKING.
+- `_send_home()` per LOCKING.
+- `_cb_wbc_state()` esteso per SEARCHING, SEMI_LOCKING, LOCKING.
+- Delta resi parametrizzabili: `search_delta=0.15`, `scan_delta=0.12` (riduzione movimento per sicurezza).
+
+### Parametri ricerca
+- `search_yaw_increment=1.05` (≈60°), `search_yaw_steps=6` (=360°)
+- `search_dwell=15.0`, `search_semi_lock_pause=3.0`
+- Rimossi: `search_pause_per_point`, `search_yaw_offsets` (griglia fissa 3×3)
+
+### Fix resilienza
+- SEMI_LOCKING: se RealSense perde torso → torna subito a SEARCHING (non aspetta 3s inutilmente)
+- LOCKING: tolleranza 10 tick (1s a 10 Hz) di assenza Orbbec prima di arrendersi
+- LOCKING → SEARCHING: riprende dalla posizione corrente (non azzera idx)
+- `_set_state(SEARCHING)`: full reset solo da IDLE, resume da LOCKING/SEMI_LOCKING
+
+---
+
 ## 26 May 2026
 
 ### WBC QP Controller — refactoring arm-only + QP-based scanning

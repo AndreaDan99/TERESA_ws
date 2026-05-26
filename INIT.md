@@ -26,12 +26,14 @@ git status --short
 
 ## Current State (26 May 2026)
 
-- **QP Controller refactored: arm-only WBC**. LOOKAT mode in PRE_APPROACH (ω_des + null-space joint centering). SCAN_SEQ mode in APPROACHING (genera 11 pose dal null-space del look-at, le sequenzia con BodySearchScanner, fonde stime, pubblica FAST points).
-- **Spot P-controller rimosso dal QP**. Spot mosso solo dal navigatore (rotate → drive → stop) e dal coordinator (body pose).
-- **wbc_approach_scanner deprecato** (stub). Tutta la logica di scansione nel QP controller.
-- **wbc_math.py**: nuove `damped_pinv()` e `null_space_projector()`. Vecchie `wbc_split` spostate in fondo come deprecated.
-- **wbc.launch.py**: lancia solo 3 nodi (QP controller + coordinator + navigator). Rimosso scanner, rimossi z1_mount args.
-- **Paper reframing**: Whole-Body Active Perception for Emergency Assessment. Sezioni I–VI scritte.
+- **Ricerca ibrida 360°**: Spot + braccio coordinati in SEARCHING. 18 posizioni Spot (6 yaw × 3 pitch, 360° completi). Braccio esplora con 7 pose QP-based in loop (SEARCH_GRID mode, δ=0.15, safe joint limits). Lock ibrido: Orbbec diretto o RealSense semi-lock (guida Spot, braccio congelato, 3s finestra). Lock confidence: 70%.
+- **Nuovi stati FSM**: SEMI_LOCKING (braccio in pausa, Orbbec cerca) e LOCKING (braccio in home, 5 campioni in parallelo, tolleranza 1s assenza Orbbec, rientro senza azzerare posizione).
+- **FSM a 10 Hz** (era 5 Hz). SEMI_LOCKING: early exit se RealSense perde torso.
+- **QP Controller — 3 modalità**: SEARCH_GRID, LOOKAT, SCAN_SEQ. Arm-only, Spot mai controllato dal QP.
+- **Spot P-controller rimosso dal QP**. Spot mosso solo da navigatore e coordinator.
+- **wbc_approach_scanner deprecato** (stub). Tutta la logica nel QP controller.
+- **wbc_math.py**: `damped_pinv()`, `null_space_projector()`. Vecchie `wbc_split` deprecated.
+- **Paper reframing**: Whole-Body Active Perception for Emergency Assessment.
 
 ---
 
