@@ -1,0 +1,414 @@
+# TERESA — Changelog
+
+Storico completo delle modifiche dal 6 maggio 2026 al 26 maggio 2026.
+Per la descrizione del sistema corrente vedi [`DESCRIPTION.md`](DESCRIPTION.md).
+
+---
+
+## 26 May 2026
+
+### WBC QP Controller — refactoring arm-only + QP-based scanning
+
+**QP Controller — due modalità:**
+- `LOOKAT` (PRE_APPROACH): ω_des da errore orientamento X_ee→target, damped pseudo-inverse su J_task (3×6, solo angolare), null-space joint centering con `N @ k_null * (q_mid - q)`, FK prediction, workspace clipping, pubblica IK goal a 10 Hz. Arm-only: nessuna dipendenza da J_base.
+- `SCAN_SEQ` (APPROACHING): genera 11 pose dal null-space del look-at (1 home + 6 assi ±δ + 4 diagonali), le sequenzia con BodySearchScanner (SEND_IK → wait ik_done → collect data 4s → next), fonde stime 3D (outlier rejection 0.15m), calcola e pubblica 5 FAST points.
+
+**Rimosso P-controller Spot dal QP:**
+- Il QP non pubblica più `/my_spot/cmd_vel`. Analisi fase per fase ha confermato che il P-controller era dead code in tutte le fasi e confliggeva col navigatore in WS_EXTENSION.
+- Spot mosso solo da `wbc_spot_navigator` (rotate → drive → stop) e dal `wbc_coordinator` (body pose in SEARCHING/SCANNING).
+- Rimossi parametri: `kp_lin_base`, `kp_ang_base`, `quality_ref`, `v_min`, `vx_max`, `wz_max`, `cmd_vel_topic`.
+- Rimossi subscriber `/wbc/spot_control` e callback `_cb_spot_control`.
+
+**wbc_approach_scanner deprecato:**
+- Ridotto a stub di 40 righe. Tutta la logica di generazione pose (ARC_GRID, wrist sweep, phase 3), sequencing e FAST publishing è nel QP controller.
+- Rimosso da `wbc.launch.py`.
+
+**wbc_math.py:**
+- Nuove `damped_pinv(J, damping)` e `null_space_projector(J, J_pinv)`: funzioni pure, nessuna dipendenza ROS.
+- `manipulability()` mantenuta (usata per damping adattivo).
+- Vecchie `compute_j_base`, `compute_j_holistic`, `wbc_split`, `wbc_split_with_yaw` spostate in fondo con marker deprecated.
+
+**wbc.launch.py:**
+- Lancia solo 3 nodi: `wbc_qp_controller` + `wbc_coordinator` + `wbc_spot_navigator`.
+- Rimossi z1_mount_x/y/z launch args (non più usati senza J_base).
+
+**Documentazione:**
+- `DESCRIPTION.md`: fasi 2-3 riscritte con LOOKAT/SCAN_SEQ mode, tabella riassuntiva aggiornata, architettura WBC aggiornata.
+- `INIT.md`: current state aggiornato.
+- `CHANGELOG.md`: questa entry.
+
+---
+
+## 24 May 2026
+
+### Paper reframing — Whole-Body Active Perception for Emergency Assessment
+
+Il paper è stato completamente rifocalizzato. Il contributo centrale non è più il WBC ma **l'active perception-driven whole-body reconfiguration**.
+
+**Titolo**: *TERESA: Whole-Body Active Perception for Legged Robot-Assisted Emergency Assessment*
+
+**Dominio**: allargato da FAST ultrasound a emergency assessment (ABCDE + FAST).
+
+**Nuovo indice**:
+```
+I.   Introduction                                    ✅
+II.  Related Work (34 ref, 4 aree: ultrasound, WBC, active perception, posture) ✅
+III. Problem Formulation (h, φ nel sistema; perception model; 5 obiettivi)      ✅
+IV.  Active Perception (confidence-gated search + anticipatory scan + quality)  ✅
+V.   Whole-Body Reconfiguration (WBC look-at + body reconfig + impedance)      ✅
+VI.  System Architecture (7 stati FSM, frame tree, nodi, Z1 integration)       ✅
+VII. Experiments                                                                 📝
+VIII.Results                                                                     📝
+IX.  Conclusion                                                                  📝
+```
+
+**Sezioni riscritte**:
+| File | Modifica |
+|------|----------|
+| `paper/sections/abstract.tex` | Riscritto: active perception framework, 4 pilastri, emergency assessment |
+| `paper/sections/introduction.tex` | Riscritto: ABCDE+FAST, active perception > WBC puro, 4 contributi |
+| `paper/sections/related_work.tex` | Riscritto: 4 sottosezioni (US, WBC, active perception, posture), +26 ref |
+| `paper/sections/problem_formulation.tex` | Riscritto: h, φ nel sistema, perception model, N target, 5 obiettivi |
+| `paper/sections/active_perception.tex` | **Nuovo**: confidence-gated search, anticipatory scan + WBC, QualityMonitor |
+| `paper/sections/method.tex` | Riscritto: WBC look-at (non olistico), body reconfig grid search, impedance Z1 |
+| `paper/sections/system_architecture.tex` | Riscritto: 7 stati, frame tree TiKZ, tabella nodi, Z1 integration, 5 terminali |
+| `paper/TERESA.tex` | Nuovo titolo, nuove keywords, aggiunto `\input{active_perception}` |
+| `paper/references.bib` | +26 nuove reference (totale 45) |
+| `paper/sections/acronyms.tex` | Aggiunto ABCDE |
+| `INIT.md` | Questa sezione |
+| `PLAN.md` | Aggiunta sezione paper + cosa manca |
+
+**WBC nel nuovo framing**: il WBC è posizionato come tool al servizio dell'active perception (arm look-at durante l'anticipatory scanning), non come contributo centrale. L'impedance control custom per Z1 (che non ha impedance nativo) è descritto come contributo tecnico abilitante.
+
+**Narrativa**: TERESA non è "un WBC applicato all'ecografia" — è un legged robot che usa l'active perception per riconfigurare il corpo e massimizzare la qualità percettiva, con WBC e impedance come strumenti al servizio di questo obiettivo.
+
+---
+
+### WS_EXTENSION redesign + Body Pose Optimization implementata + CHECKING_WORKSPACE ovunque
+
+**Before:**
+- WS_EXTENSION usava il vecchio WBC QP per muovere Spot con un bounding box (forward +20cm, lateral ±20cm, back -50cm) e salvava un'ancora di posizione
+- Il FSM triggerava WS_EXTENSION via `/wbc/ws_request` e aspettava `/ik_done` per tornare in SCANNING
+- Il FSM aveva uno stato dedicato `REQUESTING_WS_EXT` con retry fino a 3 volte
+- `_optimize_body_poses()` era uno stub che pubblicava solo un marker di debug — il grid search non funzionava
+- `_apply_fast_body_pose(idx)` e `_tick_fast_settle()` non esistevano (chiamate ma mai definite, causavano crash)
+- `self._mount_x/y/z` erano usati ma mai dichiarati
+- `/wbc/body_ready` veniva pubblicato solo a fine ciclo FAST, mai per singolo punto
+- `CHECKING_WORKSPACE` veniva eseguito solo per il centro hub (idx=0), i punti 1-4 andavano direttamente `SCAN_PAUSE → APPROACHING`
+- `_workspace_future` non veniva mai resettato, causando riutilizzo di risultati vecchi
+
+**After:**
+- **WS_EXTENSION come grid search matematico**: invece di usare il QP per muovere Spot, il coordinator esegue un grid search 4D (altezza, pitch, dx, dy) per trovare la combinazione ottimale. Spot viene guidato dal `wbc_spot_navigator` verso il goal calcolato (timeout 5s). Nessun bounding box, nessun `/wbc/ws_request`, nessun QP coinvolto.
+- **Body Pose Optimization implementata**: `_optimize_body_poses()` ora esegue un grid search reale (3 altezze × 4 pitch = 12 combinazioni) per ogni punto FAST. Per ogni combinazione simula matematicamente dove si troverebbe link00 in odom e calcola la distanza dal sweet spot `[0.35, 0, 0.30]` in frame link00.
+- **WS_EXTENSION fallback automatico**: se dopo l'ottimizzazione (h,p) il punto è ancora fuori workspace, il coordinator esegue automaticamente il grid search 4D (h, p, dx, dy). Se il target è ancora irraggiungibile dopo il WS_EXT, il coordinator pubblica comunque `body_ready` e il FSM deciderà in `CHECKING_WORKSPACE`.
+- **`_apply_fast_body_pose(idx)`**: applica body_pose (h,p) per il punto corrente, o se necessario avvia WS_EXT (navigator drive + body_pose). Poi avvia il timer di settle.
+- **`_tick_fast_settle()`**: monitora il settle time (1.5s) o il completamento del navigator drive (distanza < 0.15m o timeout 5s). Pubblica `body_ready` quando completato.
+- **`_mount_x/y/z`**: parametri dichiarati e letti dal YAML.
+- **`_current_body_height`**: tracciato in `_set_body_pose()` per permettere la simulazione della posizione nominale del corpo Spot.
+- **`CHECKING_WORKSPACE` ovunque**: ora eseguito per OGNI punto FAST (non solo idx=0):
+  - `SCAN_PAUSE → CHECKING_WORKSPACE → (OK) APPROACHING | (was_clipped) skip o procedi`
+  - Per idx=0: usa il tracker live (comportamento invariato)
+  - Per idx>0: calcola il target da `center_approach_pose + offset`, nessuna dipendenza dal tracker
+  - `_workspace_future` resettato a `None` in tutti i rami di uscita
+- **Skip logica**: se `was_clipped`:
+  - idx=0: procede con target clippato (il centro hub serve per salvare `center_approach_pose`)
+  - idx>0: salta il punto, avanza al successivo via `scan_mgr.advance()`, pubblica `next_point_idx`, torna in `SCAN_PAUSE`
+- **Vecchio WS_EXTENSION rimosso**: stati `WS_EXTENSION` e `REQUESTING_WS_EXT`, callback `_cb_ws_req`/`_cb_ik_done` (per WS_EXT), `_save_ws_ext_anchor`, `_tick_ws_extension`, bounding box params, publishers `pub_wbc_ws_request`/`pub_wbc_ee_goal`, variabili `_ws_ext_retries`/`_ws_ext_confirmed` — tutto rimosso.
+- **Nuovi parametri YAML**: `z1_mount_x/y/z` nel coordinator, `ws_ext_dx_steps/max`, `ws_ext_dy_fwd/bwd_max`, `navigator_timeout`.
+
+### Files modificati
+
+| File | Modifica |
+|------|----------|
+| `wbc_coordinator.py` | Body pose optimization implementata, WS_EXTENSION grid search 4D + navigator drive, settle monitor, mount params dichiarati, vecchio WS_EXTENSION rimosso |
+| `z1_FSM.py` | CHECKING_WORKSPACE per tutti i punti, target computation per idx>0, skip logic, vecchio REQUESTING_WS_EXT rimosso, _workspace_future reset |
+| `wbc_params.yaml` | +z1_mount_x/y/z (coordinator section), +ws_ext_dx_*, +navigator_timeout, -ws_ext_fwd/lat/bwd_limit |
+| `INIT.md` | Questo changelog |
+| `DESCRIPTION.md` | Aggiornato con architettura corrente |
+
+---
+
+## Recent Changes (23 May 2026)
+
+### WBC refactoring — Spot/braccio decoupled + body scan anticipato
+
+**Before:** WBC olistico fragile — arm e Spot dipendevano da `wbc_split(J_hol, v_des)` con TF cross-machine. Errori TF (clock desync SpotCore/PC) bloccavano sia braccio che Spot. Body scan eseguito dopo handoff (10-15s extra).
+
+**After:**
+- **Spot P-controller**: `wbc_qp_controller` ora usa un P-controller indipendente (`vx = kp_lin_base × dist`, `wz = kp_ang_base × angle`) basato solo su `odom→body` (1 TF hop). Il braccio mantiene il WBC look-at (`J_arm` damped pseudo-inverse). Quality scaling invariato.
+- **Cmd_vel cache**: quando un TF lookup fallisce, il QP ripubblica l'ultimo `cmd_vel` valido invece di andare muto. Spot non perde mai il contatto.
+- **PRE_APPROACH active perception**: il coordinator ora attende 5 tick consecutivi di RealSense `LOCKED` (invece di timer fisso 5s). Timeout fallback 5s.
+- **`wbc_spot_navigator.py`**: navigatore semplificato per APPROACHING. Legge `/wbc/ee_goal` in odom, rotate → drive → stop. P-controller robusto. Il WBC non muove più Spot (`/wbc/spot_control=False` in APPROACHING).
+- **`wbc_approach_scanner.py`**: body scan eseguito **durante APPROACHING** invece che dopo. ARC_GRID (8 pose: fase 1 home × wrist ±8° + fase 2 arc ±4cm × wrist). BodySearchScanner reale con feed da `/torso_scan_point`. Pubblica `/z1/fast_points` e `/z1/fast_ready`.
+- **Fase 3 condizionale**: se keypoint hanno confidenza < 0.50 dopo ARC_GRID, si esegue fase 3 adattiva in SCANNING. Altrimenti skip.
+- **Z1 FSM saltata**: la FSM riceve `/z1/fast_ready=True` + `/z1/fast_points` → salta `BODY_SCANNING` → va direttamente a `CHECKING_WORKSPACE → FAST`.
+- **Riduzione movimenti**: wrist ±8° (era ±12°), arc grid ±4cm (era ±6cm). Meno movimento durante navigazione.
+- **TF monitor continuo**: pubblica `/wbc/tf_ready` True/False a ogni tick (2s). Se TF degradano → coordinator torna in `WAITING_TF` → keyboard blocca `s`.
+- **ESC emergency stop**: tasto ESC sul keyboard → `/wbc/restart=False` + `cmd_vel=0`, stop immediato.
+
+### Files nuovi
+
+| File | Ruolo |
+|------|-------|
+| `spot_control/wbc_spot_navigator.py` | Navigator semplificato per Spot in APPROACHING |
+| `spot_control/wbc_approach_scanner.py` | Body scan multi-view + WBC look-at + FAST points |
+| `rviz/wbc_debug.rviz` | RViz config: TF tree + goal marker + debug line body→goal |
+
+### Files modificati
+
+| File | Modifica |
+|------|----------|
+| `wbc_qp_controller.py` | P-controller Spot (1 TF) + cache cmd_vel |
+| `wbc_coordinator.py` | PRE_APPROACH active perception, APPROACHING spot_control=False, SCANNING con WBC enabled per fase 3 |
+| `wbc_params.yaml` | +kp_lin_base, +kp_ang_base; quality_max 0.50→0.20 |
+| `wbc.launch.py` | +wbc_spot_navigator + wbc_approach_scanner |
+| `setup.py` | +entry points per nuovi nodi |
+| `z1_FSM.py` | +subscriber /z1/fast_ready, skip BODY_SCANNING |
+| `teresa_core.launch.py` | static_transform_publisher in formato Jazzy; realsense2_camera_node lanciato direttamente (no nesting) |
+| `tf_monitor.py` | Monitor continuo (no _done flag), world→link06 check, topic corretto /camera/camera/color/image_raw |
+| `wbc_keyboard_controller.py` | ESC stop, display pulito, gestione TF loss |
+| `z1_realsense.launch.py` | +log_level:info per compatibilità Jazzy |
+| `DESCRIPTION.md` | Aggiornato con architettura corrente |
+
+### FAST Body Pose Optimization (23 May)
+
+**Obiettivo:** Spot non resta fermo a `handoff_height=-0.15m` per tutti i 5 punti FAST. Per ogni punto, il coordinator esegue un grid search offline su 3 altezze × 4 pitch per trovare la combinazione che porta il target più vicino al centro workspace Z1 (`sweet_spot: [0.35, 0, 0.30]` in link00). Spot si aggiusta **prima** che il braccio esegua il punto.
+
+**Modifiche:**
+- `wbc_coordinator.py`: subscriber `/z1/fast_points` (PoseArray dal wbc_approach_scanner). Grid search `_optimize_body_poses()` — 1 TF lookup world→odom, poi matematica locale su 3×4 combinazioni. Publisher `/wbc/body_ready` dopo settle 1.5s.
+- `z1_FSM.py`: dopo ogni punto FAST, pubblica `/z1/next_point_idx` per segnalare al coordinator il prossimo punto. In `SCAN_PAUSE`, attende `/wbc/body_ready=True` prima di procedere. Timeout fallback 3s.
+- `wbc_params.yaml`: `body_grid_heights: [-0.20, -0.18, -0.15]`, `body_grid_pitches: [0.0, 0.087, 0.17, 0.26]`, `body_sweet_spot: [0.35, 0.0, 0.30]`, `body_settle_time: 1.5`.
+
+**Vincoli:** altezza [-0.20, -0.15] m; pitch [0°, 15°]; yaw mai cambiato.
+
+**Paper note:** questa non è WBC in senso stretto (Spot e braccio non si muovono simultaneamente). È più precisamente **whole-body planning** o **cooperative mobile manipulation**. Vedi `PLAN.md` per i paper angle suggeriti.
+
+### Soft Handoff a 20cm + Risoluzione conflitto IK goal
+
+**Soft handoff:** Spot non arriva subito a 5cm. A 20cm si ferma (navigator in pausa via `/wbc/spot_control=False`) finché lo scanner non completa ARC_GRID. Quando i FAST points sono pronti, il navigator viene sbloccato e Spot completa gli ultimi 15cm.
+
+**Conflitto IK goal risolto:** il WBC QP e il `wbc_approach_scanner` pubblicavano entrambi su `/wbc/ik_goal_pose`, causando conflitti. Ora:
+- **PRE_APPROACH**: solo WBC QP pubblica look-at (scanner non ancora attivo)
+- **APPROACHING**: solo scanner pubblica grid+look-at (WBC QP non esegue IK)
+- **SCANNING**: solo scanner per fase 3 (attivata via `/wbc/state='SCANNING'`, non via `/wbc/enable`)
+
+**Modifiche:**
+- `wbc_approach_scanner.py`: si attiva su `/wbc/state='APPROACHING'` invece che `/wbc/enable=True`
+- `wbc_coordinator.py`: non abilita WBC in APPROACHING; soft handoff a 20cm se scanner non ancora pronto
+- `wbc_spot_navigator.py`: subscriber `/wbc/spot_control` — se False, zero cmd_vel (pausa)
+- `wbc_params.yaml`: `soft_handoff_distance: 0.20`
+
+---
+
+## Recent Changes (21 May 2026)
+
+### `teresa_perception.launch.py` — unified perception launch
+
+**Before:** 2 terminali separati per `spot_perception` (Orbbec) e `z1_perception` (RealSense).
+
+**After:** `teresa_perception.launch.py` usa `IncludeLaunchDescription` per richiamare entrambi i launch originali in un unico terminale. Comportamento identico, zero duplicazione.
+
+```bash
+ros2 launch spot_control teresa_perception.launch.py
+ros2 launch spot_control teresa_perception.launch.py use_orbbec_driver:=true
+```
+
+Argomenti: `use_orbbec_driver` (default `false`, driver già in `teresa_core`), `test_mode`, `use_tracker`, `use_surface`.
+
+### `teresa_demo` package — visitor demonstration
+
+Nuovo package standalone per dimostrazioni senza telecamere/WBC/percezione. Spot e Z1 si muovono contemporaneamente in pattern di searching.
+
+**Files:** `src/teresa_demo/`
+| File | Ruolo |
+|------|-------|
+| `visitor_demo_node.py` | Orchestratore con due loop paralleli: Spot griglia 3×3 body_pose + Z1 arm state machine |
+| `visitor_demo.launch.py` | Z1 bringup + `z1_ik_to_jtc` + demo node (nessuna TF statica, nessuna telecamera) |
+| `demo_params.yaml` | Griglia Spot (9 punti) + 4 pose braccio + topic IK |
+
+**Comportamento:**
+- **Spot**: griglia 3×3: 3 yaw × 3 pitch, 3s per punto, loop continuo (stessi parametri del WBC SEARCHING)
+- **Braccio**: home → front-left → home → front-right → home → front-up → home → front-down → loop
+- A **Ctrl-C**: entrambi tornano in posizione di partenza (Spot in piedi, braccio in home)
+
+**Uso:**
+```bash
+ros2 launch teresa_demo visitor_demo.launch.py
+# Richiede spot_ros2 su SpotCore (per body_pose topic)
+```
+
+### Compatibilità ROS 2 Jazzy
+
+Il workspace gira su **Jazzy** (non Humble). Due fix necessari:
+- **Liste annidate YAML**: `[[x,y,z,...], [...]]` non supportato dal parser parametri Jazzy → flattenato a lista singola con parsing a blocchi di 7 nel codice
+- **Default `[]`**: interpretato come `BYTE_ARRAY` invece di `DOUBLE_ARRAY` → usare `[0.0]` per fissare il tipo
+
+---
+
+## Recent Changes (20 May 2026)
+
+### TF monitor & keyboard-controlled startup — 7 catene TF + 3 topic
+
+**Before:** WBC coordinator partiva subito in `SEARCHING` all'avvio. Se i TF SpotCore non erano ancora disponibili (DDS non pronto, clock desincronizzato), i nodi fallivano silenziosamente con errori TF criptici. L'utente doveva indovinare il problema.
+
+**After:**
+- **Nuovo nodo `tf_monitor.py`** (lanciato da `teresa_core.launch.py`): controlla ogni secondo 7 catene TF + 3 topic hardware. Appena TUTTI sono pronti pubblica `/wbc/tf_ready = True` e logga un banner di conferma. Non si limita più al solo `odom→body`.
+- **Nuovo stato `WAITING_TF` nel coordinator**: il WBC parte in `WAITING_TF`, aspetta `/wbc/tf_ready`, poi passa a `IDLE`. Solo da `IDLE` il keyboard controller può farlo partire (`/wbc/restart → SEARCHING`).
+- **Keyboard controller blocca `s`**: se premi "s" prima che i TF siano pronti, il nodo ti avverte e non fa nulla. Quando `/wbc/tf_ready` arriva, stampa `[TF READY] SpotCore connesso — premi "s" per iniziare`.
+- **Messaggi di errore TF esplicativi**: tutti i `lookup_transform` ora loggano diagnostica chiara. I messaggi sono throttled: ogni 5s quando TF mai visto, ogni 2s se perso a runtime.
+- **Script `tf_diag.sh`**: diagnostica standalone (basta eseguirlo senza far girare i nodi TERESA).
+- **Helper `_tf_lookup()` / `_tf_transform()`**: introdotti in tutti i nodi (`wbc_qp_controller`, `wbc_coordinator`, `spot_goal_navigator`) per centralizzare la gestione errori TF.
+
+### teresa_core refactoring (20 May 2026 — same day)
+
+**Obiettivo:** ridurre i 6 terminali a 3 separando driver hardware dalla logica applicativa.
+
+**Before:** ogni launch file lanciava i propri driver + le proprie TF statiche. `tf_monitor` in `wbc.launch.py` controllava solo `odom→body`. `body→link00` pubblicato dal WBC a runtime.
+
+**After:**
+- **`teresa_core.launch.py`** (nuovo) — unico terminale per TUTTI i driver hardware:
+  - Orbbec Femto Bolt driver
+  - Z1 bringup + RealSense via `z1_realsense.launch.py` (con `use_rviz:=false`, `use_camera_tf:=false`)
+  - **4 TF statiche** centralizzate nel core
+  - `tf_monitor` (spostato da `wbc.launch.py`)
+- **`tf_monitor`** ora controlla **8 catene TF** + 3 topic
+- **`z1_realsense.launch.py`**: nuovo arg `use_camera_tf` (default `true`)
+- **`spot_perception.launch.py`**: arg `use_orbbec_driver` (default `true`)
+- **`wbc_qp_controller.py`**: rimosso `StaticTransformBroadcaster` di `body→link00`
+- **`wbc.launch.py`**: rimosso `tf_monitor`, lancia solo `wbc_qp_controller` + `wbc_coordinator`
+
+### Files modificati in questo commit
+
+| File | Modifica |
+|------|----------|
+| `teresa_core.launch.py` | **Nuovo** |
+| `tf_monitor.py` | 7 catene TF + 3 topic (prima: solo `odom→body`) |
+| `wbc_qp_controller.py` | Rimosso `StaticTransformBroadcaster` per `body→link00` |
+| `wbc.launch.py` | Rimosso `tf_monitor` |
+| `spot_perception.launch.py` | Aggiunto arg `use_orbbec_driver` |
+| `z1_realsense.launch.py` | Aggiunto arg `use_camera_tf` |
+
+---
+
+## Recent Changes (12 May 2026)
+
+### SEARCHING grid search + confidence lock + body_pose fix
+
+**Before:**
+- SEARCHING continuous rotation with pitch ramp
+- `quaternion_from_euler(pitch, 0.0, 0.0)` → pitch applied as roll (tilted sideways)
+- `body_pose` published without `cmd_vel` flush → spot_driver never applied it
+- IDLE→APPROACHING shortcut bypassed SEARCHING
+
+**After:**
+- SEARCHING: **3×3 grid** — 3 yaw positions (center, +10°, -10°) × 3 pitch angles (5°, 10°, 15°). At each point Spot pauses 3s for the camera to observe, then moves to the next via `body_pose`. Grid completes after all 9 points (~27s) → IDLE.
+- **Confidence lock**: when `confidence ≥ 0.85`, Spot freezes (no pose changes) and collects 10 approach_point samples in odom (~2s @5Hz). Target = mean of 10 samples → `QualityMonitor.set_target()` → PRE_APPROACH. If confidence drops < 0.85 during sampling → lock lost, resume grid from current point.
+- `quaternion_from_euler(0.0, pitch, yaw)` → pitch on Y axis (nose-down), yaw on Z (orientation)
+- Every `_set_body_pose()` call publishes a zero `Twist` on `/my_spot/cmd_vel` to flush to spot_driver
+- PRE_APPROACH entry resets body_pose to (0,0) → Spot stands upright for stable approach
+- IDLE→APPROACHING shortcut **removed** — all approaches go through SEARCHING
+- `_check_lying_timeout` now excludes APPROACHING — Spot never aborts approach once committed
+- `_cb_approach` skips `QualityMonitor.try_init()` during SEARCHING (target set only via lock)
+
+### New parameters
+| Parameter | Value | Meaning |
+|-----------|-------|---------|
+| `search_pitch_angles` | [0.087, 0.17, 0.26] | 5°, 10°, 15° pitch grid |
+| `search_yaw_offsets` | [0.0, 0.17, -0.17] | center, +10°, -10° yaw grid |
+| `search_pause_per_point` | 3.0s | Pause per grid point |
+| `search_lock_confidence` | 0.85 | Confidence to freeze and sample |
+| `search_lock_samples` | 10 | Samples averaged as target |
+
+### Removed parameters
+- `search_timeout`, `search_angular_speed`, `search_pitch_max`, `search_pitch_min`, `search_pitch_steps`, `search_detection_frames`, `orbbec_confidence_threshold`
+
+### Keyboard controller + WBC restart
+- New node `wbc_keyboard_controller.py`: keyboard-driven Spot control with WBC integration
+- Keys: `s`=start (save pose + SEARCHING), `r`/`q`=return to start, `u`=update start pose, `c`/`a`=sit/stand
+- WBC gains `/wbc/restart` subscriber (Bool): True → IDLE→SEARCHING, False → any→IDLE
+- During return navigation, keyboard node takes over `/my_spot/cmd_vel`
+
+### PRE_APPROACH exits on IK_done + QP publishes mount TF
+- PRE_APPROACH now exits when `/ik_done` = True (arm completed look-at), not on 5s timer
+- `pre_approach_duration` parameter kept for backward compat but no longer used
+- QP controller now publishes `my_spot/body → link00` static TF at 10 Hz via `StaticTransformBroadcaster`
+- `search_lock_samples` reduced 10 → 5 (faster lock, 1s instead of 2s)
+
+### Files modified
+`wbc_coordinator.py`, `wbc_qp_controller.py`, `wbc_params.yaml`, `wbc.launch.py`, `wbc_keyboard_controller.py` (new), `setup.py`
+
+---
+
+## Recent Changes (11 May 2026)
+
+### Orbbec TF collision fix — camera renamed to `orbbec`
+
+**Before:** Orbbec and RealSense both published TF frames `camera_link`, `camera_color_optical_frame`. The approach_point (Orbbec, on tripod) was transformed through the RealSense chain (`link06 → camera_link`) instead of the static tripod TF.
+
+**After:**
+- Orbbec driver launched with `camera_name: 'orbbec'` → TF frames become `orbbec_link`, `orbbec_color_optical_frame`
+- Static TF chain: `my_spot/body → orbbec_link → orbbec_color_optical_frame` (separate from RealSense)
+- YOLO skeleton topics: `/camera/*` → `/orbbec/*`
+
+### Handoff distance analysis — offset already present
+Approach point computed in `laying_human_detector.py` already includes offset: `dist = bbox_half(≥0.30) + approach_margin(0.05) + spot_front_offset(0.50) = 0.85m`. At handoff (5cm from approach_point), Spot front ~5cm from patient bbox edge. Arm reach covers the rest (~60cm).
+
+### Files modificati
+`spot_perception.launch.py`, `yolo_skeleton_spot.py`
+
+---
+
+## Recent Changes (7 May 2026)
+
+### WBC refactoring — goal in odom, 10 Hz, stable look-at
+
+**Before:** WBC approach broken:
+- Goal in camera frame → target "scappa" con Spot, errore non cala mai
+- `update_period` 1.5s → `cmd_vel` troppo rado, Spot non reagisce fluidamente
+- look-at: `x_ee = clipped_pos - ee_cur` → instabile, polso oscilla a ogni ciclo
+- Kalman dead zone → `sigma_max` collassa subito (2mm), inutile
+- Handoff puramente a 5cm, nessun controllo qualità
+
+**After:**
+- Goal **fissato in odom** (media prime 3 misure, `_QualityMonitor`) → target fermo nel mondo
+- **10 Hz** (`update_period: 0.1`) → Spot fluido
+- look-at: `x_ee = target_link00 - clipped_pos` → coerente con posizione IK
+- `compute_ee_orientation_minrot()` — rotazione minima da home X a x_ee, polso rilassato
+- `ik_rot_weight: 0.7` (era 0.3) — IK rispetta l'orientazione
+- `orientation_mode: "minrot"` default in `wbc_params.yaml`
+
+### QualityMonitor (sostituisce `_PositionKalman`)
+- `target` = media prime `quality_buf_size=3` misure in odom → inizializzato
+- `target` aggiornato solo se `posture_confidence > best_conf + confidence_margin` (0.10)
+- `quality` = `max_q * (1 - posture_confidence)` + crescita lineare senza confidence
+- Pubblicato su `/wbc/target_uncertainty` in **metri** (non più sigma)
+- `v_scale = v_min + (1 - v_min) / (1 + quality / quality_ref)` → **mai zero**
+
+### Nuovi parametri WBC
+| Parametro | Valore | Significato |
+|-----------|--------|-------------|
+| `update_period` | 0.1s | WBC a 10 Hz |
+| `quality_ref` | 0.05m | Soglia qualità per `v_scale = (1+v_min)/2` |
+| `v_min` | 0.15 | Velocità minima mai zero |
+| `confidence_margin` | 0.10 | Min incremento confidenza per aggiornare target |
+| `quality_growth` | 0.05 m/s | Crescita qualità senza dati posture_confidence |
+| `quality_min/max` | 0.01/0.50 | Floor/ceiling qualità [m] |
+| `quality_buf_size` | 3 | Misure per inizializzare target |
+| `orientation_mode` | "minrot" | Min-rotation quaternion (vs gram_schmidt) |
+
+### Parametri rimossi
+`z_delta` (chance-constraint dead zone), `approach_kf_process_noise`, `approach_kf_meas_noise`
+
+### Files modificati
+`wbc_coordinator.py`, `wbc_qp_controller.py`, `wbc_params.yaml`, `teresa_utils/orientation.py`, `z1_ik_jtc_params.yaml`
+
+---
+
+## Recent Changes (6 May 2026)
+
+- **Arm twist fix (WBC)**: EE orientation now computed geometrically (X_ee toward target, Y_ee from home via Gram-Schmidt) instead of using the approach_point yaw orientation that caused a roll twist around the X axis. Same algorithm as `z1_FSM._orientation_for_xee()`.
+- **Shared utilities**: new `teresa_utils` package with `orientation.py` — `compute_ee_orientation`, `quat_to_rot`, `rot_to_quat`, `normalize_angle`. Eliminates duplicate code across 4 files.
+- **`workspace_safety_margin` unified**: all defaults aligned to 0.05 m (were 0.05 in YAML but 0.30 in code).
+- **`REQUESTING_WS_EXT` race fixed**: FSM now proceeds to CHECKING_WORKSPACE on SCANNING even if WS_EXTENSION was missed between ticks.
+- **`wbc_startup_timeout` configurable**: 30s default (was hardcoded 10s). Parameter in `z1_fsm_params.yaml`.
+- **`wait_ik_timeout_s` robustness**: declared in FSM (not only via ScanManager) — no crash if `from_params()` fails.

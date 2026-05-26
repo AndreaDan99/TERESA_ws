@@ -8,7 +8,6 @@ States:
   IDLE           passive fallback
   APPROACHING    Spot navigates + Z1 look-at via WBC QP
   SCANNING       Spot reached patient → WBC disables, z1_FSM takes over
-  WS_EXTENSION   z1_FSM requested workspace help → QP micro-step
 
 Transitions:
   SEARCHING     → PRE_APPROACH   posture=LYING and confidence >= threshold + approach_point
@@ -16,8 +15,6 @@ Transitions:
   IDLE          → APPROACHING    posture=LYING and confidence >= threshold
   PRE_APPROACH  → APPROACHING    pre_approach duration elapsed (arm aligned)
   APPROACHING   → SCANNING       Spot within handoff_distance of approach_point
-  SCANNING      → WS_EXTENSION   /wbc/ws_request received
-  WS_EXTENSION  → SCANNING       /ik_done received
   any           → IDLE           posture != LYING for > lying_timeout
 """
 import math
@@ -132,7 +129,6 @@ class CoordState:
     APPROACHING   = 'APPROACHING'
     HANDOFF       = 'HANDOFF'
     SCANNING      = 'SCANNING'
-    WS_EXTENSION  = 'WS_EXTENSION'
 
 
 class WBCCoordinatorNode(Node):
@@ -155,9 +151,9 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('quality_min',                 0.01)
         self.declare_parameter('quality_max',                 0.50)
         self.declare_parameter('quality_buf_size',            3)
-        self.declare_parameter('ws_ext_fwd_limit',             0.20)
-        self.declare_parameter('ws_ext_lat_limit',             0.20)
-        self.declare_parameter('ws_ext_bwd_limit',             0.50)
+        self.declare_parameter('z1_mount_x',                   0.20)
+        self.declare_parameter('z1_mount_y',                   0.0)
+        self.declare_parameter('z1_mount_z',                   0.20)
         self.declare_parameter('handoff_body_height',         -0.15)  # [m] offset from nominal
         self.declare_parameter('soft_handoff_distance',      0.20)   # [m] pause for scanner
         self.declare_parameter('min_body_height',             -0.20)
@@ -174,6 +170,11 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('body_grid_pitches',       [0.0, 0.087, 0.17, 0.26])
         self.declare_parameter('body_sweet_spot',         [0.35, 0.0, 0.30])
         self.declare_parameter('body_settle_time',        1.5)
+        self.declare_parameter('ws_ext_dx_steps',          5)     # number of lateral grid steps
+        self.declare_parameter('ws_ext_dx_max',            0.20)  # [m] max lateral displacement
+        self.declare_parameter('ws_ext_dy_fwd_max',        0.20)  # [m] max forward displacement
+        self.declare_parameter('ws_ext_dy_bwd_max',        0.30)  # [m] max backward displacement
+        self.declare_parameter('navigator_timeout',        5.0)   # [s] max wait for Spot to reach WS_EXT goal
         self.declare_parameter('pre_approach_duration',        5.0)   # [s] arm look-at before Spot walks
 
         p = lambda n: self.get_parameter(n).value
@@ -181,9 +182,9 @@ class WBCCoordinatorNode(Node):
         self._odom_frame    = p('odom_frame')
         self._body_frame    = p('body_frame')
         self._lying_timeout   = float(p('lying_timeout'))
-        self._ws_ext_fwd_lim  = float(p('ws_ext_fwd_limit'))
-        self._ws_ext_lat_lim  = float(p('ws_ext_lat_limit'))
-        self._ws_ext_bwd_lim  = float(p('ws_ext_bwd_limit'))
+        self._mount_x              = float(p('z1_mount_x'))
+        self._mount_y              = float(p('z1_mount_y'))
+        self._mount_z              = float(p('z1_mount_z'))
         self._handoff_body_height = float(p('handoff_body_height'))
         self._soft_handoff_dist   = float(p('soft_handoff_distance'))
         self._min_body_height     = float(p('min_body_height'))
@@ -196,6 +197,11 @@ class WBCCoordinatorNode(Node):
         self._body_grid_pitches   = self._read_float_array('body_grid_pitches')
         self._body_sweet_spot     = np.array([float(x) for x in p('body_sweet_spot')])
         self._body_settle_time    = float(p('body_settle_time'))
+        self._ws_ext_dx_steps     = int(p('ws_ext_dx_steps'))
+        self._ws_ext_dx_max       = float(p('ws_ext_dx_max'))
+        self._ws_ext_dy_fwd_max   = float(p('ws_ext_dy_fwd_max'))
+        self._ws_ext_dy_bwd_max   = float(p('ws_ext_dy_bwd_max'))
+        self._navigator_timeout    = float(p('navigator_timeout'))
         self._search_lock_confidence = float(p('search_lock_confidence'))
         self._search_lock_samples   = int(p('search_lock_samples'))
         self._pre_approach_duration = float(p('pre_approach_duration'))
@@ -225,8 +231,7 @@ class WBCCoordinatorNode(Node):
         self._approach_point_odom: PoseStamped | None = None  # odom-frame (world-fixed)
         self._last_lying_time        = None
         self._desired_yaw: float | None = None   # target yaw Spot [rad, odom frame]
-        self._ws_ext_anchor: np.ndarray | None = None   # Spot odom position at WS_EXTENSION entry
-        self._ws_ext_anchor_yaw: float = 0.0            # Spot yaw at WS_EXTENSION entry
+        self._current_body_height: float = 0.0   # last applied body_pose height
         self._search_start: rclpy.time.Time | None = None     # SEARCHING entry time
         self._pre_approach_start: rclpy.time.Time | None = None  # PRE_APPROACH entry time
         self._search_lock_buffer: list | None = None  # odom positions collected during lock
@@ -238,19 +243,20 @@ class WBCCoordinatorNode(Node):
         self._torso_tracker_state: str = ''       # LOCKED / TRACKING / IDLE
         self._torso_detected_ticks: int = 0       # consecutive LOCKED ticks
 
-        # FAST body pose optimization
+        # FAST body pose optimization + WS_EXTENSION
         self._fast_points: PoseArray | None = None
-        self._optimal_height: dict = {}            # idx → height
-        self._optimal_pitch: dict = {}             # idx → pitch
-        self._body_settle_start: float = 0.0       # timestamp when settle started
+        self._optimal_poses: list = []                # [(h, p, dist), ...] per point
+        self._needs_ws_ext: set = set()               # point indices needing WS_EXT
+        self._body_settle_start: float | None = None  # timestamp when settle started
+        self._ws_ext_driving: bool = False            # True while navigator drives to WS_EXT goal
+        self._ws_ext_drive_start: float | None = None # timestamp when drive started
+        self._ws_ext_failed: set = set()              # point indices where WS_EXT failed
 
         # ── Sub / Pub ─────────────────────────────────────────────────
         self.create_subscription(String,       '/human_pose/posture',        self._cb_posture,    10)
         self.create_subscription(Float32,      p('posture_confidence_topic'), self._cb_conf,       10)
         self.create_subscription(PoseStamped,  p('approach_point_topic'),    self._cb_approach,   10)
         self.create_subscription(String,       p('z1_fsm_state_topic'),      self._cb_z1_state,   10)
-        self.create_subscription(Bool,         '/ik_done',                   self._cb_ik_done,    10)
-        self.create_subscription(Bool,         '/wbc/ws_request',            self._cb_ws_req,     10)
         self.create_subscription(Bool,         '/z1/fast_ready',             self._cb_fast_ready, 10)
         self.create_subscription(String,      '/torso_tracker_state',      self._cb_torso_state, 10)
         self.create_subscription(Vector3Stamped, '/laying_human/body_axis',  self._cb_body_axis,  10)
@@ -344,18 +350,6 @@ class WBCCoordinatorNode(Node):
     def _cb_z1_state(self, msg: String) -> None:
         pass
 
-    def _cb_ik_done(self, msg: Bool) -> None:
-        if self._state == CoordState.WS_EXTENSION and msg.data:
-            self._set_wbc_enabled(False)
-            self._set_state(CoordState.SCANNING)
-        # PRE_APPROACH → APPROACHING is now triggered by RealSense
-        # detection (5 tick LOCKED) in _tick_pre_approach
-
-    def _cb_ws_req(self, msg: Bool) -> None:
-        if self._state == CoordState.SCANNING and msg.data:
-            self._set_state(CoordState.WS_EXTENSION)
-            self._set_wbc_enabled(True)
-
     def _cb_fast_ready(self, msg: Bool) -> None:
         if msg.data and self._state == CoordState.SCANNING:
             self.get_logger().info('FAST ready — disabling WBC')
@@ -408,8 +402,6 @@ class WBCCoordinatorNode(Node):
             self._tick_pre_approach()
         elif self._state == CoordState.APPROACHING:
             self._tick_approaching()
-        elif self._state == CoordState.WS_EXTENSION:
-            self._tick_ws_extension()
         elif self._state == CoordState.SCANNING:
             self._tick_scannning()
 
@@ -426,8 +418,7 @@ class WBCCoordinatorNode(Node):
                             CoordState.SEARCHING,
                             CoordState.PRE_APPROACH,
                             CoordState.APPROACHING,
-                            CoordState.SCANNING,
-                            CoordState.WS_EXTENSION):
+                            CoordState.SCANNING):
             return
         if self._posture != 'LYING' and self._last_lying_time is not None:
             elapsed = (self.get_clock().now() - self._last_lying_time).nanoseconds * 1e-9
@@ -556,41 +547,6 @@ class WBCCoordinatorNode(Node):
             self._pub_spot_ctrl.publish(Bool(data=False))
             self._set_state(CoordState.APPROACHING)
 
-    def _tick_ws_extension(self) -> None:
-        # Goal published directly by z1_FSM via /wbc/ee_goal.
-        # Transition back to SCANNING handled by _cb_ik_done.
-        # Safety: enforce bounding box around anchor position.
-        if self._ws_ext_anchor is None:
-            return
-
-        tf = self._tf_lookup(self._odom_frame, self._body_frame)
-        if tf is None:
-            return
-
-        p_now = np.array([tf.transform.translation.x, tf.transform.translation.y])
-        dp    = p_now - self._ws_ext_anchor
-        c, s  = math.cos(self._ws_ext_anchor_yaw), math.sin(self._ws_ext_anchor_yaw)
-        dp_fwd = float( c * dp[0] + s * dp[1])   # + = forward
-        dp_lat = float(-s * dp[0] + c * dp[1])   # + = left
-
-        violated = False
-        if dp_fwd > self._ws_ext_fwd_lim:
-            self.get_logger().warn(
-                f'WS_EXT box violated: forward {dp_fwd:.2f}m > {self._ws_ext_fwd_lim:.2f}m')
-            violated = True
-        elif dp_fwd < -self._ws_ext_bwd_lim:
-            self.get_logger().warn(
-                f'WS_EXT box violated: backward {-dp_fwd:.2f}m > {self._ws_ext_bwd_lim:.2f}m')
-            violated = True
-        elif abs(dp_lat) > self._ws_ext_lat_lim:
-            self.get_logger().warn(
-                f'WS_EXT box violated: lateral {dp_lat:.2f}m > ±{self._ws_ext_lat_lim:.2f}m')
-            violated = True
-
-        if violated:
-            self._set_wbc_enabled(False)
-            self._set_state(CoordState.SCANNING)
-
     # ── Helpers ───────────────────────────────────────────────────────
 
     def _tf_lookup(self, source: str, target: str,
@@ -656,8 +612,9 @@ class WBCCoordinatorNode(Node):
         self._fast_points = msg
         self.get_logger().info(f'FAST points received ({len(msg.poses)} poses)')
         self._optimize_body_poses()
-        # Apply first body pose
-        self._apply_fast_body_pose(0)
+        # Apply first body pose if already in SCANNING
+        if self._state == CoordState.SCANNING:
+            self._apply_fast_body_pose(0)
 
     def _cb_next_point(self, msg: Int32) -> None:
         """FSM signals next FAST point index."""
@@ -679,35 +636,280 @@ class WBCCoordinatorNode(Node):
         pitches = self._body_grid_pitches
         sweet = self._body_sweet_spot
 
-        # Mount offset: where is world relative to body?
-        mount = np.array([self._mount_x, self._mount_y, self._mount_z])
+        body_tf = self._tf_lookup(self._odom_frame, self._body_frame)
+        if body_tf is None:
+            return
 
-        # Get current body in odom (position + yaw)
-        body = self._tf_lookup(self._odom_frame, self._body_frame)
-        if body is None:
+        body_yaw = _yaw_from_quat(body_tf.transform.rotation)
+        body_pos = np.array([body_tf.transform.translation.x,
+                             body_tf.transform.translation.y,
+                             body_tf.transform.translation.z])
+
+        self._optimal_poses = []
+        self._needs_ws_ext.clear()
+
+        for i, target_pose in enumerate(self._fast_points.poses):
+            target_link00 = np.array([target_pose.position.x,
+                                      target_pose.position.y,
+                                      target_pose.position.z])
+
+            best_h, best_p, best_dist = 0.0, 0.0, float('inf')
+            for h in heights:
+                for p in pitches:
+                    link00_odom, _ = self._simulate_link00(body_pos, body_yaw, h, p)
+                    target_odom = self._link00_to_odom_vec(body_tf, target_link00)
+                    target_new_link00 = self._odom_to_link00_vec(target_odom, link00_odom, body_yaw, p)
+                    dist = float(np.linalg.norm(target_new_link00 - sweet))
+                    if dist < best_dist:
+                        best_h, best_p, best_dist = h, p, dist
+
+            self._optimal_poses.append((best_h, best_p, best_dist))
+            self.get_logger().info(
+                f'FAST pt[{i}]: best (h={best_h:.2f}m, p={math.degrees(best_p):.1f}°)'
+                f' → sweet_dist={best_dist:.3f}m')
+
+            if best_dist > self._max_workspace_reach():
+                self._needs_ws_ext.add(i)  # will trigger WS_EXT on apply
+
+    def _max_workspace_reach(self) -> float:
+        """Estimate max reachable distance from link00 in meters.
+        Uses Z1 reach + safety margin derived from workspacesafety_margin."""
+        return 0.60  # Z1 arm reach ~0.65m, minus safety
+
+    # ── Simulation helpers ────────────────────────────────────────────
+
+    def _simulate_link00(self, body_pos: np.ndarray, body_yaw: float,
+                         height: float, pitch: float) -> tuple:
+        """Compute link00 position + rotation in odom for a given body config.
+
+        Returns (link00_odom_xyz, R_body_odom).
+        body_pos: current body [x,y,z] in odom (at current body_pose height).
+        height: desired body_pose height offset (negative = lower).
+        pitch: desired body_pose pitch [rad].
+        """
+        from tf_transformations import quaternion_matrix
+        body_nominal_z = float(body_pos[2]) - self._current_body_height
+        body_new_z = body_nominal_z + height
+        t_body = np.array([float(body_pos[0]), float(body_pos[1]), body_new_z])
+
+        q = np.array([0.0, float(np.sin(pitch / 2.0)), 0.0,
+                      float(np.cos(pitch / 2.0))])  # Ry(pitch)
+        R_yaw = np.array([[np.cos(body_yaw), -np.sin(body_yaw), 0.0],
+                          [np.sin(body_yaw),  np.cos(body_yaw), 0.0],
+                          [0.0, 0.0, 1.0]])
+        R_pitch = np.array([[np.cos(pitch), 0.0, np.sin(pitch)],
+                            [0.0, 1.0, 0.0],
+                            [-np.sin(pitch), 0.0, np.cos(pitch)]])
+        R_body = R_yaw @ R_pitch
+
+        mount = np.array([self._mount_x, self._mount_y, self._mount_z])
+        link00_odom = t_body + R_body @ mount
+        return link00_odom, R_body
+
+    def _link00_to_odom_vec(self, body_tf: TransformStamped,
+                             vec_link00: np.ndarray) -> np.ndarray:
+        """Transform a vector from link00 frame to odom frame using current body TF."""
+        R = quat_to_rot(body_tf.transform.rotation)
+        link00_in_odom = np.array([body_tf.transform.translation.x,
+                                    body_tf.transform.translation.y,
+                                    body_tf.transform.translation.z]) \
+                         + R @ np.array([self._mount_x, self._mount_y, self._mount_z])
+        return link00_in_odom + R @ vec_link00
+
+    def _odom_to_link00_vec(self, point_odom: np.ndarray,
+                             link00_odom: np.ndarray,
+                             body_yaw: float, pitch: float) -> np.ndarray:
+        """Transform a point from odom to the link00 frame for given body config."""
+        R_yaw = np.array([[np.cos(body_yaw), -np.sin(body_yaw), 0.0],
+                          [np.sin(body_yaw),  np.cos(body_yaw), 0.0],
+                          [0.0, 0.0, 1.0]])
+        R_pitch = np.array([[np.cos(pitch), 0.0, np.sin(pitch)],
+                            [0.0, 1.0, 0.0],
+                            [-np.sin(pitch), 0.0, np.cos(pitch)]])
+        R_body = R_yaw @ R_pitch
+        return R_body.T @ (point_odom - link00_odom)
+
+    # ── WS_EXTENSION grid search ──────────────────────────────────────
+
+    def _optimize_ws_extension(self, point_idx: int):
+        """Grid search (h, p, dx, dy) for a single point that needs WS_EXT."""
+        if self._fast_points is None or point_idx >= len(self._fast_points.poses):
+            return None
+
+        heights = self._body_grid_heights
+        pitches = self._body_grid_pitches
+        sweet = self._body_sweet_spot
+
+        n = self._ws_ext_dx_steps
+        dx_range = np.linspace(-self._ws_ext_dx_max, self._ws_ext_dx_max, n).tolist()
+        dy_range = np.linspace(-self._ws_ext_dy_bwd_max, self._ws_ext_dy_fwd_max, n).tolist()
+
+        body_tf = self._tf_lookup(self._odom_frame, self._body_frame)
+        if body_tf is None:
+            return None
+
+        body_yaw = _yaw_from_quat(body_tf.transform.rotation)
+        body_pos = np.array([body_tf.transform.translation.x,
+                             body_tf.transform.translation.y,
+                             body_tf.transform.translation.z])
+
+        target_pose = self._fast_points.poses[point_idx]
+        target_link00 = np.array([target_pose.position.x,
+                                  target_pose.position.y,
+                                  target_pose.position.z])
+        target_odom = self._link00_to_odom_vec(body_tf, target_link00)
+
+        best = None
+        for h in heights:
+            for p in pitches:
+                for dx in dx_range:
+                    for dy in dy_range:
+                        shifted = body_pos + np.array([dx, dy, 0.0])
+                        link00_odom, _ = self._simulate_link00(shifted, body_yaw, h, p)
+                        target_new = self._odom_to_link00_vec(target_odom, link00_odom, body_yaw, p)
+                        dist = float(np.linalg.norm(target_new - sweet))
+                        if best is None or dist < best[4]:
+                            best = (h, p, dx, dy, dist)
+
+        if best is None:
+            return None
+
+        h, p, dx, dy, best_dist = best
+        self.get_logger().info(
+            f'WS_EXT pt[{point_idx}]: best (h={h:.2f}m, p={math.degrees(p):.1f}°, '
+            f'dx={dx:.2f}m, dy={dy:.2f}m) → sweet_dist={best_dist:.3f}m')
+        return best
+
+    # ── FAST body pose application + settle ───────────────────────────
+
+    def _apply_fast_body_pose(self, idx: int) -> None:
+        """Apply optimized body pose for FAST point idx."""
+        if not self._optimal_poses or idx >= len(self._optimal_poses):
+            self._pub_body_ready.publish(Bool(data=True))
             return
-        if not self._quality.initialized:
+
+        h, p, dist = self._optimal_poses[idx]
+
+        if idx in self._needs_ws_ext and idx not in self._ws_ext_failed:
+            # Try WS_EXTENSION grid search
+            ws = self._optimize_ws_extension(idx)
+            if ws is not None:
+                h, p, dx, dy, best_dist = ws
+                if best_dist < self._max_workspace_reach():
+                    # Drive Spot to WS_EXT position
+                    self._drive_ws_ext_position(idx, h, p, dx, dy)
+                    return
+                else:
+                    self.get_logger().warn(
+                        f'WS_EXT pt[{idx}]: best sweet_dist={best_dist:.3f}m '
+                        f'still > {self._max_workspace_reach():.3f}m → giving up')
+                    self._ws_ext_failed.add(idx)
+
+        # Normal body pose (h, p only) or WS_EXT gave up
+        self._set_body_pose(h, p)
+        self._body_settle_start = self.get_clock().now().nanoseconds * 1e-9
+        self._ws_ext_driving = False
+
+    def _drive_ws_ext_position(self, idx: int, h: float, p: float,
+                                dx: float, dy: float) -> None:
+        """Publish navigator goal for WS_EXT displacement and start drive monitor."""
+        body_tf = self._tf_lookup(self._odom_frame, self._body_frame)
+        if body_tf is None:
+            self._ws_ext_failed.add(idx)
+            self._apply_fast_body_pose(idx)  # fallback to (h,p) only
             return
-        p = self._quality.get_position()
-        m = Marker()
-        m.header.frame_id = self._odom_frame
-        m.header.stamp = self.get_clock().now().to_msg()
-        m.ns = 'wbc_debug'
-        m.id = 0
-        m.type = Marker.LINE_STRIP
-        m.action = Marker.ADD
-        m.scale.x = 0.05
-        m.color.a = 1.0
-        m.color.r = 0.0
-        m.color.g = 1.0
-        m.color.b = 0.0
-        m.points = [
-            Point(x=body.transform.translation.x,
-                  y=body.transform.translation.y,
-                  z=body.transform.translation.z),
-            Point(x=float(p[0]), y=float(p[1]), z=float(p[2])),
-        ]
-        self._pub_dbg_marker.publish(m)
+
+        body_yaw = _yaw_from_quat(body_tf.transform.rotation)
+        # Target odom position: current body + dx,dy offset
+        goal_x = body_tf.transform.translation.x + dx
+        goal_y = body_tf.transform.translation.y + dy
+
+        goal = PoseStamped()
+        goal.header.frame_id = self._odom_frame
+        goal.header.stamp = self.get_clock().now().to_msg()
+        goal.pose.position.x = goal_x
+        goal.pose.position.y = goal_y
+        goal.pose.position.z = body_tf.transform.translation.z
+        goal.pose.orientation.w = 1.0
+
+        self._pub_goal.publish(goal)
+        self._pub_spot_ctrl.publish(Bool(data=True))  # enable navigator
+        self._ws_ext_driving = True
+        self._ws_ext_drive_start = self.get_clock().now().nanoseconds * 1e-9
+        self._ws_ext_pending_h = h
+        self._ws_ext_pending_p = p
+        self._ws_ext_pending_idx = idx
+        self._ws_ext_goal_pos = (goal_x, goal_y)
+        self.get_logger().info(
+            f'WS_EXT pt[{idx}]: driving Spot by (dx={dx:.2f}, dy={dy:.2f}) '
+            f'→ goal=({goal_x:.2f}, {goal_y:.2f})')
+
+    def _tick_fast_settle(self) -> None:
+        """Monitor body pose settle time or WS_EXT drive completion."""
+        if self._ws_ext_driving:
+            self._tick_ws_ext_drive()
+            return
+
+        if self._body_settle_start is None:
+            return
+
+        elapsed = (self.get_clock().now().nanoseconds * 1e-9
+                   - self._body_settle_start)
+        if elapsed >= self._body_settle_time:
+            self.get_logger().info(
+                f'Body settle complete ({elapsed:.1f}s ≥ {self._body_settle_time:.1f}s)')
+            self._body_settle_start = None
+            self._pub_body_ready.publish(Bool(data=True))
+
+    def _tick_ws_ext_drive(self) -> None:
+        """Monitor navigator progress toward WS_EXT goal."""
+        if self._ws_ext_drive_start is None:
+            return
+
+        elapsed = (self.get_clock().now().nanoseconds * 1e-9
+                   - self._ws_ext_drive_start)
+
+        body_tf = self._tf_lookup(self._odom_frame, self._body_frame)
+        if body_tf is None:
+            return
+
+        dx = body_tf.transform.translation.x - self._ws_ext_goal_pos[0]
+        dy = body_tf.transform.translation.y - self._ws_ext_goal_pos[1]
+        dist = math.hypot(dx, dy)
+
+        if dist < 0.15:  # goal_tolerance from spot_navigator
+            self.get_logger().info(
+                f'WS_EXT pt[{self._ws_ext_pending_idx}]: goal reached '
+                f'(dist={dist:.3f}m in {elapsed:.1f}s)')
+            self._finish_ws_ext_drive()
+        elif elapsed > self._navigator_timeout:
+            self.get_logger().warn(
+                f'WS_EXT pt[{self._ws_ext_pending_idx}]: timeout '
+                f'({elapsed:.1f}s > {self._navigator_timeout:.1f}s, '
+                f'dist={dist:.3f}m) → giving up')
+            self._ws_ext_failed.add(self._ws_ext_pending_idx)
+            self._finish_ws_ext_drive()
+        else:
+            # Still driving — republish goal to keep navigator alive
+            goal = PoseStamped()
+            goal.header.frame_id = self._odom_frame
+            goal.header.stamp = self.get_clock().now().to_msg()
+            goal.pose.position.x = self._ws_ext_goal_pos[0]
+            goal.pose.position.y = self._ws_ext_goal_pos[1]
+            goal.pose.position.z = 0.0
+            goal.pose.orientation.w = 1.0
+            self._pub_goal.publish(goal)
+
+    def _finish_ws_ext_drive(self) -> None:
+        """After navigator reaches WS_EXT goal, apply body pose and settle."""
+        self._pub_spot_ctrl.publish(Bool(data=False))  # disable navigator
+        self._set_body_pose(self._ws_ext_pending_h, self._ws_ext_pending_p)
+        self._body_settle_start = self.get_clock().now().nanoseconds * 1e-9
+        self._ws_ext_driving = False
+
+    def _pub_debug_marker(self) -> None:
+        """Publish debug marker for current state visualization."""
+        pass
 
     def _set_state(self, new_state: str) -> None:
         if new_state != self._state:
@@ -728,32 +930,11 @@ class WBCCoordinatorNode(Node):
                 self._last_search_pitch = entry[2]
                 self._set_body_pose(self._search_body_height, entry[2], entry[3])
             if new_state == CoordState.SCANNING:
-                if self._fast_points is None:
-                    self._set_body_pose(self._handoff_body_height)
+                self._set_body_pose(self._handoff_body_height)
             if new_state == CoordState.PRE_APPROACH:
                 self._set_body_pose(0.0, 0.0)
                 self._torso_detected_ticks = 0
-            if new_state == CoordState.WS_EXTENSION:
-                self._save_ws_ext_anchor()
             self._state = new_state
-
-    def _save_ws_ext_anchor(self) -> None:
-        """Save Spot odom position+yaw as anchor for WS_EXTENSION box constraint."""
-        tf = self._tf_lookup(self._odom_frame, self._body_frame)
-        if tf is None:
-            self._ws_ext_anchor = None
-            self.get_logger().warn('WS_EXT: could not save anchor (TF unavailable)')
-            return
-        self._ws_ext_anchor = np.array([
-            tf.transform.translation.x,
-            tf.transform.translation.y,
-        ])
-        self._ws_ext_anchor_yaw = _yaw_from_quat(tf.transform.rotation)
-        self.get_logger().info(
-            f'WS_EXT anchor saved: '
-            f'p=[{self._ws_ext_anchor[0]:.2f},{self._ws_ext_anchor[1]:.2f}] '
-            f'yaw={math.degrees(self._ws_ext_anchor_yaw):.1f}°'
-        )
 
     def _set_body_pose(self, height: float, pitch: float = 0.0, yaw: float = 0.0) -> None:
         from tf_transformations import quaternion_from_euler
@@ -767,6 +948,7 @@ class WBCCoordinatorNode(Node):
         pose.orientation.w = q[3]
         self._pub_body_pose.publish(pose)
         self._pub_cmd_vel.publish(Twist())
+        self._current_body_height = height_clamped
         self.get_logger().info(
             f'body_pose → height={height_clamped:.2f}m  pitch={math.degrees(pitch):.1f}°  yaw={math.degrees(yaw):.1f}°')
 

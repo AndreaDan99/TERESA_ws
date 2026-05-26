@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """
-WBC QP Controller
-Reads EE goal from /wbc/ee_goal, arm joints from /joint_states and TF,
-solves holistic WBC split, publishes:
-  /ik_goal_pose  → z1_ik_to_jtc  (arm share, PoseStamped in 'world'/link00)
-  /my_spot/cmd_vel → Spot         (base share, Twist)
+WBC QP Controller — arm-only look-at + QP-based scanning.
 
-Update rate: update_period (default 1.5s — respects z1_ik_to_jtc traj_min_time=1.0s).
-Enabled/disabled via /wbc/enable (Bool).
+Modes (selected automatically from /wbc/state):
+  LOOKAT    — PRE_APPROACH: ω_des orientamento + null-space joint centering
+  SCAN_SEQ  — APPROACHING:  genera 11 pose dal null-space, le sequenzia,
+                             raccoglie dati, pubblica /z1/fast_points
+
+Outputs:
+  /wbc/ik_goal_pose  → IK goal per il braccio (via mux)
+  /wbc/ik_enable     → enable IK solver
+  /my_spot/cmd_vel   → Spot base velocity (P-controller, invariato)
+  /z1/fast_points    → FAST ultrasound points (in SCAN_SEQ mode)
+  /z1/fast_ready     → scan complete flag
 """
 import math
+import time
 
 import numpy as np
 import pinocchio as pin
@@ -19,29 +25,47 @@ from rclpy.node import Node
 from rclpy.duration import Duration
 import rclpy.time
 
-from geometry_msgs.msg import PoseStamped, TransformStamped, Twist
+from geometry_msgs.msg import Pose, PoseStamped, PoseArray, TransformStamped
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Bool, Float32
+from std_msgs.msg import Bool, String, Float32MultiArray
 
 from tf2_ros import Buffer, TransformListener, TransformException
-import tf2_geometry_msgs  # noqa: F401
 
 from teresa_utils.orientation import (
     compute_ee_orientation, compute_ee_orientation_minrot,
-    quat_to_rot, rot_to_quat, normalize_angle,
 )
 
-from spot_control.wbc_math import (
-    compute_j_base,
-    compute_j_holistic,
-    manipulability,
-    wbc_split,
-    wbc_split_with_yaw,
-)
+from spot_control.wbc_math import damped_pinv, null_space_projector, manipulability
 from z1_vision.workspace_checker import WorkspaceChecker
-
+from z1_vision.body_search_scanner import BodySearchScanner, ScanAction, ScanTick
 
 JOINT_ORDER = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']
+
+# ── Scan parameters (constants) ───────────────────────────────────────────────
+NULL_GRID_DELTA   = 0.20     # [rad] passo per direzione null-space (≈11°)
+NULL_GRID_N        = 3        # numero di direzioni del null-space da esplorare
+NULL_GRID_DIAG     = True     # includi diagonali vᵢ+vⱼ
+SCAN_POINT_TIMEOUT = 4.0      # [s] tempo raccolta dati per posa
+SCAN_MIN_FRAMES    = 5        # frame minimi per posa
+SCAN_EARLY_STOP    = 0.95     # early-stop detection score
+SCAN_STABILITY_K   = 10.0     # penalty stabilità 3D
+
+HOME_POS = np.array([-0.09, 0.0, 0.44])
+HOME_ORI = np.array([-0.0062, 0.4107, 0.0021, 0.9118])
+
+
+def _make_pose_stamped(pos: np.ndarray, orientation: np.ndarray,
+                        frame_id: str = 'world') -> PoseStamped:
+    p = PoseStamped()
+    p.header.frame_id = frame_id
+    p.pose.position.x    = float(pos[0])
+    p.pose.position.y    = float(pos[1])
+    p.pose.position.z    = float(pos[2])
+    p.pose.orientation.x = float(orientation[0])
+    p.pose.orientation.y = float(orientation[1])
+    p.pose.orientation.z = float(orientation[2])
+    p.pose.orientation.w = float(orientation[3])
+    return p
 
 
 class WBCQPControllerNode(Node):
@@ -49,37 +73,24 @@ class WBCQPControllerNode(Node):
     def __init__(self):
         super().__init__('wbc_qp_controller')
 
-        # ── Parameters ────────────────────────────────────────────────
+        # ── Parameters ────────────────────────────────────────────────────
         self.declare_parameter('dry_run',        False)
         self.declare_parameter('urdf_path', '')
         self.declare_parameter('odom_frame',    'my_spot/odom')
         self.declare_parameter('body_frame',    'my_spot/body')
         self.declare_parameter('z1_base_frame', 'world')
         self.declare_parameter('ee_frame',      'link06')
-        self.declare_parameter('lam_arm',       1.0)
-        self.declare_parameter('lam_base',      1.0)
+        self.declare_parameter('kp_ang',        1.5)
+        self.declare_parameter('k_null',        0.3)
         self.declare_parameter('damping',       1e-3)
-        self.declare_parameter('kp_pos',        1.0)
-        self.declare_parameter('kp_ang',        0.5)
-        self.declare_parameter('kp_lin_base',   0.5)
-        self.declare_parameter('kp_ang_base',   0.8)
-        self.declare_parameter('quality_ref',   0.05)
-        self.declare_parameter('v_min',         0.15)
-        self.declare_parameter('k_yaw',         0.5)
-        self.declare_parameter('vx_max',        0.4)
-        self.declare_parameter('wz_max',        0.5)
         self.declare_parameter('q_dot_max',     0.6)
-        self.declare_parameter('update_period', 1.5)
+        self.declare_parameter('update_period', 0.1)
         self.declare_parameter('workspace_safety_margin', 0.05)
-        self.declare_parameter('z1_mount_x',      0.20)
-        self.declare_parameter('z1_mount_y',      0.0)
-        self.declare_parameter('z1_mount_z',      0.20)
         self.declare_parameter('ik_goal_topic',      '/wbc/ik_goal_pose')
         self.declare_parameter('ik_enable_topic',    '/wbc/ik_enable')
-        self.declare_parameter('cmd_vel_topic',      '/my_spot/cmd_vel')
         self.declare_parameter('joint_states_topic', '/joint_states')
         self.declare_parameter('home_orientation', [-0.0062, 0.4107, 0.0021, 0.9118])
-        self.declare_parameter('orientation_mode', 'minrot')  # 'minrot' | 'gram_schmidt'
+        self.declare_parameter('orientation_mode', 'minrot')
 
         p = lambda n: self.get_parameter(n).value
         self._dry_run       = bool(p('dry_run'))
@@ -87,33 +98,26 @@ class WBCQPControllerNode(Node):
         self._body_frame    = p('body_frame')
         self._z1_base_frame = p('z1_base_frame')
         self._ee_frame      = p('ee_frame')
-        self._lam_arm       = float(p('lam_arm'))
-        self._lam_base      = float(p('lam_base'))
+        self._kp_ang        = float(p('kp_ang'))
+        self._k_null        = float(p('k_null'))
         self._damping       = float(p('damping'))
-        self._kp_pos        = float(p('kp_pos'))
-        self._kp_lin_base   = float(p('kp_lin_base'))
-        self._kp_ang_base   = float(p('kp_ang_base'))
-        self._quality_ref   = float(p('quality_ref'))
-        self._v_min         = float(p('v_min'))
-        self._k_yaw         = float(p('k_yaw'))
-        self._vx_max        = float(p('vx_max'))
-        self._wz_max        = float(p('wz_max'))
         self._q_dot_max     = float(p('q_dot_max'))
         self._update_period = float(p('update_period'))
         self._home_orientation = np.array([float(x) for x in p('home_orientation')])
         self._orientation_mode = p('orientation_mode')
 
-        # ── Pinocchio ─────────────────────────────────────────────────
+        # ── Pinocchio ─────────────────────────────────────────────────────
         urdf = p('urdf_path')
         if not urdf:
             import os
             try:
                 from ament_index_python.packages import get_package_share_directory
-                urdf = os.path.join(get_package_share_directory('z1_description'), 'urdf', 'z1.urdf')
+                urdf = os.path.join(get_package_share_directory('z1_description'),
+                                    'urdf', 'z1.urdf')
             except Exception:
                 urdf = os.path.expanduser(
-                    '~/Ros2_repositories/unitree_z1_ws/install/z1_description/share/z1_description/urdf/z1.urdf'
-                )
+                    '~/Ros2_repositories/unitree_z1_ws/install/z1_description'
+                    '/share/z1_description/urdf/z1.urdf')
         self.get_logger().info(f'URDF: {urdf}')
         self._model = pin.buildModelFromUrdf(urdf)
         self._data  = self._model.createData()
@@ -126,53 +130,61 @@ class WBCQPControllerNode(Node):
             safety_margin=float(p('workspace_safety_margin')),
         )
 
-        # ── TF ────────────────────────────────────────────────────────
+        # ── TF ────────────────────────────────────────────────────────────
         self._tf = Buffer()
         TransformListener(self._tf, self)
-        self._mount_x = float(p('z1_mount_x'))
-        self._mount_y = float(p('z1_mount_y'))
-        self._mount_z = float(p('z1_mount_z'))
 
-        # ── State ─────────────────────────────────────────────────────
+        # ── State ─────────────────────────────────────────────────────────
         self._enabled        = False
         self._goal: PoseStamped | None = None
         self._q_meas: np.ndarray | None = None
-        self._sigma_max      = 0.0    # quality [m] from QualityMonitor (not std dev)
-        self._desired_yaw: float | None = None  # target Spot yaw [rad, odom]
-        self._spot_control = True  # cmd_vel enabled by default
-        self._tf_ready   = False  # TF available flag
+        self._tf_ready       = False
+        self._mode           = 'LOOKAT'   # 'LOOKAT' | 'SCAN_SEQ'
+        self._wbc_state      = ''
 
-        # ── Sub / Pub ─────────────────────────────────────────────────
-        self.create_subscription(Bool,        '/wbc/enable',               self._cb_enable,      10)
-        self.create_subscription(PoseStamped, '/wbc/ee_goal',              self._cb_goal,        10)
-        self.create_subscription(JointState,  p('joint_states_topic'),     self._cb_joints,      50)
-        self.create_subscription(Float32,     '/wbc/target_uncertainty',   self._cb_uncert,      10)
-        self.create_subscription(Float32,     '/wbc/desired_yaw',          self._cb_desired_yaw, 10)
-        self.create_subscription(Bool,        '/wbc/spot_control',         self._cb_spot_control, 10)
+        # ── Scan state ────────────────────────────────────────────────────
+        self._scan_scanner: BodySearchScanner | None = None
+        self._scan_ik_done       = False
+        self._scan_data_queue: list[list[float]] = []
+        self._scan_torso_est: np.ndarray | None = None
+        self._scan_poses: list[PoseStamped] = []
 
+        # ── Subscriptions ─────────────────────────────────────────────────
+        self.create_subscription(Bool,        '/wbc/enable',          self._cb_enable,      10)
+        self.create_subscription(PoseStamped, '/wbc/ee_goal',         self._cb_goal,        10)
+        self.create_subscription(JointState,  p('joint_states_topic'), self._cb_joints,      50)
+        self.create_subscription(String,      '/wbc/state',           self._cb_wbc_state,   10)
+        self.create_subscription(Bool,        '/ik_done',             self._cb_ik_done,     10)
+        self.create_subscription(Float32MultiArray, '/torso_scan_point',
+                                  self._cb_scan_data, 10)
+
+        # ── Publishers ────────────────────────────────────────────────────
         if self._dry_run:
-            self._pub_ik  = self.create_publisher(PoseStamped, '/wbc/ik_goal_pose_debug',  10)
-            self._pub_en  = self.create_publisher(Bool,        '/wbc/ik_enable_debug',     10)
-            self._pub_vel = self.create_publisher(Twist,       '/wbc/cmd_vel_debug',       10)
-            self.get_logger().warn(
-                'DRY_RUN mode — output on /wbc/*_debug topics, no robot movement')
+            self._pub_ik  = self.create_publisher(PoseStamped, '/wbc/ik_goal_pose_debug', 10)
+            self._pub_en  = self.create_publisher(Bool,        '/wbc/ik_enable_debug',    10)
+            self.get_logger().warn('DRY_RUN mode')
         else:
             self._pub_ik  = self.create_publisher(PoseStamped, p('ik_goal_topic'),   10)
             self._pub_en  = self.create_publisher(Bool,        p('ik_enable_topic'), 10)
-            self._pub_vel = self.create_publisher(Twist,       p('cmd_vel_topic'),   10)
 
-        # ── Timer ─────────────────────────────────────────────────────
+        self._pub_fast       = self.create_publisher(PoseArray, '/z1/fast_points', 10)
+        self._pub_fast_ready = self.create_publisher(Bool,      '/z1/fast_ready',  10)
+        self._pub_tracker_scan = self.create_publisher(Bool, '/tracker_scan_mode', 10)
+        self._pub_tracker_reset = self.create_publisher(Bool, '/tracker_reset',    10)
+
+        # ── Timer ─────────────────────────────────────────────────────────
         self.create_timer(self._update_period, self._update)
-        self.get_logger().info('WBC QP Controller ready.')
+        self.get_logger().info('WBC QP Controller ready (arm-only).')
 
-    # ── Callbacks ─────────────────────────────────────────────────────
+    # ── Callbacks ─────────────────────────────────────────────────────────
 
     def _cb_enable(self, msg: Bool) -> None:
         self._enabled = msg.data
         if not self._enabled:
-            self._pub_vel.publish(Twist())
             en = Bool(); en.data = False
             self._pub_en.publish(en)
+            if self._mode == 'SCAN_SEQ':
+                self._end_scan()
 
     def _cb_goal(self, msg: PoseStamped) -> None:
         self._goal = msg
@@ -184,31 +196,32 @@ class WBCQPControllerNode(Node):
         except KeyError:
             pass
 
-    def _cb_uncert(self, msg: Float32) -> None:
-        self._sigma_max = float(msg.data)
+    def _cb_wbc_state(self, msg: String) -> None:
+        prev = self._wbc_state
+        self._wbc_state = msg.data
+        if msg.data == 'APPROACHING' and prev != 'APPROACHING':
+            self._start_scan()
+        elif msg.data != 'APPROACHING' and self._mode == 'SCAN_SEQ':
+            self._end_scan()
 
-    def _cb_desired_yaw(self, msg: Float32) -> None:
-        self._desired_yaw = float(msg.data)
+    def _cb_ik_done(self, msg: Bool) -> None:
+        self._scan_ik_done = msg.data
 
-    def _cb_spot_control(self, msg: Bool) -> None:
-        self._spot_control = msg.data
+    def _cb_scan_data(self, msg: Float32MultiArray) -> None:
+        self._scan_data_queue.append(list(msg.data))
 
-    # ── TF helpers ────────────────────────────────────────────────────
+    # ── TF helpers ────────────────────────────────────────────────────────
 
     def _tf_lookup(self, source: str, target: str,
-                   timeout_sec: float = 1.0) -> TransformStamped | None:
+                    timeout_sec: float = 1.0) -> TransformStamped | None:
         try:
             return self._tf.lookup_transform(
-                source, target,
-                rclpy.time.Time(), timeout=Duration(seconds=timeout_sec))
+                source, target, rclpy.time.Time(),
+                timeout=Duration(seconds=timeout_sec))
         except TransformException as e:
             if not self._tf_ready:
                 self.get_logger().warn(
-                    f'TF {source} → {target} non disponibile.\n'
-                    f'  Diagnostica: ros2 topic list | grep tf\n'
-                    f'  Verifica: 1) spot_ros2 attivo su SpotCore?  '
-                    f'2) ROS_DOMAIN_ID uguale?  '
-                    f'3) spot_name=\'my_spot\'?',
+                    f'TF {source} → {target} non disponibile.',
                     throttle_duration_sec=5.0)
             else:
                 self.get_logger().warn(
@@ -217,200 +230,138 @@ class WBCQPControllerNode(Node):
             return None
 
     def _tf_transform(self, pose: PoseStamped, target_frame: str,
-                      timeout_sec: float = 1.0) -> PoseStamped | None:
+                       timeout_sec: float = 1.0) -> PoseStamped | None:
         try:
             return self._tf.transform(
                 pose, target_frame, timeout=Duration(seconds=timeout_sec))
-        except TransformException as e:
-            if not self._tf_ready:
-                self.get_logger().warn(
-                    f'TF {pose.header.frame_id} → {target_frame} non disponibile.\n'
-                    f'  Diagnostica: ros2 topic list | grep tf',
-                    throttle_duration_sec=5.0)
-            else:
-                self.get_logger().warn(
-                    f'TF {pose.header.frame_id} → {target_frame} persa ({e})',
-                    throttle_duration_sec=2.0)
+        except TransformException:
             return None
 
-    # ── Main update ───────────────────────────────────────────────────
+    # ── Mode dispatch ─────────────────────────────────────────────────────
 
     def _update(self) -> None:
+        if self._mode == 'SCAN_SEQ':
+            self._tick_scan()
+            return
+
+        # LOOKAT mode
+        self._tick_lookat()
+
+    # ── LOOKAT mode (PRE_APPROACH) ────────────────────────────────────────
+
+    def _tick_lookat(self) -> None:
         if not self._enabled or self._goal is None or self._q_meas is None:
             return
 
-        # 1. EE pose in body frame (PC-only, always reliable)
+        # 1. EE pose in body frame
         ee_in_body = self._tf_lookup(self._body_frame, self._ee_frame)
         if ee_in_body is None:
             return
 
-        # 2. body position in odom (single hop, more reliable than full chain)
+        # 2. Body position in odom
         body_in_odom = self._tf_lookup(self._odom_frame, self._body_frame)
         if body_in_odom is None:
             return
 
-        # 3. Compose ee_in_odom from body_in_odom * ee_in_body
-        #    (avoids cross-machine TF chain that fails without clock sync)
+        # 3. Compose EE in odom
         _q = body_in_odom.transform.rotation
         _qv = np.array([_q.x, _q.y, _q.z])
         _qw = float(_q.w)
-        _p_eeb = np.array([
-            ee_in_body.transform.translation.x,
-            ee_in_body.transform.translation.y,
-            ee_in_body.transform.translation.z])
+        _p_eeb = np.array([ee_in_body.transform.translation.x,
+                           ee_in_body.transform.translation.y,
+                           ee_in_body.transform.translation.z])
         _p_eeb_rot = _p_eeb + 2.0 * np.cross(_qv, np.cross(_qv, _p_eeb) + _qw * _p_eeb)
-        _p_eeodom = np.array([
-            body_in_odom.transform.translation.x,
-            body_in_odom.transform.translation.y,
-            body_in_odom.transform.translation.z]) + _p_eeb_rot
+        _p_eeodom = np.array([body_in_odom.transform.translation.x,
+                              body_in_odom.transform.translation.y,
+                              body_in_odom.transform.translation.z]) + _p_eeb_rot
 
-        ee_in_odom = TransformStamped()
-        ee_in_odom.header.frame_id = self._odom_frame
-        ee_in_odom.child_frame_id = self._ee_frame
-        ee_in_odom.transform.translation.x = float(_p_eeodom[0])
-        ee_in_odom.transform.translation.y = float(_p_eeodom[1])
-        ee_in_odom.transform.translation.z = float(_p_eeodom[2])
-
-        # First successful TF lookup in this session → confirm connectivity
         if not self._tf_ready:
             self._tf_ready = True
-            self.get_logger().info(
-                f'TF disponibile: {self._odom_frame} → {self._body_frame} OK. '
-                f'SpotCore connesso via DDS.')
+            self.get_logger().info('TF disponibile — SpotCore connesso via DDS.')
 
-        # 4. Resolve goal to both odom (for position error) and link00 (for look-at).
-        #    Coordinator publishes in odom frame.
-        #    Z1 FSM publishes in world/link00 frame (WS_EXTENSION path).
+        # 4. Resolve goal to link00 frame
         goal_in = self._goal
         goal_frame = goal_in.header.frame_id
-
-        # Goal position in odom frame (for dp comparison with EE in odom)
         if goal_frame in ('world', 'link00', self._z1_base_frame):
-            goal_stamped = PoseStamped()
-            goal_stamped.header.frame_id = self._z1_base_frame
-            goal_stamped.header.stamp    = rclpy.time.Time().to_msg()
-            goal_stamped.pose            = goal_in.pose
-            goal_odom = self._tf_transform(goal_stamped, self._odom_frame)
-            if goal_odom is None:
-                return
-            goal_link00 = goal_stamped
+            goal_link00 = goal_in
         else:
-            goal_odom = goal_in
             goal_stamped = PoseStamped()
             goal_stamped.header.frame_id = goal_frame
-            goal_stamped.header.stamp    = rclpy.time.Time().to_msg()
-            goal_stamped.pose            = goal_in.pose
+            goal_stamped.header.stamp = rclpy.time.Time().to_msg()
+            goal_stamped.pose = goal_in.pose
             goal_link00 = self._tf_transform(goal_stamped, self._z1_base_frame)
             if goal_link00 is None:
                 return
 
-        # 5. EE position error → desired spatial velocity (Pinocchio: [ang(3), lin(3)])
-        dp = np.array([
-            goal_odom.pose.position.x - ee_in_odom.transform.translation.x,
-            goal_odom.pose.position.y - ee_in_odom.transform.translation.y,
-            goal_odom.pose.position.z - ee_in_odom.transform.translation.z,
-        ])
-        dp_norm = float(np.linalg.norm(dp))
-        v_des = np.zeros(6)
-        v_des[3:6] = self._kp_pos * dp
-
-        # 6. Pinocchio: J_arm in LOCAL_WORLD_ALIGNED (= odom-aligned)
+        # 5. FK + Jacobian at current joint config
         n_arm = self._q_meas.shape[0]
         q = self._q_neutral.copy()
         q[:n_arm] = self._q_meas
         pin.computeJointJacobians(self._model, self._data, q)
         pin.updateFramePlacements(self._model, self._data)
+        T_ee = self._data.oMf[self._ee_id]
         J_arm_full = pin.getFrameJacobian(
             self._model, self._data, self._ee_id,
             pin.ReferenceFrame.LOCAL_WORLD_ALIGNED)
         J_arm = J_arm_full[:, :n_arm]
 
-        # 7. J_base in body frame → rotate to odom frame to match J_arm
-        p_ee_body = np.array([
-            ee_in_body.transform.translation.x,
-            ee_in_body.transform.translation.y,
-            ee_in_body.transform.translation.z,
-        ])
-        J_base_body = compute_j_base(p_ee_body)
-        R_body_to_odom = quat_to_rot(body_in_odom.transform.rotation)
-        J_base_odom = np.zeros((6, 2))
-        J_base_odom[:3, :] = R_body_to_odom @ J_base_body[:3, :]
-        J_base_odom[3:, :] = R_body_to_odom @ J_base_body[3:, :]
-
-        J_hol = compute_j_holistic(J_arm, J_base_odom)
-
-        # 8. Arm: WBC damped pseudo-inverse (keep look-at orientation quality)
-        m = manipulability(J_arm)
-        yaw_error = 0.0
-        if self._desired_yaw is not None:
-            from tf_transformations import euler_from_quaternion
-            _, _, θ_cur = euler_from_quaternion([
-                body_in_odom.transform.rotation.x,
-                body_in_odom.transform.rotation.y,
-                body_in_odom.transform.rotation.z,
-                body_in_odom.transform.rotation.w,
-            ])
-            yaw_error = normalize_angle(self._desired_yaw - θ_cur)
-            q_dot, _, _ = wbc_split_with_yaw(
-                J_hol, v_des, m,
-                yaw_error=yaw_error,
-                k_yaw=self._k_yaw,
-                lam_arm=self._lam_arm, lam_base=self._lam_base,
-                damping=self._damping,
-                vx_max=self._vx_max, wz_max=self._wz_max,
-                q_dot_max=self._q_dot_max,
-            )
+        # 6. Orientation error → ω_des (look-at: X_ee points to target)
+        x_current = T_ee.rotation[:, 0]
+        p_ee = T_ee.translation
+        target_link00 = np.array([goal_link00.pose.position.x,
+                                   goal_link00.pose.position.y,
+                                   goal_link00.pose.position.z])
+        x_desired = target_link00 - p_ee
+        x_norm = float(np.linalg.norm(x_desired))
+        if x_norm < 1e-6:
+            x_desired = np.array([1.0, 0.0, 0.0])
         else:
-            q_dot, _, _ = wbc_split(
-                J_hol, v_des, m,
-                lam_arm=self._lam_arm, lam_base=self._lam_base,
-                damping=self._damping,
-                vx_max=self._vx_max, wz_max=self._wz_max,
-                q_dot_max=self._q_dot_max,
-            )
+            x_desired = x_desired / x_norm
 
-        # 9. Base: robust P-controller (1 TF hop: odom→body, decoupled from arm)
-        dp_body = R_body_to_odom.T @ dp
-        dist_b = float(np.linalg.norm(dp_body))
-        angle_b = math.atan2(dp_body[1], dp_body[0])
-        vx = float(np.clip(self._kp_lin_base * dist_b, 0.0, self._vx_max))
-        wz = float(np.clip(self._kp_ang_base * angle_b, -self._wz_max, self._wz_max))
+        axis = np.cross(x_current, x_desired)
+        sin_a = float(np.linalg.norm(axis))
+        cos_a = float(np.clip(np.dot(x_current, x_desired), -1.0, 1.0))
+        angle = math.atan2(sin_a, cos_a)
 
-        # 10. Quality-based velocity scaling — never zero, Spot always moves.
-        # quality [m] = EMA(|new_meas - fixed_target|) + growth when Orbbec lost.
-        # v_min = minimum velocity fraction (never stops before handoff).
-        quality = self._sigma_max   # now quality [m], not standard deviation
-        k = 1.0 / self._quality_ref
-        v_scale = self._v_min + (1.0 - self._v_min) / (1.0 + k * quality)
-        vx *= v_scale
-        wz *= v_scale
+        if sin_a < 1e-6:
+            ω_des = np.zeros(3)
+        else:
+            ω_des = self._kp_ang * angle * (axis / sin_a)
 
-        # 9. Integrate q_dot → q_new → FK → new EE pose in Pinocchio world (= link00)
+        # 7. Task Jacobian (angular part only, 3×6) + damped pseudo-inverse
+        J_task = J_arm[:3, :]
+        m = manipulability(J_arm)
+        damp_adaptive = self._damping * (1.0 + 1.0 / (m + 1e-4))
+        J_pinv = damped_pinv(J_task, damp_adaptive)
+
+        # 8. Null-space projector + joint centering
+        N = null_space_projector(J_task, J_pinv)
+        q_low = self._model.lowerPositionLimit[:n_arm]
+        q_high = self._model.upperPositionLimit[:n_arm]
+        q_mid = (q_low + q_high) / 2.0
+        q_dot_null = self._k_null * (q_mid - self._q_meas)
+        q_dot_null = np.clip(q_dot_null, -self._q_dot_max, self._q_dot_max)
+
+        # 9. Combined q_dot + FK prediction
+        q_dot = J_pinv @ ω_des + N @ q_dot_null
         q_new = q.copy()
-        q_new[:n_arm] = np.clip(
-            self._q_meas + q_dot * self._update_period,
-            self._model.lowerPositionLimit[:n_arm],
-            self._model.upperPositionLimit[:n_arm],
-        )
+        q_new[:n_arm] = np.clip(q[:n_arm] + q_dot * self._update_period,
+                                 q_low, q_high)
         pin.forwardKinematics(self._model, self._data, q_new)
         pin.updateFramePlacements(self._model, self._data)
         T_new = self._data.oMf[self._ee_id]
 
-        # 9.5. Clip EE goal to safe workspace (max_reach - safety_margin)
-        ws_pos = np.array([T_new.translation[0],
-                           T_new.translation[1],
+        # 10. Workspace clipping
+        ws_pos = np.array([T_new.translation[0], T_new.translation[1],
                            T_new.translation[2]])
         clipped_pos, was_clipped, _ = self._ws_checker.clip_target(ws_pos)
         if was_clipped:
             self.get_logger().warn(
-                f'WBC goal clipped to workspace (safety_margin={self._ws_checker.safety_margin:.2f}m): '
-                f'raw=[{ws_pos[0]:.3f},{ws_pos[1]:.3f},{ws_pos[2]:.3f}] → '
-                f'clipped=[{clipped_pos[0]:.3f},{clipped_pos[1]:.3f},{clipped_pos[2]:.3f}]',
+                f'WBC goal clipped: [{ws_pos[0]:.3f},{ws_pos[1]:.3f},{ws_pos[2]:.3f}] '
+                f'→ [{clipped_pos[0]:.3f},{clipped_pos[1]:.3f},{clipped_pos[2]:.3f}]',
                 throttle_duration_sec=3.0)
 
-        # 10. Publish EE goal — position from FK, orientation from EE to target.
-        # X_ee = direction from predicted EE (clipped_pos) to target (in link00 frame).
-        # Consistent: position and orientation use same time horizon (q_new).
+        # 11. Publish IK goal
         goal_msg = PoseStamped()
         goal_msg.header.stamp    = self.get_clock().now().to_msg()
         goal_msg.header.frame_id = 'world'
@@ -418,19 +369,9 @@ class WBCQPControllerNode(Node):
         goal_msg.pose.position.y = float(clipped_pos[1])
         goal_msg.pose.position.z = float(clipped_pos[2])
 
-        target_link00 = np.array([goal_link00.pose.position.x,
-                                   goal_link00.pose.position.y,
-                                   goal_link00.pose.position.z])
-        x_ee = target_link00 - clipped_pos
-        x_norm = float(np.linalg.norm(x_ee))
-        if x_norm < 1e-6:
-            x_ee = np.array([1.0, 0.0, 0.0])
-        else:
-            x_ee = x_ee / x_norm
-
-        quat = (compute_ee_orientation_minrot(x_ee, self._home_orientation.tolist())
+        quat = (compute_ee_orientation_minrot(x_desired, self._home_orientation.tolist())
                 if self._orientation_mode == 'minrot'
-                else compute_ee_orientation(x_ee, self._home_orientation.tolist()))
+                else compute_ee_orientation(x_desired, self._home_orientation.tolist()))
         goal_msg.pose.orientation.x = float(quat[0])
         goal_msg.pose.orientation.y = float(quat[1])
         goal_msg.pose.orientation.z = float(quat[2])
@@ -440,19 +381,209 @@ class WBCQPControllerNode(Node):
         self._pub_en.publish(en)
         self._pub_ik.publish(goal_msg)
 
-        # 11. Publish cmd_vel for Spot (suppressed when spot_control=False)
-        if self._spot_control:
-            twist = Twist()
-            twist.linear.x  = float(vx)
-            twist.angular.z = float(wz)
-            self._pub_vel.publish(twist)
-
-        prefix = '[DRY_RUN] ' if self._dry_run else ''
         self.get_logger().info(
-            f'{prefix}WBC: m={m:.3f} vx={vx:.3f} wz={wz:.3f} '
-            f'|dp|={dp_norm:.3f} q={quality:.3f} v_scale={v_scale:.2f} '
-            f'yaw_err={math.degrees(yaw_error):.1f}°',
+            f'LOOKAT: m={m:.3f} |ω|={np.linalg.norm(ω_des):.3f} '
+            f'angle={math.degrees(angle):.1f}°',
             throttle_duration_sec=2.0)
+
+    # ── SCAN_SEQ mode (APPROACHING) ───────────────────────────────────────
+
+    def _start_scan(self) -> None:
+        self._mode = 'SCAN_SEQ'
+        self._scan_ik_done = False
+        self._scan_data_queue.clear()
+
+        poses = self._gen_scan_poses()
+        if not poses:
+            self.get_logger().warn('No WBC scan poses generated — DONE')
+            self._publish_fast_points()
+            self._mode = 'LOOKAT'
+            return
+
+        self._scan_poses = poses
+        self._scan_scanner = BodySearchScanner(
+            scan_poses=poses,
+            scan_point_timeout=SCAN_POINT_TIMEOUT,
+            scan_min_frames=SCAN_MIN_FRAMES,
+            early_stop_score=SCAN_EARLY_STOP,
+            logger=self.get_logger(),
+            stability_k=SCAN_STABILITY_K,
+        )
+        self._scan_scanner.reset()
+
+        # Enable tracker scan mode
+        self._pub_tracker_scan.publish(Bool(data=True))
+
+        self.get_logger().info(f'SCAN_SEQ: {len(poses)} WBC-generated poses')
+
+    def _end_scan(self) -> None:
+        self._mode = 'LOOKAT'
+        self._pub_tracker_scan.publish(Bool(data=False))
+        self._pub_en.publish(Bool(data=False))
+        if self._scan_scanner is not None:
+            torso = self._scan_scanner.fused_torso_xyz()
+            if torso is not None:
+                self._scan_torso_est = torso
+            self._scan_scanner = None
+        self._scan_poses.clear()
+
+    def _tick_scan(self) -> None:
+        if self._scan_scanner is None:
+            return
+
+        # Feed accumulated scan data
+        for data in self._scan_data_queue:
+            self._scan_scanner.feed_scan_data(data)
+        self._scan_data_queue.clear()
+
+        now = self.get_clock().now().nanoseconds * 1e-9
+        st: ScanTick = self._scan_scanner.tick(ik_done=self._scan_ik_done, now=now)
+
+        if st.action == ScanAction.SEND_IK and st.goal is not None:
+            self._scan_ik_done = False
+            self._pub_tracker_reset.publish(Bool(data=True))
+            self._pub_ik.publish(st.goal)
+            self._pub_en.publish(Bool(data=True))
+
+        elif st.action in (ScanAction.EXIT_SCAN_MODE, ScanAction.DONE):
+            self._pub_en.publish(Bool(data=False))
+            self._pub_tracker_scan.publish(Bool(data=False))
+            self._publish_fast_points()
+            self._mode = 'LOOKAT'
+
+        elif st.action == ScanAction.FAILED:
+            self.get_logger().warn('Scan FAILED')
+            self._pub_en.publish(Bool(data=False))
+            self._pub_tracker_scan.publish(Bool(data=False))
+            self._publish_fast_points()
+            self._mode = 'LOOKAT'
+
+    def _gen_scan_poses(self) -> list[PoseStamped]:
+        """Generate scan poses via null-space of the look-at task."""
+        if self._q_meas is None:
+            self.get_logger().warn('_gen_scan_poses: no joint state')
+            return []
+
+        n_arm = self._q_meas.shape[0]
+        q = self._q_neutral.copy()
+        q[:n_arm] = self._q_meas
+
+        pin.computeJointJacobians(self._model, self._data, q)
+        pin.updateFramePlacements(self._model, self._data)
+        T_ee = self._data.oMf[self._ee_id]
+        p_ee = T_ee.translation
+        J_arm_full = pin.getFrameJacobian(
+            self._model, self._data, self._ee_id,
+            pin.ReferenceFrame.LOCAL_WORLD_ALIGNED)
+        J_arm = J_arm_full[:, :n_arm]
+
+        # Look-at direction: from EE to goal target
+        if self._goal is not None:
+            target = np.array([self._goal.pose.position.x,
+                               self._goal.pose.position.y,
+                               self._goal.pose.position.z])
+        else:
+            target = p_ee + np.array([0.35, 0, 0])
+
+        x_desired = target - p_ee
+        x_desired = x_desired / max(float(np.linalg.norm(x_desired)), 1e-6)
+
+        # Angular Jacobian (3×6) + null-space projector
+        J_task = J_arm[:3, :]
+        J_pinv = damped_pinv(J_task)
+        N = null_space_projector(J_task, J_pinv)
+
+        # SVD → basis of null-space
+        _, S, Vt = np.linalg.svd(N)
+        rank = int(np.sum(S > 1e-6))
+        if rank < 1:
+            self.get_logger().warn(f'_gen_scan_poses: null-space rank={rank} (arm singular?)')
+            rank = min(3, n_arm)
+        basis = Vt[:rank, :].T  # 6×rank
+
+        q_low = self._model.lowerPositionLimit[:n_arm]
+        q_high = self._model.upperPositionLimit[:n_arm]
+        delta = NULL_GRID_DELTA
+        n_dir = min(NULL_GRID_N, rank)
+
+        poses = []
+
+        # Home pose
+        home_pose = _make_pose_stamped(p_ee, compute_ee_orientation(
+            x_desired, HOME_ORI.tolist()))
+        poses.append(home_pose)
+
+        # ±δ along each basis direction
+        for i in range(n_dir):
+            for sign in [-1.0, 1.0]:
+                q_new = np.clip(q[:n_arm] + sign * delta * basis[:, i],
+                                 q_low, q_high)
+                pin.forwardKinematics(self._model, self._data, q_new)
+                pin.updateFramePlacements(self._model, self._data)
+                T_new = self._data.oMf[self._ee_id]
+                pose = _make_pose_stamped(T_new.translation,
+                                           compute_ee_orientation(
+                                               x_desired, HOME_ORI.tolist()))
+                poses.append(pose)
+
+        # Diagonal combinations: v_i + v_j
+        if NULL_GRID_DIAG and n_dir >= 2:
+            for i in range(min(n_dir - 1, 2)):
+                j = i + 1
+                for si, sj in [(1, 1), (1, -1)]:
+                    q_new = np.clip(
+                        q[:n_arm] + delta * (si * basis[:, i] + sj * basis[:, j]),
+                        q_low, q_high)
+                    pin.forwardKinematics(self._model, self._data, q_new)
+                    pin.updateFramePlacements(self._model, self._data)
+                    T_new = self._data.oMf[self._ee_id]
+                    pose = _make_pose_stamped(T_new.translation,
+                                               compute_ee_orientation(
+                                                   x_desired, HOME_ORI.tolist()))
+                    poses.append(pose)
+
+        self.get_logger().info(
+            f'WBC grid: {len(poses)} poses (null-space rank={rank}, basis={n_dir})')
+        return poses
+
+    # ── FAST point publishing ─────────────────────────────────────────────
+
+    def _publish_fast_points(self) -> None:
+        torso = self._scan_torso_est
+        if torso is None:
+            # Fallback: use approach goal position
+            if self._goal is not None:
+                torso = np.array([self._goal.pose.position.x,
+                                  self._goal.pose.position.y,
+                                  self._goal.pose.position.z])
+            else:
+                self.get_logger().warn('No torso estimate or goal — empty FAST')
+                self._pub_fast.publish(PoseArray())
+                self._pub_fast_ready.publish(Bool(data=True))
+                return
+
+        fast = PoseArray()
+        fast.header.frame_id = self._z1_base_frame
+        offsets = [
+            (0.00, 0.00),          # Hub
+            (0.00, -0.08),         # Subxiphoid
+            (-0.05, -0.04),        # RUQ
+            (0.05, -0.04),         # LUQ
+            (0.00, 0.10),          # Suprapubic
+        ]
+        for dx, dy in offsets:
+            pt = Pose()
+            pt.position.x = float(torso[0] + dx)
+            pt.position.y = float(torso[1] + dy)
+            pt.position.z = float(torso[2])
+            pt.orientation.w = 1.0
+            fast.poses.append(pt)
+
+        self._pub_fast.publish(fast)
+        self._pub_fast_ready.publish(Bool(data=True))
+        self.get_logger().info(
+            f'FAST points published ({len(fast.poses)} pts, '
+            f'torso=[{torso[0]:.2f},{torso[1]:.2f},{torso[2]:.2f}])')
 
 
 def main(args=None):

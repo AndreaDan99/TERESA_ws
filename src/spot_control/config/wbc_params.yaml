@@ -10,43 +10,18 @@ wbc_qp_controller:
     z1_base_frame:   'link00'
     ee_frame:        'link06'
 
-    # QP weights
-    lam_arm:   1.0
-    lam_base:  1.0
-    damping:   1.0e-3
+    # Arm-only WBC gains
+    kp_ang: 1.5     # [rad/s per rad] orientamento look-at
+    k_null: 0.3     # joint centering gain in null-space
+    damping: 1.0e-3 # base damping (adattivo: λ * (1 + 1/m))
 
-    # Proportional gain EE error → desired velocity
-    kp_pos: 1.0    # [1/s]
-    kp_ang: 0.5    # [1/s]
-
-    # Quality-based velocity scaling — never zero, Spot always moves.
-    # v_scale = v_min + (1 - v_min) / (1 + quality / quality_ref)
-    # quality [m] from QualityMonitor: 0.01=perfect, 0.50=Orbbec lost for ~10s
-    quality_ref: 0.05     # [m] quality where v_scale = (1+v_min)/2
-    v_min: 0.15           # minimum velocity fraction (never stops before handoff)
-
-    # Yaw task gain: desired yaw rate = k_yaw * yaw_error [rad/s per rad]
-    # Trades off with EE position tracking via the extended 7×8 Jacobian.
-    k_yaw: 0.5
-
-    # Base P-controller (decoupled from arm)
-    kp_lin_base: 0.5   # [m/s per m] forward gain
-    kp_ang_base: 0.8   # [rad/s per rad] angular gain
-
-    # Velocity limits
-    vx_max:    0.4   # [m/s]
-    wz_max:    0.5   # [rad/s]
+    # Joint velocity limit
     q_dot_max: 0.6   # [rad/s]
 
-    # Goal update period — controls how often WBC recomputes cmd_vel + IK goals.
+    # Goal update period — controls how often WBC recomputes IK goals.
     # IK solver processes goals sequentially (one trajectory at a time), so higher
     # rate (> traj_min_time) just keeps the latched goal fresh.
-    update_period: 0.1   # [s] = 10 Hz (matches spot_goal_navigator rate)
-
-    # Z1 mount offset on Spot body [m]
-    z1_mount_x: 0.20    # forward from my_spot/body
-    z1_mount_y: 0.0     # left from my_spot/body
-    z1_mount_z: 0.20    # up from my_spot/body
+    update_period: 0.1   # [s] = 10 Hz
 
     # EE goal orientation: X_ee points toward target, Y_ee near home config.
     # Must match home_orientation in z1_fsm_params.yaml.
@@ -65,7 +40,6 @@ wbc_qp_controller:
     # Topics — output to mux, not directly to z1_ik_to_jtc
     ik_goal_topic:      '/wbc/ik_goal_pose'
     ik_enable_topic:    '/wbc/ik_enable'
-    cmd_vel_topic:      '/my_spot/cmd_vel'
     joint_states_topic: '/joint_states'
 
 wbc_coordinator:
@@ -84,11 +58,6 @@ wbc_coordinator:
     quality_min: 0.01        # [m] floor
     quality_max: 0.20        # [m] ceiling (reduced: keeps v_scale ≥ 0.33)
     quality_buf_size: 3      # number of initial measurements to freeze target
-
-    # WS_EXTENSION bounding box (relative to Spot position at WS_EXTENSION entry)
-    ws_ext_fwd_limit: 0.20   # [m] max forward displacement
-    ws_ext_lat_limit: 0.20   # [m] max lateral displacement (±)
-    ws_ext_bwd_limit: 0.50   # [m] max backward displacement
 
     # Body height at handoff — lowers Spot so Z1 can reach the patient [m, offset from nominal]
     handoff_body_height: -0.15   # abbassa Spot di 15 cm al handoff
@@ -115,6 +84,13 @@ wbc_coordinator:
     body_grid_pitches: [0.0, 0.087, 0.17, 0.26]    # [rad] 0°, 5°, 10°, 15°
     body_sweet_spot: [0.35, 0.0, 0.30]              # [m] centro workspace Z1 in link00
     body_settle_time: 1.5                             # [s] attesa dopo body_pose
+
+    # WS_EXTENSION grid search (h, p, dx, dy) — fallback when (h,p) alone insufficient
+    ws_ext_dx_steps: 5                         # number of lateral/fwd grid steps
+    ws_ext_dx_max: 0.20                        # [m] max lateral displacement (±)
+    ws_ext_dy_fwd_max: 0.20                    # [m] max forward displacement
+    ws_ext_dy_bwd_max: 0.30                    # [m] max backward displacement
+    navigator_timeout: 5.0                     # [s] max wait for Spot to reach WS_EXT goal
 
     # Topics
     posture_confidence_topic: '/human_pose/posture_confidence'

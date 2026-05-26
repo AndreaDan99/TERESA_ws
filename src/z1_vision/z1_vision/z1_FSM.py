@@ -36,7 +36,6 @@ class Z1FSM(Node):
     FAULT                = "FAULT"
     BODY_SCANNING        = "BODY_SCANNING"
     SCAN_PAUSE           = "SCAN_PAUSE"
-    REQUESTING_WS_EXT    = "REQUESTING_WS_EXT"
 
     # States where the torque_controller may be active.
     # Any keyboard command arriving in these states must first switch to JTC.
@@ -107,12 +106,8 @@ class Z1FSM(Node):
         self._scan_pause_s = float(self.get_parameter("scan_pause_s").value)
         self._wait_ik_start: float | None = None
 
-        # ── WBC workspace extension interface ───────────────────────────
-        self.declare_parameter('wbc_ws_request_topic', '/wbc/ws_request')
-        self.declare_parameter('wbc_ee_goal_topic',    '/wbc/ee_goal')
-        self.declare_parameter('wbc_state_topic',      '/wbc/state')
-        self.declare_parameter('ws_ext_max_retries',   3)
-        self._ws_ext_max_retries = int(self.get_parameter('ws_ext_max_retries').value)
+        # ── WBC interface ──────────────────────────────────────────────
+        self.declare_parameter('wbc_state_topic', '/wbc/state')
 
         # ── Workspace out-of-range topic ────────────────────────────────
         self.declare_parameter("target_out_of_workspace_topic", "/target_out_of_workspace")
@@ -257,11 +252,9 @@ class Z1FSM(Node):
         #   la scan (da /torso_scan_point). Usata per look-at dinamico: quando
         #   il tracker inizia a vedere il torso, i goal IK successivi vengono
         #   riorientati verso la posizione reale invece del look-at fisso pre-calcolato.
-        # ── WS_EXTENSION state ───────────────────────────────────────────
+        # ── WBC state tracking ──────────────────────────────────────────
         self._wbc_state_str:      str | None                = None
         self._wbc_wait_start:   float | None              = None   # timestamp primo ingresso in WAITING senza WBC
-        self._ws_ext_retries:     int                       = 0
-        self._ws_ext_confirmed:   bool                      = False
 
         self._body_scan_done: bool                         = False
         self._precomputed_fast_points: PoseArray | None   = None  # from WBC
@@ -316,10 +309,6 @@ class Z1FSM(Node):
         self.pub_torso_scan_seed     = self.create_publisher(PointStamped, '/torso_scan_seed',    10)
         self.pub_torso_scan_keypoints = self.create_publisher(
             Float32MultiArray, '/torso_scan_keypoints', 10)
-        self.pub_wbc_ws_request = self.create_publisher(
-            Bool, self.get_parameter('wbc_ws_request_topic').value, 10)
-        self.pub_wbc_ee_goal = self.create_publisher(
-            PoseStamped, self.get_parameter('wbc_ee_goal_topic').value, 10)
 
         # ── Service clients: switch controller ──────────────────────────
         self.switch_to_torque_client = self.create_client(Trigger, '/safe_switch/to_torque')
@@ -419,7 +408,6 @@ class Z1FSM(Node):
         if s == self.WAITING:
             self.ik_done                = False
             self._approach_command_sent = False
-            self._ws_ext_retries        = 0
             self._scan_mgr.reset()   # reset indice scan ad ogni nuovo ciclo
 
         if s == self.CHECKING_WORKSPACE:
@@ -489,14 +477,9 @@ class Z1FSM(Node):
                 f'→ poi {next_pt}'
             )
 
-        if s == self.REQUESTING_WS_EXT:
-            self._ws_ext_confirmed = False
-            self._wbc_state_str    = ''
-
         if s == self.HOMING:
             self.ik_done              = False
             self._homing_command_sent = False
-            self._ws_ext_retries      = 0
             # NON resettare _body_scan_done qui: il reset va fatto solo su
             # comando esplicito 'home' / 'reset', non dopo il body scan.
 
@@ -1176,14 +1159,38 @@ class Z1FSM(Node):
         # ── CHECKING_WORKSPACE ────────────────────────────────────────────
         elif self.state == self.CHECKING_WORKSPACE:
 
-            # Avvia il calcolo: serve un target fresco per fare il latch
+            # Avvia il calcolo: serve un target per fare il latch
             if self._workspace_future is None:
-                if not self.torso_target_fresh():
-                    self.get_logger().warn(
-                        "⚠️  Nessun target fresco per workspace check → WAITING"
-                    )
-                    self.set_state(self.WAITING)
-                    return
+
+                # Compute target position based on point index
+                if self._scan_mgr.idx == 0:
+                    # Center hub: use live torso tracker target
+                    if not self.torso_target_fresh():
+                        self.get_logger().warn(
+                            "⚠️  Nessun target fresco per workspace check → WAITING"
+                        )
+                        self._workspace_future = None
+                        self.set_state(self.WAITING)
+                        return
+                    target_pos = self._pose_to_np(self.last_torso_pose)
+                    self._checker_input_pose = self.last_torso_pose
+                else:
+                    # FAST point: compute from center_approach_pose + offsets
+                    c = self._scan_mgr._center_approach_pose
+                    if c is None:
+                        self.get_logger().warn(
+                            'CHECKING_WORKSPACE: center_approach_pose missing → WAITING'
+                        )
+                        self._workspace_future = None
+                        self.set_state(self.WAITING)
+                        return
+                    off_n = self._scan_mgr.current_offset
+                    off_c = self._scan_mgr.offsets[0]
+                    tx = c.pose.position.x
+                    ty = c.pose.position.y + (off_n[1] - off_c[1])
+                    tz = c.pose.position.z + (off_n[2] - off_c[2])
+                    target_pos = np.array([tx, ty, tz], dtype=float)
+                    self._checker_input_pose = c
 
                 # Se il checker non è disponibile, salta il controllo
                 if self._checker is None:
@@ -1191,15 +1198,14 @@ class Z1FSM(Node):
                         "⚠️  WorkspaceChecker non disponibile → skip check",
                         throttle_duration_sec=5.0,
                     )
-                    self._clipped_target   = self.last_torso_pose
+                    self._clipped_target   = self._checker_input_pose
                     self._target_out_of_ws = False
                     self.pub_out_of_workspace.publish(Bool(data=False))
+                    self._workspace_future = None
                     self.set_state(self.APPROACHING)
                     return
 
                 # Latch del target corrente → da qui il robot si impegna su questa posa
-                target_pos = self._pose_to_np(self.last_torso_pose)
-                self._checker_input_pose = self.last_torso_pose
                 self._workspace_future   = self._ws_executor.submit(
                     self._checker.clip_target, target_pos, self._arm_base
                 )
@@ -1218,6 +1224,7 @@ class Z1FSM(Node):
                 clipped_pos, was_clipped, max_safe = self._workspace_future.result()
             except Exception as e:
                 self.get_logger().error(f"❌ WorkspaceChecker errore: {e} → WAITING")
+                self._workspace_future = None
                 self.set_state(self.WAITING)
                 return
 
@@ -1230,32 +1237,33 @@ class Z1FSM(Node):
 
             if was_clipped:
                 self.get_logger().warn(
-                    f"⚠️  Target fuori workspace → clippato a {max_safe:.3f} m dalla base "
-                    f"(pubblicato /target_out_of_workspace=True)"
+                    f"⚠️  Target fuori workspace (max_safe={max_safe:.3f}m)"
                 )
-                if self._ws_ext_retries < self._ws_ext_max_retries:
-                    approach_goal = self._make_approach_pose()
-                    if approach_goal is not None:
-                        self.pub_wbc_ee_goal.publish(approach_goal)
-                        self.pub_wbc_ws_request.publish(Bool(data=True))
-                        self.get_logger().info(
-                            f'🤖 WS_EXT request '
-                            f'[{self._ws_ext_retries + 1}/{self._ws_ext_max_retries}]: '
-                            f'Spot riposizionamento richiesto'
-                        )
-                        self.set_state(self.REQUESTING_WS_EXT)
-                        return
+                # Coordinator already tried grid search (h,p) + WS_EXT (h,p,dx,dy).
+                # If still out of workspace: center hub allowed (must save pose),
+                # other points skip to next.
+                if self._scan_mgr.idx == 0:
+                    self.get_logger().warn(
+                        '⚠️  Centro hub fuori workspace → procedo con target clippato'
+                    )
                 else:
                     self.get_logger().warn(
-                        f'⚠️  WS_EXT max retries ({self._ws_ext_max_retries}) raggiunti '
-                        f'→ procedo con target clippato'
+                        f'⏭  Skipping {self._scan_mgr.current_name} (fuori workspace)'
                     )
+                    self._scan_mgr.advance()
+                    nxt = Int32()
+                    nxt.data = (-1 if self._scan_mgr.is_complete else self._scan_mgr.idx)
+                    self.pub_next_point.publish(nxt)
+                    self._body_ready = False
+                    self._workspace_future = None
+                    self.set_state(self.SCAN_PAUSE)
+                    return
             else:
                 self.get_logger().info(
                     f"✅ Target nel workspace (max_safe = {max_safe:.3f} m)"
                 )
-                self._ws_ext_retries = 0
 
+            self._workspace_future = None
             self.set_state(self.APPROACHING)
 
         # ── APPROACHING ───────────────────────────────────────────────────
@@ -1653,10 +1661,10 @@ class Z1FSM(Node):
                     elapsed = self.get_clock().now().nanoseconds * 1e-9 - self._scan_pause_start
                     if elapsed >= self._scan_pause_s:
                         self.get_logger().info(
-                            f'▶  SCAN_PAUSE terminata → APPROACHING '
+                            f'▶  SCAN_PAUSE terminata → CHECKING_WORKSPACE '
                             f'{self._scan_mgr.current_name}'
                         )
-                        self.set_state(self.APPROACHING)
+                        self.set_state(self.CHECKING_WORKSPACE)
                 else:
                     elapsed = self.get_clock().now().nanoseconds * 1e-9 - self._scan_pause_start
                     timeout = float(self.get_parameter('body_ready_timeout').value)
@@ -1665,22 +1673,6 @@ class Z1FSM(Node):
                             f'⏰ body_ready timeout ({timeout:.1f}s) → procedo comunque'
                         )
                         self._body_ready = True  # force proceed
-
-        # ── REQUESTING_WS_EXT ────────────────────────────────────────────
-        elif self.state == self.REQUESTING_WS_EXT:
-            # On entry: _wbc_state_str reset to '' (line 463), so any SCANNING
-            # is fresh — no stale-guard needed.
-            # The WBC may transition WS_EXTENSION→SCANNING between two FSM ticks;
-            # use elif so SCANNING always triggers progression.
-            if self._wbc_state_str == 'WS_EXTENSION':
-                self._ws_ext_confirmed = True
-            elif self._wbc_state_str == 'SCANNING':
-                self._ws_ext_retries += 1
-                self.get_logger().info(
-                    f'✅ Spot riposizionato (WS_EXT retry {self._ws_ext_retries}) '
-                    f'→ CHECKING_WORKSPACE'
-                )
-                self.set_state(self.CHECKING_WORKSPACE)
 
         # ── HOMING ────────────────────────────────────────────────────────
         elif self.state == self.HOMING:
