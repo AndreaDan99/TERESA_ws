@@ -3,19 +3,27 @@
 WBC Coordinator — phase FSM (WBC is master, Z1 FSM waits for SCANNING)
 
 States:
-  SEARCHING      body lowered, waiting for LYING detection
-  PRE_APPROACH   arm look-at toward target (Spot stationary)
-  IDLE           passive fallback
-  APPROACHING    Spot navigates + Z1 look-at via WBC QP
-  SCANNING       Spot reached patient → WBC disables, z1_FSM takes over
+  WAITING_TF    waits for tf_monitor to confirm TF chains ready
+  SEARCHING     Spot rotates + arm explores (QP SEARCH_GRID). Hybrid lock: Orbbec (full) + RealSense (semi-lock guidance)
+  SEMI_LOCKING  RealSense found torso → Spot rotates+tilts toward it, arm freezes, Orbbec gets 3s clean window
+  LOCKING       Orbbec confirmed LYING → arm goes home, collect 5 approach_point samples
+  PRE_APPROACH  Spot upright, QP LOOKAT: arm points X_ee toward target
+  APPROACHING   Spot navigator drives toward target, QP SCAN_SEQ: arm does 11-pose grid
+  SCANNING      Spot at patient, body pose optimization, z1_FSM runs FAST cycle
+  IDLE          passive fallback
 
 Transitions:
-  SEARCHING     → PRE_APPROACH   posture=LYING and confidence >= threshold + approach_point
-  SEARCHING     → IDLE           search timeout
-  IDLE          → APPROACHING    posture=LYING and confidence >= threshold
-  PRE_APPROACH  → APPROACHING    pre_approach duration elapsed (arm aligned)
+  SEARCHING     → SEMI_LOCKING   RealSense detects torso (LOCKED)
+  SEMI_LOCKING  → LOCKING        Orbbec confirms LYING within 3s
+  SEMI_LOCKING  → SEARCHING      timeout (3s, Orbbec didn't detect)
+  SEARCHING     → LOCKING        Orbbec detects LYING directly (full lock)
+  LOCKING       → PRE_APPROACH   5 approach_point samples collected
+  LOCKING       → SEARCHING      lock lost during collection
+  SEARCHING     → IDLE           search sequence exhausted
+  IDLE          → SEARCHING      external restart (keyboard)
+  PRE_APPROACH  → APPROACHING    RealSense LOCKED ×5 or 5s timeout
   APPROACHING   → SCANNING       Spot within handoff_distance of approach_point
-  any           → IDLE           posture != LYING for > lying_timeout
+  any           → IDLE           TF loss or emergency
 """
 import math
 
@@ -124,10 +132,11 @@ class _QualityMonitor:
 class CoordState:
     WAITING_TF    = 'WAITING_TF'
     SEARCHING     = 'SEARCHING'
+    SEMI_LOCKING  = 'SEMI_LOCKING'
+    LOCKING       = 'LOCKING'
     PRE_APPROACH  = 'PRE_APPROACH'
     IDLE          = 'IDLE'
     APPROACHING   = 'APPROACHING'
-    HANDOFF       = 'HANDOFF'
     SCANNING      = 'SCANNING'
 
 
@@ -158,12 +167,14 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('soft_handoff_distance',      0.20)   # [m] pause for scanner
         self.declare_parameter('min_body_height',             -0.20)
         self.declare_parameter('max_body_height',              0.0)
-        self.declare_parameter('search_body_height',          -0.20)  # [m] body lowered during search
-        self.declare_parameter('search_pitch_angles',       [0.0])  # placeholder, overridden by YAML
-        self.declare_parameter('search_yaw_offsets',        [0.0])  # placeholder, overridden by YAML
-        self.declare_parameter('search_pause_per_point',    3.0)    # [s] pause per grid point
-        self.declare_parameter('search_lock_confidence',    0.85)   # conf to lock and sample
-        self.declare_parameter('search_lock_samples',       5)     # samples to average before exit
+        self.declare_parameter('search_body_height',           0.0)   # [m] altezza nominale
+        self.declare_parameter('search_yaw_increment',         1.05)  # [rad] ≈60° passo Spot
+        self.declare_parameter('search_yaw_steps',             6)     # posizioni = 360°
+        self.declare_parameter('search_pitch_angles',       [0.0, 0.087, 0.17])  # 0°,5°,10°
+        self.declare_parameter('search_dwell',                  15.0)  # [s] attesa per posizione
+        self.declare_parameter('search_semi_lock_pause',       3.0)   # [s] attesa per Orbbec
+        self.declare_parameter('search_lock_confidence',        0.85)
+        self.declare_parameter('search_lock_samples',           5)
 
         # FAST body pose optimization
         self.declare_parameter('body_grid_heights',       [-0.20, -0.18, -0.15])
@@ -190,18 +201,11 @@ class WBCCoordinatorNode(Node):
         self._min_body_height     = float(p('min_body_height'))
         self._max_body_height     = float(p('max_body_height'))
         self._search_body_height    = float(p('search_body_height'))
+        self._search_yaw_increment  = float(p('search_yaw_increment'))
+        self._search_yaw_steps      = int(p('search_yaw_steps'))
         self._search_pitch_angles   = self._read_float_array('search_pitch_angles')
-        self._search_yaw_offsets    = self._read_float_array('search_yaw_offsets')
-        self._search_pause_per_point = float(p('search_pause_per_point'))
-        self._body_grid_heights   = self._read_float_array('body_grid_heights')
-        self._body_grid_pitches   = self._read_float_array('body_grid_pitches')
-        self._body_sweet_spot     = np.array([float(x) for x in p('body_sweet_spot')])
-        self._body_settle_time    = float(p('body_settle_time'))
-        self._ws_ext_dx_steps     = int(p('ws_ext_dx_steps'))
-        self._ws_ext_dx_max       = float(p('ws_ext_dx_max'))
-        self._ws_ext_dy_fwd_max   = float(p('ws_ext_dy_fwd_max'))
-        self._ws_ext_dy_bwd_max   = float(p('ws_ext_dy_bwd_max'))
-        self._navigator_timeout    = float(p('navigator_timeout'))
+        self._search_dwell          = float(p('search_dwell'))
+        self._search_semi_lock_pause = float(p('search_semi_lock_pause'))
         self._search_lock_confidence = float(p('search_lock_confidence'))
         self._search_lock_samples   = int(p('search_lock_samples'))
         self._pre_approach_duration = float(p('pre_approach_duration'))
@@ -235,13 +239,13 @@ class WBCCoordinatorNode(Node):
         self._search_start: rclpy.time.Time | None = None     # SEARCHING entry time
         self._pre_approach_start: rclpy.time.Time | None = None  # PRE_APPROACH entry time
         self._search_lock_buffer: list | None = None  # odom positions collected during lock
-        self._search_timeline: list = []         # grid timeline: list of (t0, t1, pitch, yaw)
-        self._search_total_duration: float = 0.0  # total grid duration [s]
-        self._last_search_pitch: float = 0.0      # avoid redundant body_pose publishes
-
-        # PRE_APPROACH active search with RealSense
-        self._torso_tracker_state: str = ''       # LOCKED / TRACKING / IDLE
-        self._torso_detected_ticks: int = 0       # consecutive LOCKED ticks
+        self._search_positions: list = []              # [{yaw, pitch}, ...]
+        self._search_position_idx: int = 0
+        self._search_position_start: rclpy.time.Time | None = None
+        self._search_saved_idx: int = 0               # idx da riprendere dopo semi-lock
+        self._torso_tracker_state: str = ''           # LOCKED / TRACKING / IDLE
+        self._torso_detected_ticks: int = 0           # consecutive LOCKED ticks
+        self._torso_pos: PoseStamped | None = None    # ultima posa torso da RealSense
 
         # FAST body pose optimization + WS_EXTENSION
         self._fast_points: PoseArray | None = None
@@ -259,6 +263,7 @@ class WBCCoordinatorNode(Node):
         self.create_subscription(String,       p('z1_fsm_state_topic'),      self._cb_z1_state,   10)
         self.create_subscription(Bool,         '/z1/fast_ready',             self._cb_fast_ready, 10)
         self.create_subscription(String,      '/torso_tracker_state',      self._cb_torso_state, 10)
+        self.create_subscription(PoseStamped,  '/torso_target_ee',          self._cb_torso_pos,   10)
         self.create_subscription(Vector3Stamped, '/laying_human/body_axis',  self._cb_body_axis,  10)
         self.create_subscription(Bool,           '/wbc/restart',             self._cb_restart,    10)
         self.create_subscription(Bool,           '/wbc/tf_ready',            self._cb_tf_ready,    10)
@@ -367,6 +372,9 @@ class WBCCoordinatorNode(Node):
     def _cb_torso_state(self, msg: String) -> None:
         self._torso_tracker_state = msg.data
 
+    def _cb_torso_pos(self, msg: PoseStamped) -> None:
+        self._torso_pos = msg
+
     def _cb_tf_ready(self, msg: Bool) -> None:
         if msg.data and self._state == CoordState.WAITING_TF:
             self.get_logger().info(
@@ -398,6 +406,10 @@ class WBCCoordinatorNode(Node):
             self._tick_waiting_tf()
         elif self._state == CoordState.SEARCHING:
             self._tick_searching()
+        elif self._state == CoordState.SEMI_LOCKING:
+            self._tick_semi_locking()
+        elif self._state == CoordState.LOCKING:
+            self._tick_locking()
         elif self._state == CoordState.PRE_APPROACH:
             self._tick_pre_approach()
         elif self._state == CoordState.APPROACHING:
@@ -466,64 +478,160 @@ class WBCCoordinatorNode(Node):
             self._pub_spot_ctrl.publish(Bool(data=True))  # navigator active
 
     def _tick_searching(self) -> None:
-        lock_ok = (self._posture == 'LYING'
-                   and self._confidence >= self._search_lock_confidence
-                   and self._approach_point_odom is not None)
-
-        # Phase 1: already locked — collecting samples
+        # FASE 1 — Lock in corso: raccolta campioni
         if self._search_lock_buffer is not None:
+            lock_ok = (self._posture == 'LYING'
+                       and self._confidence >= self._search_lock_confidence
+                       and self._approach_point_odom is not None)
             if lock_ok:
-                z = np.array([
-                    self._approach_point_odom.pose.position.x,
-                    self._approach_point_odom.pose.position.y,
-                    self._approach_point_odom.pose.position.z,
-                ])
+                z = self._approach_point_odom_pos()
                 self._search_lock_buffer.append(z)
-                self.get_logger().info(
-                    f'Lock: {len(self._search_lock_buffer)}/{self._search_lock_samples} samples')
                 if len(self._search_lock_buffer) >= self._search_lock_samples:
                     target = np.mean(self._search_lock_buffer, axis=0)
                     self._quality.set_target(target, self._search_lock_confidence)
                     self.get_logger().info(
                         f'Lock complete: {self._search_lock_samples} samples → PRE_APPROACH')
                     self._pre_approach_start = self.get_clock().now()
-                    self._set_wbc_enabled(True)
-                    self._pub_spot_ctrl.publish(Bool(data=False))
                     self._set_state(CoordState.PRE_APPROACH)
-                return  # stay frozen (no rotation)
+                return
             else:
                 self.get_logger().info('Lock lost — resuming search')
                 self._search_lock_buffer = None
-                # fall through to rotation
-
-        # Phase 2: first lock trigger
-        if lock_ok:
-            self.get_logger().info(f'Lock: conf={self._confidence:.2f} — freezing')
-            z = np.array([
-                self._approach_point_odom.pose.position.x,
-                self._approach_point_odom.pose.position.y,
-                self._approach_point_odom.pose.position.z,
-            ])
-            self._search_lock_buffer = [z]
-            return  # frozen, no rotation
-
-        # Phase 3: grid search (no lock) — cycle through pitch×yaw points
-        if self._search_start is not None:
-            elapsed = (self.get_clock().now() - self._search_start).nanoseconds * 1e-9
-
-            if elapsed >= self._search_total_duration:
-                self.get_logger().warn('Search grid complete → IDLE')
-                self._set_state(CoordState.IDLE)
-                self._set_wbc_enabled(False)
+                self._set_state(CoordState.SEARCHING)
                 return
 
-            # Find current grid point
-            for t0, t1, pitch, yaw in self._search_timeline:
-                if t0 <= elapsed < t1:
-                    if abs(pitch - self._last_search_pitch) > 0.001:
-                        self._last_search_pitch = pitch
-                        self._set_body_pose(self._search_body_height, pitch, yaw)
-                    break
+        # FASE 2 — Check full lock da Orbbec
+        if self._posture == 'LYING' \
+                and self._confidence >= self._search_lock_confidence \
+                and self._approach_point_odom is not None:
+            z = self._approach_point_odom_pos()
+            self._search_lock_buffer = [z]
+            self.get_logger().info(f'Full lock (Orbbec): conf={self._confidence:.2f}')
+            self._set_state(CoordState.LOCKING)
+            return
+
+        # FASE 3 — Check semi-lock da RealSense
+        if self._torso_tracker_state == 'LOCKED' and self._torso_pos is not None:
+            if self._check_realsense_guidance():
+                return
+
+        # FASE 4 — Position cycling
+        self._tick_search_positions()
+
+    def _tick_semi_locking(self) -> None:
+        """Spot ruotato+inclinato, braccio fermo, Orbbec cerca."""
+        elapsed = (self.get_clock().now() - self._search_position_start).nanoseconds * 1e-9 \
+            if self._search_position_start is not None else 0.0
+
+        if self._posture == 'LYING' \
+                and self._confidence >= self._search_lock_confidence \
+                and self._approach_point_odom is not None:
+            z = self._approach_point_odom_pos()
+            self._search_lock_buffer = [z]
+            self.get_logger().info('Semi-lock → Full lock (Orbbec)')
+            self._set_state(CoordState.LOCKING)
+            return
+
+        if elapsed >= self._search_semi_lock_pause:
+            self.get_logger().info('Semi-lock timeout → resuming search')
+            self._search_position_idx = self._search_saved_idx
+            self._search_position_start = None
+            self._set_state(CoordState.SEARCHING)
+
+    def _tick_locking(self) -> None:
+        """Braccio va in home (QP), coordinator raccoglie campioni in parallelo."""
+        if self._posture == 'LYING' \
+                and self._confidence >= self._search_lock_confidence \
+                and self._approach_point_odom is not None:
+            z = self._approach_point_odom_pos()
+            if len(self._search_lock_buffer) < self._search_lock_samples:
+                self._search_lock_buffer.append(z)
+            if len(self._search_lock_buffer) >= self._search_lock_samples:
+                target = np.mean(self._search_lock_buffer, axis=0)
+                self._quality.set_target(target, self._search_lock_confidence)
+                self.get_logger().info(
+                    f'Locking complete: {self._search_lock_samples} samples → PRE_APPROACH')
+                self._pre_approach_start = self.get_clock().now()
+                self._set_state(CoordState.PRE_APPROACH)
+            return
+
+        # Lock perso
+        self._search_lock_buffer = None
+        self._set_state(CoordState.SEARCHING)
+
+    def _check_realsense_guidance(self) -> bool:
+        """Ruota e inclina Spot verso il torso rilevato dalla RealSense."""
+        if self._torso_tracker_state != 'LOCKED' or self._torso_pos is None:
+            return False
+
+        body_tf = self._tf_lookup(self._odom_frame, self._body_frame)
+        if body_tf is None:
+            return False
+
+        # Trasforma torso da world/link00 a body frame
+        torso_body = self._transform_to_body_frame(self._torso_pos)
+        if torso_body is None:
+            return False
+
+        # Orbbec in body frame: (0.30, 0, 0.15)
+        dir_vec = np.array([torso_body[0] - 0.30, torso_body[1], torso_body[2] - 0.15])
+        horiz = math.sqrt(dir_vec[0]**2 + dir_vec[1]**2)
+
+        target_pitch = float(np.clip(math.atan2(-dir_vec[2], horiz), 0.0, 0.26))
+        target_yaw = math.atan2(dir_vec[1], dir_vec[0])
+
+        self.get_logger().info(
+            f'Semi-lock (RealSense): torso_body=({torso_body[0]:.2f},{torso_body[1]:.2f},{torso_body[2]:.2f}) '
+            f'→ yaw={math.degrees(target_yaw):.1f}° pitch={math.degrees(target_pitch):.1f}°')
+
+        self._search_saved_idx = self._search_position_idx
+        self._search_position_start = self.get_clock().now()
+        self._set_body_pose(self._search_body_height, float(target_pitch), float(target_yaw))
+        self._set_state(CoordState.SEMI_LOCKING)
+        return True
+
+    def _tick_search_positions(self) -> None:
+        if self._search_position_idx >= len(self._search_positions):
+            self.get_logger().warn('Search sequence complete → IDLE')
+            self._set_wbc_enabled(False)
+            self._set_state(CoordState.IDLE)
+            return
+
+        if self._search_position_start is None:
+            pos = self._search_positions[self._search_position_idx]
+            self._set_body_pose(self._search_body_height, pos['pitch'], pos['yaw'])
+            self._search_position_start = self.get_clock().now()
+            self.get_logger().info(
+                f'Search pos {self._search_position_idx+1}/{len(self._search_positions)}: '
+                f'yaw={math.degrees(pos["yaw"]):.0f}° pitch={math.degrees(pos["pitch"]):.0f}°')
+            return
+
+        elapsed = (self.get_clock().now() - self._search_position_start).nanoseconds * 1e-9
+        if elapsed >= self._search_dwell:
+            self._search_position_idx += 1
+            self._search_position_start = None
+
+    def _approach_point_odom_pos(self) -> np.ndarray:
+        p = self._approach_point_odom.pose.position
+        return np.array([p.x, p.y, p.z])
+
+    def _transform_to_body_frame(self, pose: PoseStamped) -> np.ndarray | None:
+        """Trasforma una posa da world/link00 al body frame via TF."""
+        try:
+            if pose.header.frame_id not in ('world', 'link00'):
+                pose_world = PoseStamped()
+                pose_world.header.frame_id = 'world'
+                pose_world.pose = pose.pose
+            else:
+                pose_world = pose
+            body_frame = self._tf_transform(pose_world, self._body_frame)
+            if body_frame is None:
+                return None
+            return np.array([body_frame.pose.position.x,
+                             body_frame.pose.position.y,
+                             body_frame.pose.position.z])
+        except Exception:
+            return None
 
     def _tick_pre_approach(self) -> None:
         self._pub_goal.publish(self._filtered_goal())
@@ -923,12 +1031,13 @@ class WBCCoordinatorNode(Node):
             if new_state == CoordState.SEARCHING:
                 self._search_start = self.get_clock().now()
                 self._search_lock_buffer = None
-                self._search_timeline = self._build_search_timeline()
-                self._search_total_duration = (self._search_timeline[-1][1]
-                                               if self._search_timeline else 0.0)
-                entry = self._search_timeline[0]
-                self._last_search_pitch = entry[2]
-                self._set_body_pose(self._search_body_height, entry[2], entry[3])
+                self._search_positions = self._build_search_sequence()
+                self._search_position_idx = 0
+                self._search_position_start = None
+                self._search_saved_idx = 0
+                self._set_wbc_enabled(True)
+                pos0 = self._search_positions[0]
+                self._set_body_pose(self._search_body_height, pos0['pitch'], pos0['yaw'])
             if new_state == CoordState.SCANNING:
                 self._set_body_pose(self._handoff_body_height)
             if new_state == CoordState.PRE_APPROACH:
@@ -958,30 +1067,23 @@ class WBCCoordinatorNode(Node):
             return [float(v) for v in val]
         return [float(val)]
 
-    def _build_search_timeline(self) -> list:
-        """Build timeline as list of (t_start, t_end, pitch, yaw).
-
-        Entry: SEARCHING just entered. Capture current Spot yaw as reference,
-        then build grid: for each yaw_offset, cycle through pitch angles.
-        Each point: pause = search_pause_per_point [s].
-        Returns timeline (may be empty if no params), sorted by t_start.
-        """
-        tf = self._tf_lookup(self._odom_frame, self._body_frame)
-        if tf is not None:
-            ref_yaw = _yaw_from_quat(tf.transform.rotation)
-        else:
-            ref_yaw = 0.0
-            self.get_logger().warn('SEARCH: could not get current yaw, using 0')
-
-        timeline = []
-        t = 0.0
-        pause = self._search_pause_per_point
-        for yaw_off in self._search_yaw_offsets:
-            target_yaw = normalize_angle(ref_yaw + yaw_off)
+    def _build_search_sequence(self) -> list:
+        """Build search sequence: [0°, +incr, -incr, +2*incr, ...] × [pitch].
+        Returns list of {yaw, pitch} dicts."""
+        incr = self._search_yaw_increment
+        steps = self._search_yaw_steps
+        yaw_list = [0.0]
+        for i in range(1, steps):
+            n = (i + 1) // 2
+            if i % 2 != 0:
+                yaw_list.append(n * incr)
+            else:
+                yaw_list.append(-n * incr)
+        seq = []
+        for yaw in yaw_list:
             for pitch in self._search_pitch_angles:
-                timeline.append((t, t + pause, pitch, target_yaw))
-                t += pause
-        return timeline
+                seq.append({'yaw': yaw, 'pitch': pitch})
+        return seq
 
     def _set_wbc_enabled(self, enabled: bool) -> None:
         msg = Bool(); msg.data = enabled

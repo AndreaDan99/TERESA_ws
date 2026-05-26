@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """
-WBC QP Controller — arm-only look-at + QP-based scanning.
+WBC QP Controller — arm-only look-at + QP-based scanning + QP-based search.
 
 Modes (selected automatically from /wbc/state):
-  LOOKAT    — PRE_APPROACH: ω_des orientamento + null-space joint centering
-  SCAN_SEQ  — APPROACHING:  genera 11 pose dal null-space, le sequenzia,
-                             raccoglie dati, pubblica /z1/fast_points
+  SEARCH_GRID — SEARCHING:    genera 7 pose esplorative dal null-space (loop infinito)
+  LOOKAT      — PRE_APPROACH: ω_des orientamento + null-space joint centering
+  SCAN_SEQ    — APPROACHING:  genera 11 pose dal null-space, le sequenzia,
+                               raccoglie dati, pubblica /z1/fast_points
 
-Outputs:
-  /wbc/ik_goal_pose  → IK goal per il braccio (via mux)
-  /wbc/ik_enable     → enable IK solver
-  /my_spot/cmd_vel   → Spot base velocity (P-controller, invariato)
-  /z1/fast_points    → FAST ultrasound points (in SCAN_SEQ mode)
-  /z1/fast_ready     → scan complete flag
+State transitions:
+  SEARCHING     → _start_search()
+  SEMI_LOCKING  → _pause_search()   (blocca il braccio, Orbbec cerca)
+  LOCKING       → _end_search() + _send_home()
+  SEARCHING (ripresa) → _resume_search()
 """
+
 import math
 import time
 
@@ -41,14 +42,21 @@ from z1_vision.body_search_scanner import BodySearchScanner, ScanAction, ScanTic
 
 JOINT_ORDER = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']
 
-# ── Scan parameters (constants) ───────────────────────────────────────────────
-NULL_GRID_DELTA   = 0.20     # [rad] passo per direzione null-space (≈11°)
-NULL_GRID_N        = 3        # numero di direzioni del null-space da esplorare
-NULL_GRID_DIAG     = True     # includi diagonali vᵢ+vⱼ
-SCAN_POINT_TIMEOUT = 4.0      # [s] tempo raccolta dati per posa
+# ── Safe joint limits for SEARCH_GRID (more restrictive than Z1 native) ───────
+# Restrict extreme poses to avoid hitting Spot body, ground, or unbalancing.
+SAFE_Q_LOW  = [-0.5, -0.3, -1.8,  0.5, -0.5, -0.8]
+SAFE_Q_HIGH = [ 0.5,  0.8, -0.3,  2.0,  0.5,  0.8]
+
+# ── Scan parameters ────────────────────────────────────────────────────────────
+SCAN_POINT_TIMEOUT = 4.0      # [s] tempo raccolta dati per posa (APPROACHING)
 SCAN_MIN_FRAMES    = 5        # frame minimi per posa
 SCAN_EARLY_STOP    = 0.95     # early-stop detection score
 SCAN_STABILITY_K   = 10.0     # penalty stabilità 3D
+
+# ── Search parameters ──────────────────────────────────────────────────────────
+SEARCH_POINT_TIMEOUT = 2.0    # [s] tempo raccolta per posa (SEARCHING)
+SEARCH_MIN_FRAMES    = 3      # frame minimi
+SEARCH_EARLY_STOP    = 0.6    # early-stop liberale
 
 HOME_POS = np.array([-0.09, 0.0, 0.44])
 HOME_ORI = np.array([-0.0062, 0.4107, 0.0021, 0.9118])
@@ -84,6 +92,8 @@ class WBCQPControllerNode(Node):
         self.declare_parameter('k_null',        0.3)
         self.declare_parameter('damping',       1e-3)
         self.declare_parameter('q_dot_max',     0.6)
+        self.declare_parameter('search_delta',  0.15)
+        self.declare_parameter('scan_delta',    0.12)
         self.declare_parameter('update_period', 0.1)
         self.declare_parameter('workspace_safety_margin', 0.05)
         self.declare_parameter('ik_goal_topic',      '/wbc/ik_goal_pose')
@@ -102,6 +112,8 @@ class WBCQPControllerNode(Node):
         self._k_null        = float(p('k_null'))
         self._damping       = float(p('damping'))
         self._q_dot_max     = float(p('q_dot_max'))
+        self._search_delta  = float(p('search_delta'))
+        self._scan_delta    = float(p('scan_delta'))
         self._update_period = float(p('update_period'))
         self._home_orientation = np.array([float(x) for x in p('home_orientation')])
         self._orientation_mode = p('orientation_mode')
@@ -139,8 +151,9 @@ class WBCQPControllerNode(Node):
         self._goal: PoseStamped | None = None
         self._q_meas: np.ndarray | None = None
         self._tf_ready       = False
-        self._mode           = 'LOOKAT'   # 'LOOKAT' | 'SCAN_SEQ'
+        self._mode           = 'LOOKAT'   # 'LOOKAT' | 'SCAN_SEQ' | 'SEARCH_GRID'
         self._wbc_state      = ''
+        self._search_paused  = False     # True when paused for SEMI_LOCKING
 
         # ── Scan state ────────────────────────────────────────────────────
         self._scan_scanner: BodySearchScanner | None = None
@@ -185,6 +198,8 @@ class WBCQPControllerNode(Node):
             self._pub_en.publish(en)
             if self._mode == 'SCAN_SEQ':
                 self._end_scan()
+            elif self._mode == 'SEARCH_GRID':
+                self._end_search()
 
     def _cb_goal(self, msg: PoseStamped) -> None:
         self._goal = msg
@@ -199,10 +214,24 @@ class WBCQPControllerNode(Node):
     def _cb_wbc_state(self, msg: String) -> None:
         prev = self._wbc_state
         self._wbc_state = msg.data
-        if msg.data == 'APPROACHING' and prev != 'APPROACHING':
+
+        if msg.data == 'SEARCHING':
+            if prev == 'SEMI_LOCKING':
+                self._resume_search()
+            elif prev != 'SEARCHING':
+                self._start_search()
+        elif msg.data == 'SEMI_LOCKING' and self._mode == 'SEARCH_GRID':
+            self._pause_search()
+        elif msg.data == 'LOCKING' and self._mode == 'SEARCH_GRID':
+            self._end_search()
+            self._send_home()
+        elif msg.data == 'APPROACHING' and prev != 'APPROACHING':
             self._start_scan()
-        elif msg.data != 'APPROACHING' and self._mode == 'SCAN_SEQ':
-            self._end_scan()
+        elif msg.data not in ('SEARCHING', 'SEMI_LOCKING', 'LOCKING', 'APPROACHING'):
+            if self._mode == 'SEARCH_GRID':
+                self._end_search()
+            if self._mode == 'SCAN_SEQ':
+                self._end_scan()
 
     def _cb_ik_done(self, msg: Bool) -> None:
         self._scan_ik_done = msg.data
@@ -243,7 +272,10 @@ class WBCQPControllerNode(Node):
         if self._mode == 'SCAN_SEQ':
             self._tick_scan()
             return
-
+        if self._mode == 'SEARCH_GRID':
+            if not self._search_paused:
+                self._tick_search()
+            return
         # LOOKAT mode
         self._tick_lookat()
 
@@ -386,6 +418,152 @@ class WBCQPControllerNode(Node):
             f'angle={math.degrees(angle):.1f}°',
             throttle_duration_sec=2.0)
 
+    # ── SEARCH_GRID mode (SEARCHING) ──────────────────────────────────────
+
+    def _start_search(self) -> None:
+        self._mode = 'SEARCH_GRID'
+        self._search_paused = False
+        self._scan_ik_done = False
+        self._scan_data_queue.clear()
+        self._gen_and_start_search_scanner()
+
+    def _gen_and_start_search_scanner(self) -> None:
+        """Genera 7 pose esplorative dal null-space del 'guarda avanti'."""
+        if self._q_meas is None:
+            self.get_logger().warn('_gen_search_scanner: no joint state')
+            return
+
+        poses = self._gen_search_poses()
+        if not poses:
+            self.get_logger().warn('_gen_search_scanner: no poses generated')
+            return
+
+        self._scan_scanner = BodySearchScanner(
+            scan_poses=poses,
+            scan_point_timeout=SEARCH_POINT_TIMEOUT,
+            scan_min_frames=SEARCH_MIN_FRAMES,
+            early_stop_score=SEARCH_EARLY_STOP,
+            logger=self.get_logger(),
+            stability_k=SCAN_STABILITY_K,
+        )
+        self._scan_scanner.reset()
+        self._pub_tracker_scan.publish(Bool(data=True))
+        self.get_logger().info(f'SEARCH_GRID: {len(poses)} poses, delta={self._search_delta:.2f}')
+
+    def _gen_search_poses(self) -> list[PoseStamped]:
+        """Genera pose esplorative dal null-space di 'guarda avanti' (body X).
+        Usa safe joint limits e delta di esplorazione più ampio.
+        Solo 7 pose (home + ±δ×3, senza diagonali)."""
+        if self._q_meas is None:
+            self.get_logger().warn('_gen_search_poses: no joint state')
+            return []
+
+        n_arm = self._q_meas.shape[0]
+        q = self._q_neutral.copy()
+        q[:n_arm] = self._q_meas
+
+        pin.computeJointJacobians(self._model, self._data, q)
+        pin.updateFramePlacements(self._model, self._data)
+        T_ee = self._data.oMf[self._ee_id]
+        p_ee = T_ee.translation
+        J_arm_full = pin.getFrameJacobian(
+            self._model, self._data, self._ee_id,
+            pin.ReferenceFrame.LOCAL_WORLD_ALIGNED)
+        J_arm = J_arm_full[:, :n_arm]
+
+        # Target virtuale: body X (avanti)
+        x_desired = np.array([1.0, 0.0, 0.0])
+
+        # Angular Jacobian (3×6) + null-space projector
+        J_task = J_arm[:3, :]
+        J_pinv = damped_pinv(J_task)
+        N = null_space_projector(J_task, J_pinv)
+
+        # SVD → basis of null-space
+        _, S, Vt = np.linalg.svd(N)
+        rank = int(np.sum(S > 1e-6))
+        if rank < 1:
+            self.get_logger().warn(f'_gen_search_poses: null-space rank={rank}')
+            rank = min(3, n_arm)
+        basis = Vt[:rank, :].T  # 6×rank
+
+        q_safe_low = np.array(SAFE_Q_LOW[:n_arm])
+        q_safe_high = np.array(SAFE_Q_HIGH[:n_arm])
+        delta = self._search_delta
+        n_dir = min(3, rank)
+
+        poses = []
+
+        # Home pose
+        home_pose = _make_pose_stamped(p_ee, compute_ee_orientation(
+            x_desired, HOME_ORI.tolist()))
+        poses.append(home_pose)
+
+        # ±δ along each basis direction (no diagonali)
+        for i in range(n_dir):
+            for sign in [-1.0, 1.0]:
+                q_new = np.clip(q[:n_arm] + sign * delta * basis[:, i],
+                                 q_safe_low, q_safe_high)
+                pin.forwardKinematics(self._model, self._data, q_new)
+                pin.updateFramePlacements(self._model, self._data)
+                T_new = self._data.oMf[self._ee_id]
+                pose = _make_pose_stamped(T_new.translation,
+                                           compute_ee_orientation(
+                                               x_desired, HOME_ORI.tolist()))
+                poses.append(pose)
+
+        self.get_logger().info(
+            f'Search grid: {len(poses)} poses (null-space rank={rank}, delta={delta:.2f})',
+            throttle_duration_sec=5.0)
+        return poses
+
+    def _tick_search(self) -> None:
+        if self._scan_scanner is None:
+            return
+
+        for data in self._scan_data_queue:
+            self._scan_scanner.feed_scan_data(data)
+        self._scan_data_queue.clear()
+
+        now = self.get_clock().now().nanoseconds * 1e-9
+        st: ScanTick = self._scan_scanner.tick(ik_done=self._scan_ik_done, now=now)
+
+        if st.action == ScanAction.SEND_IK and st.goal is not None:
+            self._scan_ik_done = False
+            self._pub_tracker_reset.publish(Bool(data=True))
+            self._pub_ik.publish(st.goal)
+            self._pub_en.publish(Bool(data=True))
+
+        elif st.action in (ScanAction.EXIT_SCAN_MODE, ScanAction.DONE, ScanAction.FAILED):
+            # Loop infinito: restart scanner con nuove pose (adattive alla q corrente)
+            self._scan_scanner = None
+            self._gen_and_start_search_scanner()
+
+    def _pause_search(self) -> None:
+        """Blocca il braccio durante SEMI_LOCKING."""
+        self._search_paused = True
+        self._pub_en.publish(Bool(data=False))
+
+    def _resume_search(self) -> None:
+        """Riprende dal punto in cui era stato messo in pausa."""
+        self._search_paused = False
+
+    def _end_search(self) -> None:
+        """Esce da SEARCH_GRID mode."""
+        self._mode = 'LOOKAT'
+        self._search_paused = False
+        self._pub_tracker_scan.publish(Bool(data=False))
+        self._pub_en.publish(Bool(data=False))
+        self._scan_scanner = None
+        self._scan_data_queue.clear()
+
+    def _send_home(self) -> None:
+        """Pubblica la posa home all'IK solver."""
+        home_pose = _make_pose_stamped(HOME_POS, HOME_ORI)
+        self._pub_ik.publish(home_pose)
+        self._pub_en.publish(Bool(data=True))
+        self.get_logger().info('Home pose sent (LOCKING → home)')
+
     # ── SCAN_SEQ mode (APPROACHING) ───────────────────────────────────────
 
     def _start_scan(self) -> None:
@@ -503,8 +681,8 @@ class WBCQPControllerNode(Node):
 
         q_low = self._model.lowerPositionLimit[:n_arm]
         q_high = self._model.upperPositionLimit[:n_arm]
-        delta = NULL_GRID_DELTA
-        n_dir = min(NULL_GRID_N, rank)
+        delta = self._scan_delta
+        n_dir = min(3, rank)
 
         poses = []
 
@@ -527,7 +705,7 @@ class WBCQPControllerNode(Node):
                 poses.append(pose)
 
         # Diagonal combinations: v_i + v_j
-        if NULL_GRID_DIAG and n_dir >= 2:
+        if n_dir >= 2:
             for i in range(min(n_dir - 1, 2)):
                 j = i + 1
                 for si, sj in [(1, 1), (1, -1)]:
@@ -543,7 +721,7 @@ class WBCQPControllerNode(Node):
                     poses.append(pose)
 
         self.get_logger().info(
-            f'WBC grid: {len(poses)} poses (null-space rank={rank}, basis={n_dir})')
+            f'Scan grid: {len(poses)} poses (null-space rank={rank}, delta={delta:.2f})')
         return poses
 
     # ── FAST point publishing ─────────────────────────────────────────────

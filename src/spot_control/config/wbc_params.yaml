@@ -18,6 +18,10 @@ wbc_qp_controller:
     # Joint velocity limit
     q_dot_max: 0.6   # [rad/s]
 
+    # Null-space grid step sizes
+    search_delta: 0.15   # [rad] ≈9° per giunto — esplorazione ampia ma sicura
+    scan_delta:   0.12   # [rad] ≈7° per giunto — scansione fine vicino al paziente
+
     # Goal update period — controls how often WBC recomputes IK goals.
     # IK solver processes goals sequentially (one trajectory at a time), so higher
     # rate (> traj_min_time) just keeps the latched goal fresh.
@@ -64,17 +68,19 @@ wbc_coordinator:
     min_body_height:     -0.20   # limite minimo di sicurezza
     max_body_height:      0.0    # altezza nominale
 
-    # SEARCHING — grid search (3 yaw positions × 3 pitch angles).
-    # Spot cycles through pitch at each yaw position, pausing per point.
-    # Lock triggers when confidence ≥ search_lock_confidence, then collects
-    # search_lock_samples approach_points and averages them as target.
-    # Grid completes when all points visited → IDLE.
-    search_body_height:        -0.20     # [m] abbassa Spot per vedere il suolo
-    search_pitch_angles:       [0.087, 0.17, 0.26]      # [rad] 5°, 10°, 15°
-    search_yaw_offsets:        [0.0, 0.17, -0.17]       # [rad] center, +10°, -10°
-    search_pause_per_point:    3.0                       # [s] pausa per osservare
-    search_lock_confidence:    0.85                      # conf minima per fermarsi e campionare
-    search_lock_samples:       5                         # campioni da mediare prima di uscire
+    # SEARCHING — ricerca ibrida Spot+braccio 360°
+    # Spot ruota a step incrementali (yaw_increment × yaw_steps = 360°).
+    # A ogni posizione, il braccio esplora con pose generate dal QP (null-space).
+    # Semi-lock: se RealSense vede il torso, Spot ruota+inclina verso di esso,
+    # braccio si ferma, Orbbec ha una finestra pulita per rilevare LYING.
+    search_body_height: 0.0                       # [m] altezza nominale (non più abbassato)
+    search_yaw_increment: 1.05                    # [rad] ≈60° passo Spot
+    search_yaw_steps: 6                           # posizioni = 360° (6 × 60°)
+    search_pitch_angles: [0.0, 0.087, 0.17]       # [rad] 0°, 5°, 10°
+    search_dwell: 15.0                             # [s] Spot fermo a ogni posizione
+    search_semi_lock_pause: 3.0                   # [s] attesa per rilevamento Orbbec
+    search_lock_confidence: 0.85                   # [0-1] soglia LYING per lock
+    search_lock_samples: 5                         # campioni approach_point da mediare
 
     # PRE_APPROACH — arm pre-orientation before Spot starts walking
     pre_approach_duration: 5.0   # [s] pausa per orientare il braccio (WBC arm-only)
