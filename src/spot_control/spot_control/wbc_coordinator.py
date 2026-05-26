@@ -243,6 +243,7 @@ class WBCCoordinatorNode(Node):
         self._search_position_idx: int = 0
         self._search_position_start: rclpy.time.Time | None = None
         self._search_saved_idx: int = 0               # idx da riprendere dopo semi-lock
+        self._lock_lost_ticks: int = 0                # tick consecutivi senza Orbbec in LOCKING
         self._torso_tracker_state: str = ''           # LOCKED / TRACKING / IDLE
         self._torso_detected_ticks: int = 0           # consecutive LOCKED ticks
         self._torso_pos: PoseStamped | None = None    # ultima posa torso da RealSense
@@ -279,7 +280,7 @@ class WBCCoordinatorNode(Node):
         self._pub_dbg_marker = self.create_publisher(Marker, '/wbc/debug_marker', 10)
         self._pub_body_ready = self.create_publisher(Bool, '/wbc/body_ready', 10)
 
-        self.create_timer(0.2, self._tick)   # 5 Hz FSM
+        self.create_timer(0.1, self._tick)   # 10 Hz FSM
         self._set_state(CoordState.WAITING_TF)
         self.get_logger().info(
             f'WBC Coordinator ready — in attesa TF da SpotCore.\n'
@@ -523,6 +524,14 @@ class WBCCoordinatorNode(Node):
         elapsed = (self.get_clock().now() - self._search_position_start).nanoseconds * 1e-9 \
             if self._search_position_start is not None else 0.0
 
+        # RealSense ha perso il torso → torna subito a cercare
+        if self._torso_tracker_state != 'LOCKED':
+            self.get_logger().info('Semi-lock: RealSense lost torso → resuming search')
+            self._search_position_idx = self._search_saved_idx
+            self._search_position_start = None
+            self._set_state(CoordState.SEARCHING)
+            return
+
         if self._posture == 'LYING' \
                 and self._confidence >= self._search_lock_confidence \
                 and self._approach_point_odom is not None:
@@ -539,10 +548,12 @@ class WBCCoordinatorNode(Node):
             self._set_state(CoordState.SEARCHING)
 
     def _tick_locking(self) -> None:
-        """Braccio va in home (QP), coordinator raccoglie campioni in parallelo."""
+        """Braccio va in home (QP), coordinator raccoglie campioni in parallelo.
+        Tollera fino a 10 tick (1s a 10 Hz) di assenza Orbbec prima di arrendersi."""
         if self._posture == 'LYING' \
                 and self._confidence >= self._search_lock_confidence \
                 and self._approach_point_odom is not None:
+            self._lock_lost_ticks = 0
             z = self._approach_point_odom_pos()
             if len(self._search_lock_buffer) < self._search_lock_samples:
                 self._search_lock_buffer.append(z)
@@ -555,9 +566,17 @@ class WBCCoordinatorNode(Node):
                 self._set_state(CoordState.PRE_APPROACH)
             return
 
-        # Lock perso
-        self._search_lock_buffer = None
-        self._set_state(CoordState.SEARCHING)
+        # Orbbec persa — tolleranza prima di arrendersi
+        self._lock_lost_ticks += 1
+        if self._lock_lost_ticks >= 10:
+            self.get_logger().warn(
+                f'LOCKING: Orbbec lost for {self._lock_lost_ticks} ticks '
+                f'(had {len(self._search_lock_buffer)}/{self._search_lock_samples} samples) '
+                f'→ resuming search from current position')
+            self._search_lock_buffer = None
+            self._lock_lost_ticks = 0
+            self._search_position_start = None  # riprendi dalla posizione corrente
+            self._set_state(CoordState.SEARCHING)
 
     def _check_realsense_guidance(self) -> bool:
         """Ruota e inclina Spot verso il torso rilevato dalla RealSense."""
@@ -1029,15 +1048,19 @@ class WBCCoordinatorNode(Node):
                 self._quality.reset()
                 self._set_body_pose(0.0)   # ripristina altezza nominale
             if new_state == CoordState.SEARCHING:
-                self._search_start = self.get_clock().now()
+                old = self._state
                 self._search_lock_buffer = None
-                self._search_positions = self._build_search_sequence()
-                self._search_position_idx = 0
-                self._search_position_start = None
-                self._search_saved_idx = 0
                 self._set_wbc_enabled(True)
-                pos0 = self._search_positions[0]
-                self._set_body_pose(self._search_body_height, pos0['pitch'], pos0['yaw'])
+                if old == CoordState.IDLE:
+                    # Fresh start: full reset
+                    self._search_start = self.get_clock().now()
+                    self._search_positions = self._build_search_sequence()
+                    self._search_position_idx = 0
+                    self._search_position_start = None
+                    self._search_saved_idx = 0
+                    pos0 = self._search_positions[0]
+                    self._set_body_pose(self._search_body_height, pos0['pitch'], pos0['yaw'])
+                # else: re-entry from LOCKING or SEMI_LOCKING — resume, don't rebuild
             if new_state == CoordState.SCANNING:
                 self._set_body_pose(self._handoff_body_height)
             if new_state == CoordState.PRE_APPROACH:
