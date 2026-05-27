@@ -1,6 +1,6 @@
 % ============================================================
-%  Uncertainty-Aware Whole-Body Control for Autonomous FAST
-%  Ultrasound Scanning on a Legged Manipulator
+%  TERESA: Whole-Body Active Perception for Legged
+%  Robot-Assisted Emergency Assessment
 %
 %  IEEE Transactions on Medical Robotics and Bionics — submission draft
 % ============================================================
@@ -39,8 +39,8 @@
 \newcommand{\XX}{\textcolor{red}{\textbf{XX}}}
 
 % ── Title / Authors ─────────────────────────────────────────
-\title{Whole-Body Control for Autonomous FAST Ultrasound Scanning
-       on a Legged Manipulator}
+\title{TERESA: Whole-Body Active Perception for Legged
+       Robot-Assisted Emergency Assessment}
 
 \author{Andrea~D'Antona,~\IEEEmembership{}
         % add co-authors here
@@ -53,23 +53,24 @@
 
 \maketitle
 
+% ── Acronym definitions (invisible) ─────────────────────────
+\input{sections/acronyms}
+
 % ── Abstract ────────────────────────────────────────────────
 \input{sections/abstract}
 
 % ── Keywords ────────────────────────────────────────────────
 \begin{IEEEkeywords}
-Whole-body control, legged manipulation, medical robotics,
-FAST ultrasound, mobile manipulation, Kalman filtering,
-quadratic programming.
+Whole-body active perception, legged manipulation, medical robotics,
+emergency assessment, FAST ultrasound, mobile manipulation,
+body reconfiguration.
 \end{IEEEkeywords}
-
-% ── Acronym definitions (invisible) ─────────────────────────
-\input{sections/acronyms}
 
 % ── Sections ────────────────────────────────────────────────
 \input{sections/introduction}
 \input{sections/related_work}
 \input{sections/problem_formulation}
+\input{sections/active_perception}
 \input{sections/method}
 \input{sections/system_architecture}
 \input{sections/experiments}
@@ -77,7 +78,6 @@ quadratic programming.
 \input{sections/conclusion}
 
 % ── Bibliography ────────────────────────────────────────────
-\nocite{*}   % include all bib entries even without \cite — remove when paper is complete
 \bibliographystyle{IEEEtran}
 \bibliography{references}
 

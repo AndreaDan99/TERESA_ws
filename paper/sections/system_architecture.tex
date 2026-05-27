@@ -1,141 +1,290 @@
 % ============================================================
-%  V. SYSTEM ARCHITECTURE
+%  VI. SYSTEM ARCHITECTURE
 % ============================================================
 \section{System Architecture}
 \label{sec:system_architecture}
 
-Fig.~\ref{fig:system_block} gives an overview of the full \ac{TERESA}
-system. The architecture is organised into four layers: sensors,
-perception, mission management, and control. All components communicate
-over \ac{ROS}~2 with \ac{DDS}, distributed across two compute units:
-a NVIDIA Jetson (perception and arm control) and the Spot onboard
-computer SpotCore (base control and locomotion).
+The \ac{TERESA} system is organised into four layers---hardware, perception,
+mission management, and control---communicating over \ac{ROS}~2 with
+\ac{DDS}. Computation is distributed across three units: the Spot onboard
+computer SpotCore (base control and odometry), a NVIDIA Jetson (perception
+and arm control), and an external PC (mission coordination and \ac{WBC}).
+All components described in this section are available as open-source
+software.
 
-\begin{figure*}[t]
-  \centering
-  \resizebox{\textwidth}{!}{\input{figures/system_block}}
-  \caption{Block diagram of the \ac{TERESA} system. Arrows indicate
-           the main data flows. The \ac{FSM} acts as the central
-           orchestrator, enabling and disabling the \ac{WBC} \ac{QP}
-           and impedance controller based on mission phase.}
-  \label{fig:system_block}
-\end{figure*}
-
-% ------------------------------------------------------------
 \subsection{Hardware Platform}
 
-The \ac{TERESA} platform consists of three main hardware components.
-The \textbf{Boston Dynamics Spot} quadruped provides mobile navigation
-on unstructured terrain. It is commanded via its onboard \ac{ROS}~2
-driver (\texttt{spot\_ros2}) through high-level velocity commands
-$[v_x, \omega_z]$ on the \texttt{/cmd\_vel} topic. The \textbf{Unitree
-Z1} is a six-\ac{DOF} serial manipulator with a payload of
-\SI{2}{\kilogram}, mounted rigidly on Spot's back. It is controlled at
-the torque level through a \ac{JTC} interface running on the Jetson.
-The \textbf{ultrasound probe} is attached to the Z1 flange
-(\ac{EE} frame $\mathcal{F}_{EE}$) and serves as the sensing element
-for the \ac{FAST} scan.
+The \textbf{Boston Dynamics Spot} quadruped provides mobile navigation on
+unstructured terrain. It is commanded via its onboard \ac{ROS}~2 driver
+(\texttt{spot\_ros2}) through velocity commands $[v_x, \omega_z]$ on the
+\texttt{/cmd\_vel} topic and body posture commands on the
+\texttt{/body\_pose} topic. The \textbf{Unitree Z1} is a six-\ac{DOF}
+serial manipulator with a payload of \SI{2}{\kilogram}, mounted rigidly on
+Spot's back. It is controlled at the torque level through a \ac{JTC}
+interface running on the Jetson. The \textbf{ultrasound probe} is attached
+to the Z1 flange ($\mathcal{F}_{EE}$).
 
-\subsection{Sensor Suite}
+Two depth cameras provide complementary coverage. An \textbf{Orbbec Femto
+Bolt \ac{RGBD}} camera is mounted on Spot's body and provides a wide field
+of view for patient detection at distances up to \SI{3}{\metre}. An
+\textbf{Intel RealSense D435 \ac{RGBD}} camera is mounted at the Z1
+\ac{EE} and provides close-range depth and colour for surface estimation
+and torso tracking during scanning.
 
-Two depth cameras cover complementary fields of view:
+\subsection{Frame Tree}
 
+The \ac{TF} tree defines the spatial relationships between all system
+components. Fig.~\ref{fig:system_block} illustrates the frame hierarchy:
+\begin{center}
+\begin{tikzpicture}[
+  level distance=12mm,
+  sibling distance=28mm,
+  every node/.style={draw, rounded corners=2pt, font=\footnotesize,
+                     inner sep=2pt, minimum height=6mm},
+  edge from parent/.style={draw, -latex}
+]
+\node {my\_spot/odom}
+  child { node {my\_spot/body}
+    child { node {orbbec\_link}
+      child { node {orbbec\_color\_optical\_frame} }
+    }
+    child { node {world}
+      child { node {link00}
+        child[level distance=10mm] { node {$\cdots$} }
+      }
+    }
+  };
+\end{tikzpicture}
+\end{center}
+The key properties of this tree are:
 \begin{itemize}
-  \item \textbf{Orbbec RGB-D}: mounted on the Spot body, provides a
-        wide field of view for patient detection at distances up to
-        \SI{3}{\metre}. It feeds the \ac{YOLO}+\ac{KF} perception
-        pipeline during the approach phase.
-
-  \item \textbf{Intel RealSense D435}: mounted at the Z1 \ac{EE},
-        provides close-range depth and colour for surface normal
-        estimation. It is active during the scanning phase once the
-        probe is within \SI{30}{\centi\metre} of the patient.
+  \item \texttt{my\_spot/odom} is world-fixed, published by SpotCore
+        odometry.
+  \item \texttt{my\_spot/body} moves with the base (height, pitch, and yaw
+        are set via \texttt{/body\_pose}).
+  \item \texttt{body $\to$ orbbec\_link} and \texttt{body $\to$ world} are
+        static transforms representing the calibrated Orbbec and Z1 mount
+        positions.
+  \item \texttt{world $\to$ link00} is a fixed joint in the Z1 URDF,
+        published by \texttt{robot\_state\_publisher}. The Z1 arm chain
+        \texttt{link00 $\to$ $\cdots$ $\to$ link06} follows.
+  \item \texttt{link06 $\to$ camera\_link $\to$ camera\_color\_optical\_frame}
+        defines the RealSense pose on the \ac{EE}.
 \end{itemize}
-
-The static transform between the Spot body frame $\mathcal{F}_B$ and
-the arm base frame $\mathcal{F}_0$ is a calibrated rigid offset
-published as a static \ac{TF} at system startup.
+Because the \texttt{body $\to$ world} transform is static, the entire Z1
+kinematic tree moves rigidly with Spot, and any change in body posture
+automatically propagates to the arm base frame $\mathcal{F}_0$.
 
 \subsection{Perception Pipeline}
 
-\subsubsection{Wide-field patient localisation (Orbbec)}
-During the approach phase, \ac{YOLO}11-pose~\cite{maji2022} runs on
-the Orbbec \ac{RGBD} stream at \SI{30}{\hertz} and detects the
-skeleton of the patient. The torso position is computed as the
-centroid of four \ac{COCO} keypoints---left shoulder, right shoulder,
-left hip, right hip---by back-projecting their image coordinates
-through the calibrated depth map. The resulting 3D measurement feeds
-the \texttt{Kalman3D} filter (state: position + velocity,
-$\mathbf{x}_{KF} \in \mathbb{R}^6$), which predicts the torso
-position at every frame and updates only when a valid detection is
-available. The filtered estimate $\hat{\mathbf{p}}(t)$ is published
-to the \ac{WBC} as the approach target.
+\subsubsection{Wide-field patient detection (Orbbec)}
+During the SEARCHING and approach phases, \ac{YOLO}11-pose~\cite{maji2022}
+runs on the Orbbec \ac{RGBD} stream and detects the patient's skeleton. A
+posture classifier labels the patient's pose (standing, sitting, lying) and
+outputs a confidence score $c \in [0, 1]$. A laying-human detector
+computes the approach point as the torso centroid of the four \ac{COCO}
+keypoints (shoulders and hips), back-projected to 3D via the calibrated
+depth map, and publishes the body axis direction (head-to-feet) for robot
+alignment. The approach point is initially expressed in the camera optical
+frame; the \ac{TF} tree transforms it to $\mathcal{F}_W$ for target locking
+(Section~\ref{sec:confidence_search}).
 
-\subsubsection{Close-range surface estimation (RealSense)}
-Once the \ac{FSM} transitions to the HANDOFF state, the RealSense
-becomes the primary sensor. A surface estimation node fits a plane to
-the depth point cloud in a region of interest around the detected
-torso, and publishes the surface centroid $\mathbf{p}_s$ and outward
-normal $\mathbf{n}_s$ as a \texttt{PoseStamped} message. These are
-used by the impedance controller to compute the desired probe position
-via~\eqref{eq:surface_target}.
+\subsubsection{Close-range torso tracking (RealSense)}
+Once the mission transitions to PRE\_APPROACH, the \ac{EE}-mounted
+RealSense camera becomes active. A \ac{YOLO}-based torso tracker with a
+six-state \ac{KF} (position and velocity) publishes a filtered torso
+estimate $\hat{\mathbf{p}}(t)$ and a tracker state (LOCKED, TRACKING,
+LOST). A surface estimation node fits a plane to the depth point cloud in
+a region of interest around the detected torso, publishing the surface
+centroid $\mathbf{p}_s$ and outward normal $\mathbf{n}_s$ as a
+\texttt{PoseStamped} message.
 
-\subsection{Mission FSM}
+\subsubsection{Sensor handoff strategy}
+The transition from Orbbec to RealSense is not a hard switch but a
+confidence-driven handoff. During PRE\_APPROACH the coordinator requires
+several consecutive LOCKED readings from the RealSense tracker before
+advancing to the approach phase. This ensures that the close-range sensor
+has reliably acquired the patient before the Orbbec loses the target at
+short range. If the RealSense fails to lock within a timeout, the system
+still proceeds, falling back to the odometry target acquired during
+SEARCHING.
 
-The mission is orchestrated by a six-state \ac{FSM} implemented in the
+\subsection{Mission Finite State Machine}
+
+The mission is orchestrated by a seven-state \ac{FSM} implemented in the
 \texttt{wbc\_coordinator} node. Fig.~\ref{fig:fsm} shows the state
-diagram.
+transitions; Table~\ref{tab:fsm_roles} summarises which components are
+active in each state.
 
 \begin{figure}[t]
   \centering
   \resizebox{\columnwidth}{!}{\input{figures/fsm}}
-  \caption{Mission \ac{FSM}. Blue states have the \ac{WBC} \ac{QP}
-           active; the green state uses the impedance controller.
-           APPR.~=~APPROACHING, CONF.~=~CONFIRMING,
-           WS\_EXT~=~WS\_EXTENSION.}
+  \caption{Mission \ac{FSM}. Transitions are triggered by perception
+           confidence (dashed arcs) or geometric conditions (solid arcs).
+           WS\_EXT = workspace extension.}
   \label{fig:fsm}
 \end{figure}
 
-\begin{itemize}
-  \item \textbf{IDLE}: system inactive, waiting for a valid patient
-        detection from the Orbbec pipeline.
+\begin{table}[t]
+  \centering
+  \caption{Component activation by mission phase. $\bullet$ = active,
+           $\circ$ = idle, $-$ = not relevant.}
+  \label{tab:fsm_roles}
+  \resizebox{\columnwidth}{!}{%
+  \begin{tabular}{lccccc}
+    \toprule
+    Phase & Spot & Arm & Orbbec & RealSense & Body Scanner \\
+    \midrule
+    WAITING\_TF  & $\circ$ & $\circ$ & $\circ$ & $\circ$ & $-$ \\
+    IDLE         & $\circ$ & $\circ$ & $\circ$ & $\circ$ & $-$ \\
+    SEARCHING    & $\bullet$ & $\circ$ & $\bullet$ & $\circ$ & $-$ \\
+    PRE\_APPROACH & $\bullet$ & $\bullet$ & $\circ$ & $\bullet$ & $\circ$ \\
+    APPROACHING  & $\bullet$ & $\bullet$ & $\circ$ & $\bullet$ & $\bullet$ \\
+    SCANNING     & $\bullet$ & $\bullet$ & $-$ & $\bullet$ & $\bullet$ \\
+    WS\_EXTENSION & $\bullet$ & $\bullet$ & $-$ & $\bullet$ & $-$ \\
+    \bottomrule
+  \end{tabular}}
+\end{table}
 
-  \item \textbf{APPROACHING}: \ac{WBC} \ac{QP} active. Spot navigates
-        toward the patient while the Z1 arm pre-positions the probe
-        in the direction of $\hat{\mathbf{p}}(t)$. The \ac{QP} target
-        is updated every \SI{1.5}{\second} to respect the minimum
-        trajectory time of the arm \ac{JTC}.
+\begin{description}
+  \item[WAITING\_TF]The system waits for the \texttt{tf\_monitor} node
+        to confirm that all \ac{TF} chains and hardware topics are
+        available. This gate prevents premature activation when SpotCore
+        \ac{DDS} discovery is still in progress.
+  \item[IDLE] All \ac{TF} ready. The system waits for a start command
+        from the keyboard operator.
+  \item[SEARCHING] Spot lowers its body and executes the confidence-gated
+        posture grid search (Section~\ref{sec:confidence_search}). The
+        arm remains in a nominal home pose.
+  \item[PRE\_APPROACH] The patient has been locked with high confidence.
+        Spot straightens. The RealSense tracker is activated and the
+        coordinator waits for consecutive LOCKED states. The \ac{WBC}
+        arm look-at (Section~\ref{sec:method}) begins.
+  \item[APPROACHING] The Spot navigator drives toward the target while
+        the anticipatory body scanner (Section~\ref{sec:anticipatory_scan})
+        executes the ARC\_GRID scan. The arm maintains look-at via
+        \ac{WBC}. Quality-aware velocity scaling modulates the approach
+        speed.
+  \item[SCANNING] Handoff distance reached. Spot assumes a lowered body
+        posture. The body scanner completes phase three if necessary and
+        publishes the FAST target set. The coordinator executes the
+        pre-planned body reconfiguration between targets
+        (Section~\ref{sec:method}), while the Z1 \ac{FSM} drives the arm
+        through each scanning target.
+  \item[WS\_EXTENSION] If a target is reported unreachable, Spot executes
+        a micro-step to bring the target back into the workspace. Once
+        confirmed, the \ac{FSM} returns to SCANNING.
+\end{description}
 
-  \item \textbf{CONFIRMING}: Orbbec detection confidence drops below
-        threshold. The arm holds its last estimate; the \ac{WBC}
-        remains active but the goal is frozen. If confidence recovers,
-        the \ac{FSM} returns to APPROACHING; if the patient is
-        completely lost, it transitions to HANDOFF.
+At any time, a stop command from the keyboard immediately transitions the
+\ac{FSM} to IDLE, bringing the base to a halt and returning the arm to a
+safe configuration.
 
-  \item \textbf{HANDOFF}: Orbbec loses the patient entirely. Spot
-        halts. Control is transferred to the RealSense pipeline, which
-        must lock onto the torso surface before the \ac{FSM} can
-        advance.
+\subsection{WBC and Mission Components}
 
-  \item \textbf{SCANNING}: \ac{WBC} \ac{QP} dormant. The impedance
-        controller drives the probe through the \ac{FAST} scan
-        sequence using the surface frame from the RealSense. If a
-        target is reported unreachable, the \ac{FSM} triggers a
-        workspace extension.
+The \ac{WBC} layer comprises the nodes launched by
+\texttt{wbc.launch.py}, listed in Table~\ref{tab:wbc_nodes}.
 
-  \item \textbf{WS\_EXTENSION}: the \ac{WBC} \ac{QP} reactivates to
-        execute a micro-step that repositions Spot so that the target
-        re-enters the Z1 workspace. Once the arm \ac{IK} confirms
-        success (\texttt{/ik\_done}), the \ac{FSM} returns to
-        SCANNING.
-\end{itemize}
+\begin{table}[t]
+  \centering
+  \caption{\ac{WBC} and mission orchestration nodes.}
+  \label{tab:wbc_nodes}
+  \resizebox{\columnwidth}{!}{%
+  \begin{tabular}{lp{6.8cm}}
+    \toprule
+    Node & Role \\
+    \midrule
+    \texttt{wbc\_coordinator} & Seven-state mission \ac{FSM},
+      QualityMonitor, body pose grid search optimisation. \\
+    \texttt{wbc\_qp\_controller} & Arm \ac{WBC} look-at via damped
+      pseudo-inverse, base velocity scaling, \texttt{cmd\_vel} caching. \\
+    \texttt{wbc\_spot\_navigator} & Simplified approach navigator:
+      rotate $\to$ drive $\to$ stop toward the odometry goal. \\
+    \texttt{wbc\_approach\_scanner} & Anticipatory ARC\_GRID body scan,
+      multi-view keypoint fusion, conditional phase-three refinement,
+      FAST target generation. \\
+    \texttt{tf\_monitor} & Continuous monitoring of eight \ac{TF} chains
+      and three hardware topics; publishes
+      \texttt{/wbc/tf\_ready}. \\
+    \texttt{ik\_goal\_mux} & Priority multiplexer: \ac{WBC} arm goals
+      override Z1 \ac{FSM} goals when \ac{WBC} is enabled. \\
+    \bottomrule
+  \end{tabular}}
+\end{table}
 
-\subsection{IK Goal Multiplexer}
+\subsection{Z1 Control Components}
 
-The Z1 arm \ac{IK}-to-\ac{JTC} node receives a single
-\texttt{/ik\_goal\_pose} topic. Since both the \ac{WBC} \ac{QP} and
-the z1\_FSM scan controller publish arm targets, an \texttt{ik\_goal\_mux}
-node arbitrates between them based on a binary enable signal
-(\texttt{/wbc/enable}) from the \ac{FSM}: when \ac{WBC} is active its
-target takes priority; otherwise the z1\_FSM target is forwarded.
-This design preserves the existing arm control stack unchanged.
+The Z1 arm control stack, listed in Table~\ref{tab:z1_nodes}, is
+independent of the \ac{WBC} layer and can operate in standalone mode
+for fixed-base scanning.
+
+\begin{table}[t]
+  \centering
+  \caption{Z1 arm control and scanning nodes.}
+  \label{tab:z1_nodes}
+  \resizebox{\columnwidth}{!}{%
+  \begin{tabular}{lp{6.8cm}}
+    \toprule
+    Node & Role \\
+    \midrule
+    \texttt{z1\_FSM} & Arm mission \ac{FSM}: HOMING $\to$ WAITING
+      $\to$ CHECKING\_WORKSPACE $\to$ APPROACHING $\to$ FAST cycle. \\
+    \texttt{z1\_ik\_to\_jtc} & Pinocchio damped pseudo-inverse \ac{IK}
+      with smoothstep quintic trajectory generation $\to$ \ac{JTC}
+      action. \\
+    \texttt{safe\_controller\_switch} & Service-based switching between
+      \ac{JTC} (position) and torque controller (impedance). \\
+    \texttt{impedance\_controller\_realsense} & Cartesian impedance at
+      \SI{500}{\hertz}, adaptive gains, RNEA gravity and Coriolis
+      compensation. \\
+    \texttt{body\_search\_scanner} & Multi-phase body search: wrist
+      sweep $\to$ arc $\to$ adaptive refinement. \\
+    \texttt{z1\_scan\_manager} & Computation of five FAST target poses
+      from fused torso keypoints. \\
+    \bottomrule
+  \end{tabular}}
+\end{table}
+
+\subsection{Z1 FSM Integration with WBC Coordinator}
+
+The Z1 \ac{FSM} and the WBC coordinator communicate through a small set
+of \ac{ROS} topics to synchronise their state machines.
+
+In standalone mode (no WBC), the Z1 \ac{FSM} executes its own body
+scanning phase after homing. When integrated with \ac{TERESA}, the
+\ac{FSM} enters WAITING after homing and listens for two conditions:
+\texttt{/wbc/state = `SCANNING'} (indicating that the approach is
+complete) and \texttt{/z1/fast\_ready = True} (indicating that the
+anticipatory body scanner has computed the FAST target set). If both are
+received, the \ac{FSM} skips its internal \texttt{BODY\_SCANNING} phase
+entirely, avoiding redundant scanning.
+
+During the FAST cycle, the WBC coordinator optimises Spot's body posture
+for each target and broadcasts \texttt{/wbc/body\_ready}. The Z1
+\ac{FSM} waits for this signal before executing the approach to the next
+target. After each target is reached, the \ac{FSM} publishes
+\texttt{/z1/next\_point\_idx} to request the next body posture
+optimisation. This synchronisation loop continues for all $N$ targets.
+
+\subsection{Operational Flow}
+
+The full mission is launched from five terminal sessions:
+\begin{enumerate}
+  \item \texttt{teresa\_core.launch.py} --- Spot driver, Orbbec driver,
+        RealSense driver, Z1 bringup, static \ac{TF} transforms,
+        \texttt{tf\_monitor}.
+  \item \texttt{teresa\_perception.launch.py} --- Orbbec YOLO perception
+        nodes and RealSense YOLO torso tracker.
+  \item \texttt{z1\_control.launch.py} --- Z1 arm control stack
+        (\ac{IK}, \ac{FSM}, controller switching, impedance).
+  \item \texttt{wbc.launch.py} --- WBC coordinator, \ac{QP} controller,
+        spot navigator, approach scanner, \ac{IK} goal multiplexer.
+  \item \texttt{wbc\_keyboard\_node} --- Operator keyboard interface
+        (start, stop, emergency return).
+\end{enumerate}
+
+Upon launch, the \texttt{tf\_monitor} verifies all \ac{TF} chains and
+hardware topics. When ready, the keyboard operator presses the start
+key, and the mission proceeds through the \ac{FSM} states automatically
+until all scanning targets are completed or an emergency stop is
+triggered.

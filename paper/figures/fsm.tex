@@ -1,9 +1,9 @@
 % ============================================================
-%  FSM DIAGRAM — 6 states
+%  FSM DIAGRAM — 5 states (CONFIRMING removed)
 %  Requires: tikz, automata library
 % ============================================================
 \begin{tikzpicture}[
-    node distance  = 3.2cm,
+    node distance  = 3.0cm,
     auto,
     >=stealth,
     state/.style   = {circle, draw, minimum size=1.6cm, font=\small\bfseries,
@@ -18,7 +18,6 @@
   % ── Nodes ───────────────────────────────────────────────────
   \node[idle]  (idle)                          {IDLE};
   \node[wbc]   (app)  [right=of idle]          {APPR.};
-  \node[wbc]   (conf) [above=2.0cm of app]     {CONF.};
   \node[wbc]   (hand) [right=of app]           {HANDOFF};
   \node[scan]  (scan) [right=of hand]          {SCANNING};
   \node[wbc]   (wse)  [below=2.0cm of scan]    {WS\_EXT};
@@ -26,24 +25,17 @@
   % ── Transitions ─────────────────────────────────────────────
   \draw[trans] (idle) -- node[above]{\scriptsize patient det.} (app);
 
-  \draw[trans] (app)  to[bend left=20]
-               node[right]{\scriptsize conf.$\downarrow$}    (conf);
-  \draw[trans] (conf) to[bend left=20]
-               node[left]{\scriptsize conf. rec.}           (app);
+  \draw[trans] (app) -- node[above]{\scriptsize patient lost} (hand);
 
-  \draw[trans] (conf) to[out=0,in=150]
-               node[above,sloped]{\scriptsize patient lost}  (hand);
-  \draw[trans] (app)  -- node[above]{\scriptsize dist. thr.} (hand);
-
-  \draw[trans] (hand) -- node[above]{\scriptsize RS locked}  (scan);
+  \draw[trans] (hand) -- node[above]{\scriptsize RS locked} (scan);
 
   \draw[trans] (scan) to[bend left=20]
-               node[right]{\scriptsize unreachable}          (wse);
-  \draw[trans] (wse)  to[bend left=20]
-               node[left]{\scriptsize ik\_done}              (scan);
+               node[right]{\scriptsize unreachable} (wse);
+  \draw[trans] (wse) to[bend left=20]
+               node[left]{\scriptsize ik\_done} (scan);
 
   \draw[trans] (scan) to[out=200,in=340]
-               node[below]{\scriptsize scan done}            (idle);
+               node[below]{\scriptsize scan done} (idle);
 
   % ── Legend ──────────────────────────────────────────────────
   \node[wbc,  minimum size=0.55cm, font=\scriptsize] at (0.0,-2.6) {};

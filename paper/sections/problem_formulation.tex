@@ -6,13 +6,14 @@
 
 \subsection{System Model}
 
-The system consists of a Boston Dynamics Spot quadruped and a Unitree Z1
-serial manipulator arm rigidly mounted on the robot's back. Four reference
-frames are defined: the world frame $\mathcal{F}_W$, the Spot body frame
+The \ac{TERESA} platform consists of a Boston Dynamics Spot quadruped and a
+Unitree Z1 six-\ac{DOF} serial manipulator arm rigidly mounted on the
+robot's back. Four reference frames are defined: the world frame
+$\mathcal{F}_W$ (coincident with Spot odometry), the Spot body frame
 $\mathcal{F}_B$ (origin at the geometric centre of the base), the arm base
 frame $\mathcal{F}_0$ (coincident with Z1 link~0, fixed relative to
-$\mathcal{F}_B$), and the end-effector frame $\mathcal{F}_{EE}$ (at the
-Z1 flange, where the ultrasound probe is attached).
+$\mathcal{F}_B$), and the end-effector frame $\mathcal{F}_{EE}$ (at the Z1
+flange, where the ultrasound probe is attached).
 
 \subsubsection{Spot base kinematics}
 The Spot base is modelled as a non-holonomic vehicle constrained to move on a
@@ -20,7 +21,7 @@ planar surface. Its configuration is described by
 $\boldsymbol{\xi} = [x,\, y,\, \theta]^\top \in \mathbb{R}^2 \times
 \mathbb{S}^1$, where $(x, y)$ is the position of $\mathcal{F}_B$ in
 $\mathcal{F}_W$ and $\theta$ is the yaw angle. The non-holonomic constraint
-(no lateral slip) restricts the admissible base velocities to
+restricts the admissible base velocities to
 \begin{equation}
   \dot{\boldsymbol{\xi}} =
   \begin{bmatrix} \dot{x} \\ \dot{y} \\ \dot{\theta} \end{bmatrix}
@@ -34,33 +35,37 @@ where $v_x \in \mathbb{R}$ is the forward linear velocity and
 $\omega_z \in \mathbb{R}$ is the yaw angular velocity, both expressed in
 $\mathcal{F}_B$.
 
+\subsubsection{Body posture}
+In addition to planar navigation, Spot can reconfigure its body posture by
+changing its height $h \in \mathbb{R}$ and pitch angle
+$\varphi \in \mathbb{R}$ relative to the nominal standing configuration.
+The height $h$ is a vertical offset of $\mathcal{F}_B$ (negative values lower
+the body, bringing the onboard camera closer to the ground); the pitch
+$\varphi$ is a rotation about the body $y$-axis (positive values tilt the
+body forward, orienting the camera toward the floor). These parameters are
+commanded through the native \texttt{body\_pose} interface of the Spot
+driver. The combined base configuration is therefore
+$[x,\, y,\, \theta,\, h,\, \varphi]^\top$.
+
 \subsubsection{Z1 arm kinematics}
 The Z1 arm has $n = 6$ revolute joints with configuration vector
 $\mathbf{q} = [q_1, \ldots, q_6]^\top \in \mathbb{R}^6$ and joint velocity
 vector $\dot{\mathbf{q}} \in \mathbb{R}^6$. The forward kinematics map
 $\mathbf{T}_{EE}(\mathbf{q}) \in SE(3)$ gives the homogeneous transformation
-from $\mathcal{F}_0$ to $\mathcal{F}_{EE}$:
-\begin{equation}
-  \mathbf{T}_{EE}(\mathbf{q}) =
-  \prod_{i=1}^{6} \mathbf{T}_{i-1,i}(q_i),
-  \label{eq:fk}
-\end{equation}
-where $\mathbf{T}_{i-1,i}(q_i) \in SE(3)$ is the transformation between
-consecutive link frames. The arm geometric Jacobian $\mathbf{J}_{\mathrm{arm}}
-(\mathbf{q}) \in \mathbb{R}^{6 \times 6}$ relates joint velocities to the
-spatial velocity of $\mathcal{F}_{EE}$ expressed in $\mathcal{F}_0$:
+from $\mathcal{F}_0$ to $\mathcal{F}_{EE}$ via the standard product of
+exponentials. The arm geometric Jacobian
+$\mathbf{J}_{\mathrm{arm}}(\mathbf{q}) \in \mathbb{R}^{6 \times 6}$ relates
+joint velocities to the spatial velocity of $\mathcal{F}_{EE}$ expressed in
+$\mathcal{F}_0$:
 \begin{equation}
   \mathbf{v}_{EE}^{\mathrm{arm}} =
-  \mathbf{J}_{\mathrm{arm}}(\mathbf{q})\,\dot{\mathbf{q}},
+  \mathbf{J}_{\mathrm{arm}}(\mathbf{q})\,\dot{\mathbf{q}}.
   \label{eq:arm_jacobian}
 \end{equation}
-where $\mathbf{v}_{EE}^{\mathrm{arm}} =
-[\boldsymbol{\omega}^\top,\, \dot{\mathbf{p}}^\top]^\top \in \mathbb{R}^6$
-is the concatenation of angular velocity $\boldsymbol{\omega} \in \mathbb{R}^3$
-and linear velocity $\dot{\mathbf{p}} \in \mathbb{R}^3$ of the \ac{EE}.
 
-\subsubsection{Unified decision variable}
-The combined control input is defined as
+\subsubsection{Unified control input}
+During the approach phase, the system commands the arm joints and the base
+velocity simultaneously through the combined input
 \begin{equation}
   \mathbf{u} =
   \begin{bmatrix} \dot{\mathbf{q}} \\ v_x \\ \omega_z \end{bmatrix}
@@ -73,58 +78,89 @@ subject to the velocity bounds
   \label{eq:bounds}
 \end{equation}
 where $\mathbf{u}_{\min}, \mathbf{u}_{\max} \in \mathbb{R}^8$ encode joint
-velocity limits for the arm and maximum linear and angular speed for the base.
+velocity limits for the arm and maximum linear and angular speed for the
+base. Body posture commands $(h, \varphi)$ are not part of the continuous
+control input; they are set at discrete instants between mission phases,
+with the robot given a settle time before the next phase begins.
+
+\subsection{Perception Model}
+
+The quality of patient detection depends on the robot's body posture, as
+the onboard Orbbec \ac{RGBD} camera is rigidly attached to $\mathcal{F}_B$.
+Let $c(t) \in [0, 1]$ denote the detection confidence provided by the
+\ac{YOLO}-based perception pipeline at time $t$. We do not assume an
+analytical form for the mapping from posture to confidence, but we rely on
+the empirical observation that body height and pitch significantly affect
+the camera's field of view and, consequently, the reliability of patient
+localisation. The system operates under the premise that there exists a
+posture $(h^*, \varphi^*)$ that maximises detection quality for a given
+scene geometry, and that this posture can be discovered through active
+search.
+
+During scanning, the anatomical target positions are estimated in the
+odometry frame $\mathcal{F}_W$ by the anticipatory body scanner
+(Section~\ref{sec:active_perception}). These estimates are transformed into
+the arm base frame $\mathcal{F}_0$ at execution time via the \ac{TF} tree,
+so that changes in body posture $(h, \varphi)$ are automatically reflected
+in the \ac{IK} goal without requiring re-estimation of the target.
 
 \subsection{Task Definition}
 
-An autonomous \ac{FAST} scan requires the \ac{EE} to reach a sequence of
-$N$ anatomical target poses. Let
-$\mathcal{T} = \{\mathbf{T}_i^* \in SE(3)\}_{i=1}^{N}$, with $N = 4$,
-denote the desired \ac{EE} poses corresponding to the four \ac{FAST} windows:
-subxiphoid, right upper quadrant, left upper quadrant, and suprapubic.
-Each target pose $\mathbf{T}_i^* = (\mathbf{R}_i^*, \mathbf{p}_i^*)$
-comprises a desired \ac{EE} position $\mathbf{p}_i^* \in \mathbb{R}^3$ and
-orientation $\mathbf{R}_i^* \in SO(3)$, both expressed in $\mathcal{F}_W$.
+An autonomous emergency assessment mission requires the \ac{EE} to reach a
+sequence of $N$ anatomical target poses. Let
+$\mathcal{T} = \{\mathbf{T}_i^* \in SE(3)\}_{i=1}^{N}$ denote the desired
+\ac{EE} poses corresponding to the anatomical windows of interest (e.g., the
+four \ac{FAST} quadrants). Each target pose
+$\mathbf{T}_i^* = (\mathbf{R}_i^*, \mathbf{p}_i^*)$ comprises a desired
+\ac{EE} position $\mathbf{p}_i^* \in \mathbb{R}^3$ and orientation
+$\mathbf{R}_i^* \in SO(3)$, both expressed in $\mathcal{F}_W$.
 
-The target positions are not known a priori. During the approach phase, a
-patient position estimate $\hat{\mathbf{p}}(t) \in \mathbb{R}^3$, obtained
-from the \ac{YOLO}+\ac{KF} perception pipeline (Section~\ref{sec:system_architecture}),
-is used to compute a dynamically updated intermediate goal for the \ac{WBC}.
-Once the robot reaches the scanning distance, the \ac{FAST} target poses
-$\mathcal{T}$ are determined from the surface geometry estimated by the
-\ac{EE}-mounted RealSense camera.
+The target poses are not known a priori. They are acquired in two stages.
+During the approach phase, a wide-field patient detection pipeline provides a
+time-varying estimate of the patient's torso position $\hat{\mathbf{p}}(t)$
+in the camera frame, which the system transforms to $\mathcal{F}_W$ once the
+patient has been localised with sufficient confidence. During the approach
+and early scanning phases, an anticipatory multi-view body scanner maps the
+patient's anatomy in $\mathcal{F}_W$, from which the target set $\mathcal{T}$
+is computed.
 
 \subsection{Problem Statement}
 
-Given the system model defined in~\eqref{eq:nonholonomic}--\eqref{eq:decision_var}
-and the target set $\mathcal{T}$, the autonomous \ac{FAST} scanning problem
-is to find a control sequence $\mathbf{u}(t)$ that:
+Given the system model defined
+in~\eqref{eq:nonholonomic}--\eqref{eq:bounds} and the unknown patient
+position, the autonomous emergency assessment problem is to find a control
+sequence $\mathbf{u}(t)$ and a sequence of body posture commands
+$(h(t), \varphi(t))$ that enable the robot to:
 \begin{enumerate}
-  \item \textbf{Navigation}: drives the Spot base from its initial pose
-        $\boldsymbol{\xi}_0$ to a configuration from which all targets in
-        $\mathcal{T}$ lie within the reachable workspace of the Z1 arm,
-        using the online patient estimate $\hat{\mathbf{p}}(t)$;
-
-  \item \textbf{Probe placement}: brings the \ac{EE} to each target pose
-        $\mathbf{T}_i^* \in \mathcal{T}$ in sequence, satisfying
+  \item \textbf{Active perception}: discover a body posture
+        $(h^*, \varphi^*, \theta^*)$ from which detection confidence
+        exceeds a threshold $c_{\min}$, ensuring robust patient
+        localisation before committing to the approach;
+  \item \textbf{Navigation}: drive the Spot base from its initial pose to a
+        configuration from which all targets in $\mathcal{T}$ lie within
+        the reachable workspace of the Z1 arm, using the online patient
+        estimate $\hat{\mathbf{p}}(t)$;
+  \item \textbf{Body reconfiguration}: for each scanning target $i =
+        1,\dots,N$, select a body posture $(h_i, \varphi_i)$ that brings
+        the target as close as possible to a preferred workspace centre
+        $\mathbf{p}_{\mathrm{sweet}} \in \mathbb{R}^3$ in $\mathcal{F}_0$,
+        maximising arm manipulability at execution time;
+  \item \textbf{Probe placement}: bring the \ac{EE} to each target pose
+        $\mathbf{T}_i^*$ in sequence, satisfying
         \begin{equation}
           \|\mathbf{p}_{EE}(t_i) - \mathbf{p}_i^*\| \leq \varepsilon_p,
-          \quad
-          d\!\left(\mathbf{R}_{EE}(t_i),\, \mathbf{R}_i^*\right) \leq \varepsilon_r,
           \label{eq:task_constraints}
         \end{equation}
-        where $\mathbf{p}_{EE}$ and $\mathbf{R}_{EE}$ are the current \ac{EE}
-        position and orientation, $\varepsilon_p > 0$ is the admissible
-        position error, $\varepsilon_r > 0$ is the admissible orientation
-        error, and $d(\cdot,\cdot)$ denotes a rotation distance on $SO(3)$;
-
-  \item \textbf{Contact}: maintains the probe in compliant contact with the
-        patient's skin during scanning, with normal contact force
-        $f_c \in [f_{\min},\, f_{\max}]$, where $f_{\min} > 0$ ensures
-        acoustic coupling and $f_{\max}$ is the patient-safety limit;
-
-  \item \textbf{Input feasibility}: satisfies the velocity bounds
-        in~\eqref{eq:bounds} at all times.
+        where $\mathbf{p}_{EE}$ is the current \ac{EE} position and
+        $\varepsilon_p > 0$ is the admissible position error;
+  \item \textbf{Input feasibility}: satisfy the velocity bounds
+        in~\eqref{eq:bounds} and the body posture constraints
+        \begin{equation}
+          h_{\min} \leq h \leq h_{\max}, \qquad
+          0 \leq \varphi \leq \varphi_{\max},
+          \label{eq:posture_bounds}
+        \end{equation}
+        at all times.
 \end{enumerate}
 
 \noindent
@@ -136,4 +172,7 @@ The following assumptions are adopted throughout this paper:
   \item[\textbf{A3}] The rigid transform between $\mathcal{F}_B$ and
         $\mathcal{F}_0$ is known and constant (fixed mount).
   \item[\textbf{A4}] A single patient is present in the scene.
+  \item[\textbf{A5}] The onboard cameras are the only source of perception;
+        no external infrastructure (e.g., external tracking systems) is
+        available.
 \end{itemize}

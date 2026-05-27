@@ -1,183 +1,176 @@
 % ============================================================
-%  IV. METHOD
+%  V. WHOLE-BODY RECONFIGURATION AND CONTACT CONTROL
 % ============================================================
-\section{Motion and Contact Control}
+\section{Whole-Body Reconfiguration and Contact Control}
 \label{sec:method}
 
-The proposed system employs two complementary controllers that are active
-in different mission phases. During the \textit{approach phase}, a
-\ac{WBC} \ac{QP} drives both the Spot base and the Z1 arm simultaneously
-to bring the \ac{EE} close to the patient. During the \textit{scanning
-phase}, a Cartesian impedance controller maintains compliant probe contact
-on the patient's skin. The handoff between the two controllers is managed
-by the mission \ac{FSM} described in Section~\ref{sec:system_architecture}.
-Fig.~\ref{fig:control_loop} shows the overall control loop.
+The \ac{TERESA} system employs three complementary control strategies that
+are active in different phases of the mission. During the approach, a
+\ac{WBC} formulation drives the arm to maintain an active look-at
+orientation toward the patient, feeding the anticipatory body scanner.
+Between scanning targets, a pre-planned body reconfiguration step optimises
+the legged base posture to bring each anatomical target into the arm's
+optimal workspace. During scanning, a Cartesian impedance controller---built
+specifically for the Z1 arm, which lacks native impedance hardware---maintains
+compliant probe contact on the patient's skin. The handoff between these
+controllers is managed by the mission \ac{FSM} described in
+Section~\ref{sec:system_architecture}.
 
-\begin{figure}[t]
-  \centering
-  \resizebox{\columnwidth}{!}{\input{figures/control_loop}}
-  \caption{Control loop architecture. During the approach phase the
-           \ac{WBC} \ac{QP} generates joint and base velocity commands.
-           During scanning the Cartesian impedance controller produces
-           joint torques. The \ac{FSM} switch selects the active
-           controller. Both paths share the same forward kinematics
-           feedback from Pinocchio.}
-  \label{fig:control_loop}
-\end{figure}
+\subsection{Whole-Body Control for Reactive Arm Look-At}
 
-% ------------------------------------------------------------
-\subsection{Holistic Jacobian}
-\label{sec:holistic_jacobian}
+During the approach phase, the Z1 arm must continuously orient its
+\ac{EE}-mounted RealSense camera toward the patient's torso to feed the
+anticipatory body scanner (Section~\ref{sec:anticipatory_scan}). The Spot
+base simultaneously navigates toward the target fixed in the odometry frame
+$\mathcal{F}_W$. \ac{TERESA} uses a \ac{WBC} formulation in which the arm
+joint velocities are computed to track a desired \ac{EE} orientation, while
+the base velocity is scaled by the perception-quality monitor.
 
-To enable simultaneous base and arm control, we construct a holistic
-Jacobian that maps the unified control input $\mathbf{u}$
-(defined in~\eqref{eq:decision_var}) to the spatial velocity of the
-\ac{EE} expressed in the world frame $\mathcal{F}_W$.
-
-\subsubsection{Base contribution}
-The Spot base moves as a non-holonomic vehicle. The linear velocity of
-the \ac{EE} induced by base motion depends on both $v_x$ and $\omega_z$
-and on the position of the \ac{EE} relative to the body frame origin.
-Let $\mathbf{p}_{EE}^B \in \mathbb{R}^3$ be the \ac{EE} position
-expressed in $\mathcal{F}_B$, and let $\mathbf{R}_{WB} \in SO(3)$ be
-the rotation matrix from $\mathcal{F}_B$ to $\mathcal{F}_W$. The
-contribution of base velocities $[v_x,\, \omega_z]^\top$ to the spatial
-\ac{EE} velocity in $\mathcal{F}_W$ is captured by the base Jacobian
-$\mathbf{J}_{\mathrm{base}} \in \mathbb{R}^{6 \times 2}$:
+\subsubsection{Arm look-at via damped pseudo-inverse}
+Let $\mathbf{p}_{EE} \in \mathbb{R}^3$ be the current \ac{EE} position and
+$\mathbf{p}^* \in \mathbb{R}^3$ the target position, both expressed in
+$\mathcal{F}_W$. The desired \ac{EE} orientation is computed so that the
+\ac{EE} $x$-axis points toward the target. Using the current arm
+configuration $\mathbf{q}$ and the arm Jacobian
+$\mathbf{J}_{\mathrm{arm}}(\mathbf{q}) \in \mathbb{R}^{6 \times 6}$
+defined in~\eqref{eq:arm_jacobian}, the joint velocity command
+$\dot{\mathbf{q}} \in \mathbb{R}^6$ is obtained via a damped
+pseudo-inverse:
 \begin{equation}
-  \mathbf{J}_{\mathrm{base}} =
-  \mathbf{R}_{WB}
-  \begin{bmatrix}
-    \mathbf{0}_{3 \times 2} \\
-    \begin{bmatrix} \mathbf{e}_x & \boldsymbol{\omega}_z \times \mathbf{p}_{EE}^B \end{bmatrix}
-  \end{bmatrix},
-  \label{eq:j_base}
-\end{equation}
-where $\mathbf{e}_x = [1,0,0]^\top$ is the forward direction in
-$\mathcal{F}_B$ and $\boldsymbol{\omega}_z = [0,0,1]^\top$ is the
-yaw axis. The upper three rows (angular part) are zero because the
-non-holonomic base does not contribute to the \ac{EE} angular velocity
-independently of the arm joints.
-
-\subsubsection{Holistic Jacobian assembly}
-The arm Jacobian $\mathbf{J}_{\mathrm{arm}}(\mathbf{q}) \in
-\mathbb{R}^{6 \times 6}$ (defined in~\eqref{eq:arm_jacobian}) is
-rotated into $\mathcal{F}_W$ using the current body orientation
-$\mathbf{R}_{WB}$. The holistic Jacobian is then assembled by
-horizontal concatenation:
-\begin{equation}
-  \mathbf{J}_h(\mathbf{q}, \boldsymbol{\xi}) =
-  \bigl[\,
-    \mathbf{R}_{WB}\,\mathbf{J}_{\mathrm{arm}}(\mathbf{q})
-    \;\big|\;
-    \mathbf{J}_{\mathrm{base}}(\mathbf{q}, \boldsymbol{\xi})
-  \,\bigr]
-  \in \mathbb{R}^{6 \times 8},
-  \label{eq:j_holistic}
-\end{equation}
-so that the \ac{EE} spatial velocity satisfies
-$\mathbf{v}_{EE} = \mathbf{J}_h\,\mathbf{u}$.
-
-% ------------------------------------------------------------
-\subsection{WBC Quadratic Program}
-\label{sec:wbc_qp}
-
-\subsubsection{Manipulability measure}
-The Yoshikawa manipulability index~\cite{yoshikawa1985} is used to
-quantify the arm's distance from kinematic singularities:
-\begin{equation}
-  m(\mathbf{q}) =
-  \sqrt{\det\!\left(
-    \mathbf{J}_{\mathrm{arm}}(\mathbf{q})\,
-    \mathbf{J}_{\mathrm{arm}}^\top(\mathbf{q})
-  \right)}.
-  \label{eq:manipulability}
-\end{equation}
-When $m$ is large the arm is well-conditioned; when $m \to 0$ the arm
-approaches a singularity.
-
-\subsubsection{Weighted cost function}
-The \ac{WBC} \ac{QP} seeks the control input $\mathbf{u}$ that best
-tracks a desired \ac{EE} velocity $\vdes \in \mathbb{R}^6$ while
-penalising joint and base velocities through a manipulability-aware
-weight matrix. The optimisation problem is:
-\begin{equation}
-  \mathbf{u}^* = \arg\min_{\mathbf{u}}\;
-  \frac{1}{2}\,\mathbf{u}^\top \mathbf{W}\,\mathbf{u}
-  \quad \text{s.t.} \quad
-  \mathbf{J}_h\,\mathbf{u} \approx \vdes,
-  \label{eq:qp}
-\end{equation}
-where $\mathbf{W} = \mathrm{diag}(w_1, \ldots, w_8) \in
-\mathbb{R}^{8 \times 8}$ is a diagonal weight matrix with entries:
-\begin{equation}
-  w_i =
-  \begin{cases}
-    \dfrac{\lambda_{\mathrm{arm}}}{m(\mathbf{q}) + \varepsilon}
-    & i = 1, \ldots, 6 \quad \text{(arm joints)} \\[6pt]
-    \lambda_{\mathrm{base}}
-    & i = 7, 8 \quad \text{(base: } v_x,\, \omega_z\text{)}
-  \end{cases}
-  \label{eq:weights}
-\end{equation}
-Here $\lambda_{\mathrm{arm}}, \lambda_{\mathrm{base}} > 0$ are tuning
-gains and $\varepsilon > 0$ is a small regularisation constant that
-prevents division by zero. When $m$ is high (arm well-conditioned),
-arm weights decrease, making arm motion less costly and preferred over
-base motion. As $m \to 0$ (near singularity), arm weights increase,
-automatically transferring effort to the base.
-
-\subsubsection{Closed-form solution}
-The constrained \ac{QP}~\eqref{eq:qp} admits a closed-form solution
-via the weighted damped pseudo-inverse:
-\begin{equation}
-  \mathbf{u}^* =
-  \mathbf{W}^{-1}\mathbf{J}_h^\top
+  \dot{\mathbf{q}} =
+  \mathbf{J}_{\mathrm{arm}}^\top
   \!\left(
-    \mathbf{J}_h\,\mathbf{W}^{-1}\mathbf{J}_h^\top
+    \mathbf{J}_{\mathrm{arm}}\,\mathbf{J}_{\mathrm{arm}}^\top
     + \mu\,\mathbf{I}_6
   \right)^{-1}
-  \vdes,
-  \label{eq:qp_solution}
+  \mathbf{v}_{\mathrm{des}},
+  \label{eq:damped_pinv}
 \end{equation}
-where $\mu > 0$ is a damping factor that ensures numerical stability
-near singularities. The solution is projected back to feasible commands
-by clipping each component of $\mathbf{u}^*$ to the bounds
-in~\eqref{eq:bounds}.
-
-\subsubsection{Desired EE velocity}
-The desired \ac{EE} velocity is computed from the position error between
-the current \ac{EE} position $\mathbf{p}_{EE} \in \mathbb{R}^3$ and
-the target position $\mathbf{p}^* \in \mathbb{R}^3$ provided by the
-perception pipeline:
+where $\mu > 0$ is a damping factor that ensures numerical stability near
+kinematic singularities. The desired spatial velocity
+$\mathbf{v}_{\mathrm{des}} \in \mathbb{R}^6$ is:
 \begin{equation}
-  \vdes =
+  \mathbf{v}_{\mathrm{des}} =
   \begin{bmatrix}
-    \mathbf{0}_3 \\
-    k_p\,(\mathbf{p}^* - \mathbf{p}_{EE})
+    k_r\,\mathbf{e}_{\mathrm{rot}} \\
+    \mathbf{0}_3
   \end{bmatrix},
   \label{eq:vdes}
 \end{equation}
-where $k_p > 0$ is a proportional gain with units of s$^{-1}$.
-The angular component is set to zero as orientation tracking during
-approach is not required; probe orientation is managed by the impedance
-controller during the scanning phase.
+where $k_r > 0$ is a rotational gain and $\mathbf{e}_{\mathrm{rot}} \in
+\mathbb{R}^3$ is the orientation error between the current \ac{EE}
+orientation and the desired look-at orientation. The orientation error is
+computed using a minimum-rotation formulation: given the home \ac{EE}
+orientation $\mathbf{R}_{\mathrm{home}} \in SO(3)$ and the desired look-at
+direction $\mathbf{x}_{EE} = (\mathbf{p}^* - \mathbf{p}_{EE}) /
+\|\mathbf{p}^* - \mathbf{p}_{EE}\|$, the desired rotation is the quaternion
+that maps $\mathbf{R}_{\mathrm{home}}\,\mathbf{e}_x$ to $\mathbf{x}_{EE}$
+with minimum angular displacement, relaxing the wrist configuration. The
+translational component of $\mathbf{v}_{\mathrm{des}}$ is zero because the
+translational target during scanning is provided separately by the body
+scanner (Section~\ref{sec:anticipatory_scan}); during approach, the arm
+maintains a nominal home position and contributes only orientation.
 
-% ------------------------------------------------------------
-\subsection{Cartesian Impedance Control}
-\label{sec:impedance}
+\subsubsection{Base velocity modulation}
+The Spot base velocity, consisting of forward velocity $v_x$ and yaw rate
+$\omega_z$, is controlled using a proportional law on the distance and
+angle to the target in $\mathcal{F}_W$. These raw commands are then scaled
+by the quality-aware velocity factor $v_{\mathrm{scale}}(q)$ derived from
+the QualityMonitor in~\eqref{eq:velocity_scale}, as per
+\eqref{eq:cmd_vel_scaled}. The base velocity is thus continuously modulated
+by perceptual confidence, closing the whole-body perception-action loop.
 
-Once the \ac{FSM} transitions to the scanning phase, the \ac{WBC}
-\ac{QP} is deactivated and a Cartesian impedance controller takes over
-the Z1 arm. The controller implements a hybrid strategy: Cartesian
-\ac{PID} control for translational motion and joint-space \ac{PD}
-control for wrist orientation.
+\subsubsection{Robustness to TF degradation}
+In a distributed system spanning the Spot onboard computer and an external
+PC, the \ac{TF} tree can experience transient failures due to clock
+desynchronisation or \ac{DDS} discovery delays. To maintain continuity of
+base motion, the controller caches the last valid velocity command. If a
+\ac{TF} lookup fails at the current control tick, the cached command is
+re-published, preventing the base from stopping during brief connectivity
+losses.
+
+\subsection{Pre-Planned Body Reconfiguration for Scanning}
+
+Once the anticipatory body scanner has localised the patient's anatomy and
+computed the FAST target set $\mathcal{T}$ in $\mathcal{F}_W$
+(Section~\ref{sec:anticipatory_scan}), the system must position the Z1 arm
+to reach each target. Simply keeping Spot at a fixed posture for all
+targets would force the arm to operate near the edge of its workspace for
+non-central targets, degrading manipulability and positioning accuracy.
+\ac{TERESA} addresses this by pre-planning an optimal body posture for
+each scanning target before the arm moves.
+
+\subsubsection{Workspace sweet spot}
+The preferred arm configuration is defined by a \textit{sweet spot}
+$\mathbf{p}_{\mathrm{sweet}} \in \mathbb{R}^3$ in the arm base frame
+$\mathcal{F}_0$. This point represents the \ac{EE} position at which the
+arm operates with high manipulability, comfortable joint angles, and
+sufficient reserve to accommodate small patient movements. For the Z1 arm
+mounted on Spot, $\mathbf{p}_{\mathrm{sweet}}$ is located approximately
+in front of and slightly above the arm base.
+
+\subsubsection{Grid search over body posture}
+For each FAST target $\mathbf{p}_i^*$ expressed in the odometry frame
+$\mathcal{F}_W$, the system searches over a discrete set of feasible body
+postures. Let $\mathcal{H} = \{h_1, \ldots, h_{N_h}\}$ be a set of body
+heights and $\mathcal{P} = \{\varphi_1, \ldots, \varphi_{N_p}\}$ a set of
+pitch angles. For each candidate posture $(h, \varphi)$, the position of
+the arm base frame $\mathcal{F}_0$ in $\mathcal{F}_W$ is computed from the
+known static transform $\mathcal{F}_B \to \mathcal{F}_0$ and the current
+body pose. The target position is then transformed to $\mathcal{F}_0$:
+\begin{equation}
+  \mathbf{p}_i^{\mathcal{F}_0}(h, \varphi) =
+  \mathbf{T}_{\mathcal{F}_W}^{\mathcal{F}_0}(h, \varphi)\,
+  \mathbf{p}_i^*.
+  \label{eq:target_in_F0}
+\end{equation}
+The score for each posture is the negative Euclidean distance from the
+transformed target to the sweet spot:
+\begin{equation}
+  s_i(h, \varphi) =
+  -\bigl\|\,\mathbf{p}_i^{\mathcal{F}_0}(h, \varphi) -
+  \mathbf{p}_{\mathrm{sweet}}\,\bigr\|.
+  \label{eq:posture_score}
+\end{equation}
+The optimal posture for target $i$ is
+$(h_i^*, \varphi_i^*) = \arg\max_{h \in \mathcal{H},\, \varphi \in \mathcal{P}}
+s_i(h, \varphi)$, subject to the posture bounds
+in~\eqref{eq:posture_bounds}. The yaw angle $\theta$ is never changed
+during scanning, as it was already optimised during the approach phase.
+
+\subsubsection{Inter-target execution}
+The body reconfiguration is executed between scanning targets. Before the
+arm moves to target $i$, Spot assumes the pre-computed posture
+$(h_i^*, \varphi_i^*)$ and is given a settle interval
+$\Delta t_{\mathrm{settle}}$ to allow the body to stabilise. The target
+$\mathbf{p}_i^*$ is then re-transformed to $\mathcal{F}_0$ using the live
+\ac{TF} tree, reflecting the actual posture achieved. The Z1 \ac{FSM}
+receives a ``body ready'' signal and proceeds with the arm trajectory
+toward the transformed target. After the arm completes the scan at target
+$i$, the cycle repeats for target $i+1$. At the conclusion of the scan,
+Spot returns to a nominal posture.
+
+Because the entire posture optimisation is computed offline---a single grid
+search over $\mathcal{H} \times \mathcal{P}$ for each of the $N$ targets,
+performed immediately after the target set $\mathcal{T}$ is available---it
+imposes no real-time computational burden and requires no online
+optimisation during arm motion.
+
+\subsection{Cartesian Impedance Control for Compliant Scanning}
+
+The Unitree Z1 arm does not provide native impedance control: its
+firmware supports only joint position tracking via the \ac{JTC} and raw
+torque commands. To perform ultrasound scanning, however, the probe must
+maintain gentle and continuous contact with the patient's skin, adapting
+to surface curvature and small patient movements. \ac{TERESA} implements a
+custom Cartesian impedance controller that runs directly on the Z1's
+torque interface.
 
 \subsubsection{Cartesian position control}
-Let $\mathbf{p}_{EE}(t) \in \mathbb{R}^3$ be the current \ac{EE}
-position and $\mathbf{p}_d(t) \in \mathbb{R}^3$ the desired position,
-updated at \SI{500}{\hertz} from the RealSense surface estimate. The
-translational position error is:
+Let $\mathbf{p}_{EE}(t) \in \mathbb{R}^3$ be the current \ac{EE} position
+and $\mathbf{p}_d(t) \in \mathbb{R}^3$ the desired position, updated at
+\SI{500}{\hertz} from the RealSense surface estimate. The translational
+position error is:
 \begin{equation}
   \mathbf{e}_p(t) = \mathbf{p}_d(t) - \mathbf{p}_{EE}(t).
   \label{eq:pos_error}
@@ -193,27 +186,26 @@ The Cartesian control force is computed as:
 where $\dot{\mathbf{p}}_{EE} = \mathbf{J}_{\mathrm{arm}}\,\dot{\mathbf{q}}$
 is the \ac{EE} translational velocity, and
 $\mathbf{K}_p^{\mathrm{eff}},\,\mathbf{K}_d^{\mathrm{eff}} \in
-\mathbb{R}^{3 \times 3}$ are effective diagonal gain matrices that
-adapt to the current arm extension:
+\mathbb{R}^{3 \times 3}$ are effective diagonal gain matrices that adapt
+to the current arm extension:
 \begin{equation}
-  \mathbf{K}_p^{\mathrm{eff}} = \left(1 - 0.65\,\rho\right)\mathbf{K}_p,
+  \mathbf{K}_p^{\mathrm{eff}} = (1 - 0.65\,\rho)\,\mathbf{K}_p,
   \qquad
-  \mathbf{K}_d^{\mathrm{eff}} = \left(1 + \rho\right)\mathbf{K}_d,
+  \mathbf{K}_d^{\mathrm{eff}} = (1 + \rho)\,\mathbf{K}_d,
   \label{eq:adaptive_gains}
 \end{equation}
 where $\rho = \mathrm{clip}\!\left(\|\mathbf{p}_{EE}^{xy}\|/r_{\max},
-0, 1\right) \in [0,1]$ is the normalised planar reach,
-$\mathbf{p}_{EE}^{xy}$ is the horizontal \ac{EE} position in
-$\mathcal{F}_0$, and $r_{\max} = \SI{0.6}{\metre}$ is the arm's
-nominal planar reach. This adaptive scaling reduces stiffness and
-increases damping as the arm extends, improving stability at the
-workspace boundary. The nominal gains are
-$\mathbf{K}_p = \mathrm{diag}(250, 250, 300)$\,\si{\newton\per\metre}
-and $\mathbf{K}_d = \mathrm{diag}(15, 15, 15)$\,\si{\newton\second\per\metre}.
+0, 1\right) \in [0,1]$ is the normalised planar reach, and
+$r_{\max} = \SI{0.6}{\metre}$ is the arm's nominal planar reach. This
+adaptive scaling reduces stiffness and increases damping as the arm
+extends, improving stability near the workspace boundary. The nominal
+gains are $\mathbf{K}_p = \mathrm{diag}(250, 250, 300)$,
+$\mathbf{K}_d = \mathrm{diag}(15, 15, 15)$ in SI units, and
+$\mathbf{K}_i = \mathrm{diag}(10, 10, 10)$.
 
 \subsubsection{Surface-referenced desired position}
-When the RealSense surface estimate is available, the desired position
-is computed relative to the detected patient surface. Let
+When the RealSense surface estimate is available, the desired position is
+computed relative to the detected patient torso surface. Let
 $\mathbf{p}_s \in \mathbb{R}^3$ be the surface centroid and
 $\mathbf{n}_s \in \mathbb{S}^2$ the outward surface normal estimated
 by the RealSense pipeline. The desired \ac{EE} position is:
@@ -222,7 +214,7 @@ by the RealSense pipeline. The desired \ac{EE} position is:
   \label{eq:surface_target}
 \end{equation}
 where $\delta_n = \SI{-5}{\milli\metre}$ is a small offset along the
-inward normal that ensures light contact without excessive force.
+inward normal that ensures light probe contact without excessive force.
 
 \subsubsection{Joint torque computation}
 The Cartesian force $\mathbf{F}_p$ is projected into joint torques via
@@ -236,36 +228,33 @@ and dynamic compensation:
   \label{eq:torque_total}
 \end{equation}
 where $\tilde{\mathbf{F}}_p = [\mathbf{F}_p^\top,\,\mathbf{0}_3^\top]^\top
-\in \mathbb{R}^6$ pads the translational force with zero moments
-(rotational Cartesian control is disabled), and each term is:
+\in \mathbb{R}^6$ pads the translational force with zero moments.
 
-\begin{itemize}
-  \item $\boldsymbol{\tau}_{\mathrm{wrist}} \in \mathbb{R}^6$: joint-space
-        \ac{PD} control applied to wrist joints $q_4, q_5, q_6$ to maintain
-        probe perpendicularity to the surface:
-        \begin{equation}
-          \tau_{\mathrm{wrist},i} =
-          K_{p,w}\,(q_{d,i} - q_i) - K_{d,w}\,\dot{q}_i,
-          \quad i = 4,5,6,
-          \label{eq:wrist_torque}
-        \end{equation}
-        with $K_{p,w} = \SI{40}{\newton\metre\per\radian}$ and
-        $K_{d,w} = \SI{4}{\newton\metre\second\per\radian}$;
+The wrist torque $\boldsymbol{\tau}_{\mathrm{wrist}} \in \mathbb{R}^6$
+applies joint-space \ac{PD} control to joints $q_4, q_5, q_6$ to maintain
+the probe orientation perpendicular to the skin surface:
+\begin{equation}
+  \tau_{\mathrm{wrist},i} =
+  K_{p,w}\,(q_{d,i} - q_i) - K_{d,w}\,\dot{q}_i,
+  \quad i = 4,5,6,
+  \label{eq:wrist_torque}
+\end{equation}
+with $K_{p,w} = \SI{40}{\newton\metre\per\radian}$ and
+$K_{d,w} = \SI{4}{\newton\metre\second\per\radian}$.
 
-  \item $\boldsymbol{\tau}_{\mathrm{comp}} \in \mathbb{R}^6$: gravity and
-        Coriolis compensation computed via the \acf{RNEA} implemented
-        in Pinocchio~\cite{carpentier2019}:
-        \begin{equation}
-          \boldsymbol{\tau}_{\mathrm{comp}} =
-          \boldsymbol{\tau}_{\mathrm{gravity}}(\mathbf{q})
-          + \boldsymbol{\tau}_{\mathrm{Coriolis}}(\mathbf{q}, \dot{\mathbf{q}}).
-          \label{eq:compensation}
-        \end{equation}
-\end{itemize}
+The compensation torque $\boldsymbol{\tau}_{\mathrm{comp}} \in \mathbb{R}^6$
+comprises gravity and Coriolis terms computed via the \acf{RNEA}
+implemented in Pinocchio~\cite{carpentier2019}:
+\begin{equation}
+  \boldsymbol{\tau}_{\mathrm{comp}} =
+  \boldsymbol{\tau}_{\mathrm{gravity}}(\mathbf{q})
+  + \boldsymbol{\tau}_{\mathrm{Coriolis}}(\mathbf{q}, \dot{\mathbf{q}}).
+  \label{eq:compensation}
+\end{equation}
 
-The total torque is saturated to the hardware limit
-$\tau_{\max} = \SI{70}{\newton\metre}$ before being sent to the
-joint controllers:
+The total torque is saturated to the Z1 hardware limit
+$\tau_{\max} = \SI{70}{\newton\metre}$ before being sent to the joint
+controllers:
 \begin{equation}
   \boldsymbol{\tau}_{\mathrm{cmd}} =
   \mathrm{clip}\!\left(
@@ -275,3 +264,14 @@ joint controllers:
   \right).
   \label{eq:torque_clip}
 \end{equation}
+
+\subsubsection{Controller switching}
+The Z1 alternates between two \ac{ROS}~2 controllers: the \ac{JTC} for
+position-controlled approach and homing motions, and the torque controller
+for impedance-based scanning. A \texttt{safe\_controller\_switch} node
+exposes two trigger services---\texttt{/safe\_switch/to\_torque} and
+\texttt{/safe\_switch/to\_jtc}---that the \ac{FSM} calls before entering
+and leaving the scanning phase. The \ac{JTC} is the safe default; the
+system always returns to it on error. This custom impedance implementation
+is essential to \ac{TERESA}'s scanning capability, as the Z1 arm's native
+control stack provides no compliant contact mode.

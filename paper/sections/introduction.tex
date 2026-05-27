@@ -4,86 +4,94 @@
 \section{Introduction}
 \label{sec:introduction}
 
-\IEEEPARstart{F}{ocused} \acf{FAST} is a standardised bedside ultrasound
-protocol that enables clinicians to rapidly detect life-threatening internal
-injuries---haemopericardium, haemothorax, and free intraperitoneal
-fluid---at the point of care~\cite{rozycki1996}. Its speed and
-non-invasiveness make it indispensable in trauma bays, pre-hospital emergency
-medicine, and military field operations. However, \ac{FAST} requires a trained
-sonographer who is physically present and manually positions the probe at four
-canonical anatomical windows: the subxiphoid, right upper quadrant, left upper
-quadrant, and suprapubic regions. In mass-casualty incidents, pandemics, or
-remote deployment scenarios, qualified personnel are often unavailable or
-overwhelmed, creating a critical bottleneck in triage.
+\IEEEPARstart{E}{mergency} assessment protocols---including the \acf{ABCDE}
+survey and \acf{FAST} ultrasound---enable clinicians to rapidly identify
+life-threatening conditions at the point of care. In mass-casualty incidents,
+disaster sites, and hazardous environments, however, trained personnel are
+often unavailable or overwhelmed, creating a critical bottleneck in triage.
+A legged mobile manipulator that can autonomously navigate unstructured
+terrain, locate a patient, and perform these assessments could extend
+emergency care to scenarios where human responders cannot safely operate.
 
-Autonomous robotic ultrasound has the potential to address this gap. A
-comprehensive review of robot-assisted ultrasound~\cite{du2024review} and
-recent fixed-base systems~\cite{mathiassen2016, li2021overview, duan2022}
-demonstrate that high-quality probe positioning can be achieved without direct
-human guidance. In our own prior work~\cite{farsoni2025autonomous}, we showed
-that a collaborative robot arm on a fixed base can autonomously screen the
-abdominal aorta using impedance control and deep learning segmentation,
-achieving clinically relevant diameter measurements. However, all these systems
-share a fundamental limitation: they require the patient to be pre-positioned
-within the arm's reachable workspace, confining autonomous ultrasound to
-controlled clinical settings.
+Autonomous robotic ultrasound has advanced significantly on fixed-base
+platforms. Systems employing impedance control, deep-learning-based
+segmentation, and pre-planned scan protocols have demonstrated clinically
+relevant probe positioning without direct human
+guidance~\cite{mathiassen2016, li2021overview, duan2022, farsoni2025autonomous}.
+These results, however, share a fundamental limitation: the patient must be
+pre-positioned within the arm's reachable workspace, confining autonomous
+ultrasound to controlled clinical settings.
 
-Legged platforms such as the Boston Dynamics Spot offer a qualitative step
-beyond this limitation. They can navigate stairs, rubble, and confined spaces
-inaccessible to wheeled robots, and can therefore reach patients wherever they
-lie. Mounting a serial manipulator arm on a legged base introduces, however, a
-fundamental control challenge: the arm workspace is small relative to the
-environment, so the base must actively cooperate with the arm throughout the
-mission. Simply stopping the base while the arm operates---the prevalent
-approach in mobile manipulation~\cite{bellicoso2019}---wastes time and fails
-when the target falls outside the reachable workspace. \ac{WBC} formulations
-that simultaneously optimise base and arm motion~\cite{sleiman2021,
-haviland2022} address this, but have not yet been applied to
-perception-driven medical scanning tasks where the patient location is unknown
-and must be estimated on-the-fly from noisy visual detections.
+Legged platforms such as the Boston Dynamics Spot remove this constraint.
+They can traverse stairs, rubble, and confined spaces inaccessible to wheeled
+robots, and can therefore reach patients wherever they lie. Mounting a
+manipulator arm on a legged base introduces, however, a deeper challenge that
+goes beyond motion coordination. The robot does not know the patient's
+location a priori, and the quality of its perception depends critically on how
+it positions its own body: camera viewpoint, height, and orientation all
+affect detection accuracy. Existing \ac{WBC} formulations for legged
+manipulators~\cite{bellicoso2019, sleiman2021, haviland2022} simultaneously
+optimise base and arm motion, but assume known or static targets and do not
+account for the coupling between body posture and perceptual quality. In a
+realistic emergency scenario, the robot must actively shape its own perception
+before it can act.
 
-This paper presents \acf{TERESA}, a complete system for autonomous \ac{FAST}
-scanning on a Boston Dynamics Spot legged robot equipped with a Unitree Z1
+This paper presents \acf{TERESA} (Trustworthy Emergency Robot for Efficient
+Support and Assistance), an integrated system for autonomous emergency
+assessment on a Boston Dynamics Spot legged robot equipped with a Unitree Z1
 manipulator arm. Building on the fixed-base scanning competence established
-in~\cite{farsoni2025autonomous}, we extend autonomous ultrasound to a fully
-mobile platform capable of operating in unstructured environments. The core of
-the system is a whole-body controller that formulates base and arm motion as a
-single \ac{QP} over a holistic $6{\times}8$ Jacobian, avoiding the
-stop-then-manipulate paradigm. A dual-camera perception pipeline---wide-field
-Orbbec \ac{RGBD} for navigation and \ac{EE}-mounted Intel RealSense for
-surface estimation---feeds a six-state \ac{FSM} that orchestrates the full
-mission lifecycle from patient detection to completed scan.
+in~\cite{farsoni2025autonomous}, we extend autonomous assessment to a fully
+mobile platform capable of operating in unstructured environments. The core
+contribution of \ac{TERESA} is a whole-body active perception framework: the
+robot continuously adapts its posture---body height, pitch, and yaw---not
+merely to minimise kinematic error, but to maximise the quality of its
+perceptual input.
+
+The system is built around four principles. First, a \textbf{confidence-gated
+active search} phase explores body configurations that improve detection
+reliability, committing to the approach only once the patient has been
+localised with high confidence. Second, an \textbf{anticipatory body scanner}
+acquires multi-view anatomical data during navigation, eliminating the idle
+time of traditional stop-then-scan pipelines. Third, a
+\textbf{perception-quality-aware velocity controller} scales the approach
+speed in proportion to detection confidence, avoiding both premature
+commitment to uncertain targets and unnecessary stops. Fourth, a
+\textbf{pre-planned body reconfiguration} step optimises the robot's posture
+for each anatomical scanning target through an offline search, maximising arm
+manipulability without requiring real-time whole-body optimisation.
 
 The main contributions of this paper are:
 \begin{enumerate}
-  \item A \textbf{\ac{WBC} formulation} for a non-holonomic legged base
-        coupled with a six-\ac{DOF} arm, with manipulability-weighted effort
-        redistribution between base and arm (Section~\ref{sec:method}).
-  \item A \textbf{dual-camera perception pipeline} that provides robust
-        patient localisation across the full approach distance, with a
-        principled sensor handoff from wide-field skeleton tracking to
-        \ac{EE} surface estimation (Section~\ref{sec:system_architecture}).
-  \item A \textbf{six-state mission \ac{FSM}} that integrates \ac{WBC},
-        perception, impedance contact control, and reactive workspace
-        extension into a unified autonomous scanning system
+  \item A \textbf{whole-body active perception framework} for legged mobile
+        manipulation, in which body posture is optimised to improve
+        perceptual quality rather than solely to minimise kinematic error
+        (Section~\ref{sec:active_perception}).
+  \item A \textbf{confidence-gated search strategy} that decouples patient
+        localisation from approach, ensuring robust detection before the
+        robot commits to navigation (Section~\ref{sec:active_perception}).
+  \item An \textbf{anticipatory multi-view scanning pipeline} that acquires
+        patient anatomy concurrently with base motion, removing the idle
+        periods inherent to sequential stop-and-scan architectures
         (Section~\ref{sec:system_architecture}).
-  \item \textbf{Experimental validation} on a physical Spot+Z1 platform
-        across a $3{\times}3$ grid of patient positions and orientations,
-        demonstrating a \XX\,\% reduction in mission time and probe
-        positioning error below \XX\,mm compared to a stop-and-manipulate
+  \item \textbf{Experimental validation} on a physical Spot+Z1 platform,
+        demonstrating fully autonomous emergency assessment with a
+        \XX\,\% reduction in idle time compared to a stop-and-manipulate
         baseline (Section~\ref{sec:results}).
 \end{enumerate}
 
-To the best of our knowledge, this is the first system to demonstrate fully
-autonomous \ac{FAST} scanning on a legged mobile manipulator operating in
-unstructured environments.
+To the best of our knowledge, \ac{TERESA} is the first legged robotic system to
+demonstrate perception-driven whole-body reconfiguration for autonomous
+emergency assessment.
 
 The remainder of this paper is organised as follows.
 Section~\ref{sec:related_work} reviews related work in robotic ultrasound,
-mobile manipulation, and legged robot control.
+legged whole-body control, and active perception for mobile manipulation.
 Section~\ref{sec:problem_formulation} formally defines the system and the
-problem. Section~\ref{sec:method} derives the \ac{WBC} formulation.
-Section~\ref{sec:system_architecture} describes the complete system
-architecture. Section~\ref{sec:experiments} details the experimental setup
-and Section~\ref{sec:results} presents the results and discussion.
-Section~\ref{sec:conclusion} concludes the paper.
+autonomous emergency assessment problem.
+Section~\ref{sec:active_perception} presents the active perception framework,
+including confidence-gated search and anticipatory scanning.
+Section~\ref{sec:method} describes the decoupled whole-body reconfiguration
+approach. Section~\ref{sec:system_architecture} details the complete system
+architecture and mission \ac{FSM}. Section~\ref{sec:experiments} describes the
+experimental setup and Section~\ref{sec:results} presents the results and
+discussion. Section~\ref{sec:conclusion} concludes the paper.
