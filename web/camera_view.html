@@ -106,6 +106,21 @@
     inset: 0;
   }
 
+  .cam-overlay-bar {
+    display: flex; align-items: center; gap: 5px; flex-shrink: 0;
+    padding: 5px 8px; background: rgba(0,0,0,0.2);
+    border-top: 1px solid var(--border); flex-wrap: wrap;
+  }
+  .cam-overlay-bar button {
+    font-family: var(--font); font-size: 10px; font-weight: 500;
+    padding: 3px 8px; border: 1px solid var(--border); border-radius: 4px;
+    background: transparent; color: var(--text-dim);
+    cursor: pointer; transition: all 0.15s; white-space: nowrap;
+  }
+  .cam-overlay-bar button:hover { color: var(--text); border-color: var(--text-dim); }
+  .cam-overlay-bar button.active { border-color: var(--accent); color: var(--accent); background: rgba(80,200,120,0.08); }
+  .cam-overlay-bar .label { color: var(--text-dim); font-size: 9px; margin-right: 2px; }
+
   /* ── YOLO status bar ──────────────────────────── */
   #yolo-bar {
     display: flex; align-items: center; gap: 16px; flex-shrink: 0;
@@ -169,8 +184,15 @@
     </div>
     <div class="cam-body">
       <canvas id="orbbec-img"></canvas>
-      <canvas class="overlay-canvas" id="orbbec-skel"></canvas>
+      <canvas class="overlay-canvas" id="orbbec-overlay"></canvas>
       <div class="cam-placeholder" id="orbbec-placeholder">Waiting for<br>/orbbec/color/image_raw...</div>
+    </div>
+    <div class="cam-overlay-bar">
+      <span class="label">Overlays:</span>
+      <button id="ob-skel-btn" onclick="ctrl.toggleOrbbecSkel()" class="active">Skeleton</button>
+      <button id="ob-bbox-btn" onclick="ctrl.toggleOrbbecBbox()">Body BBox</button>
+      <button id="ob-torso-btn" onclick="ctrl.toggleOrbbecTorsoBbox()">Torso BBox</button>
+      <button id="ob-approach-btn" onclick="ctrl.toggleOrbbecApproach()">Approach</button>
     </div>
   </div>
 
@@ -183,7 +205,14 @@
     </div>
     <div class="cam-body">
       <canvas id="rs-img"></canvas>
+      <canvas class="overlay-canvas" id="rs-overlay"></canvas>
       <div class="cam-placeholder" id="rs-placeholder">Waiting for<br>/camera/camera/color/image_raw...</div>
+    </div>
+    <div class="cam-overlay-bar">
+      <span class="label">Overlays:</span>
+      <button id="rs-center-btn" onclick="ctrl.toggleRsCenter()">Center</button>
+      <button id="rs-edges-btn" onclick="ctrl.toggleRsEdges()">Edges</button>
+      <button id="rs-label-btn" onclick="ctrl.toggleRsLabel()">Label</button>
     </div>
   </div>
 </div>
@@ -247,6 +276,25 @@
       /* hide-image state (skeleton + data still active) */
       this.orbbecHidden = false;
       this.rsHidden = false;
+
+      /* overlay toggles — Orbbec */
+      this.showOrbbecSkel    = true;
+      this.showOrbbecBbox    = false;
+      this.showOrbbecTorsoBbox = false;
+      this.showOrbbecApproach = false;
+
+      /* overlay toggles — RealSense */
+      this.showRsCenter      = false;
+      this.showRsEdges       = false;
+      this.showRsLabel       = false;
+
+      /* latest marker data */
+      this.bodyBbox     = null;  // Marker: /human_pose/bounding_box
+      this.torsoBbox    = null;  // Marker: /human_pose/torso_bounding_box
+      this.approachMk   = null;  // Marker: /laying_human/approach_marker
+      this.torsoMarkers = null;  // MarkerArray: /torso_markers
+      this.rsCamInfo    = null;  // {fx,fy,cx,cy,w,h} from /camera/camera/color/camera_info
+      this.rsCamPose    = null;  // {pos:{x,y,z}, rot:{x,y,z,w}} camera in world from TF
 
       /* latest data */
       this.skeleton = null;  // {poses: [{x,y,z}+]} (PoseArray)
@@ -355,14 +403,42 @@
       });
       this.skelSub.subscribe((msg) => {
         this.lastSkelTs = Date.now();
-        if (!this.paused) {
-          this.skeleton = msg.poses || [];
-          this.drawSkeleton();
-          const visible = this.skeleton.filter(p => p.position.z > 0.01).length;
-          $id('joints-val').textContent = visible + '/17';
-          $id('yolo-indicator').textContent = 'active';
-          $id('yolo-indicator').style.color = 'var(--accent)';
-        }
+        this.skeleton = msg.poses || [];
+        this.drawOrbbecOverlay();
+        const visible = this.skeleton.filter(p => p.position.z > 0.01).length;
+        $id('joints-val').textContent = visible + '/17';
+        $id('yolo-indicator').textContent = 'active';
+        $id('yolo-indicator').style.color = 'var(--accent)';
+      });
+
+      /* ── Body bounding box ───────────────── */
+      this.bboxSub = new ROSLIB.Topic({
+        ros: this.ros, name: '/human_pose/bounding_box',
+        messageType: 'visualization_msgs/Marker'
+      });
+      this.bboxSub.subscribe((msg) => {
+        this.bodyBbox = (msg.ns === 'human_bounding' && msg.type === 1) ? msg : null;
+        this.drawOrbbecOverlay();
+      });
+
+      /* ── Torso bounding box ──────────────── */
+      this.torsoBboxSub = new ROSLIB.Topic({
+        ros: this.ros, name: '/human_pose/torso_bounding_box',
+        messageType: 'visualization_msgs/Marker'
+      });
+      this.torsoBboxSub.subscribe((msg) => {
+        this.torsoBbox = (msg.ns === 'torso_bounding' && msg.type === 1) ? msg : null;
+        this.drawOrbbecOverlay();
+      });
+
+      /* ── Approach marker ─────────────────── */
+      this.approachSub = new ROSLIB.Topic({
+        ros: this.ros, name: '/laying_human/approach_marker',
+        messageType: 'visualization_msgs/Marker'
+      });
+      this.approachSub.subscribe((msg) => {
+        this.approachMk = (msg.type === 2) ? msg : null; // SPHERE
+        this.drawOrbbecOverlay();
       });
 
       /* ── Posture ─────────────────────────── */
@@ -400,6 +476,41 @@
         $id('realsense-panel').classList.toggle('locked', msg.data === 'LOCKED');
         $id('realsense-panel').classList.toggle('tracking', msg.data === 'ESTIMATING' || msg.data === 'TRACKING');
       });
+
+      /* ── Torso markers (RealSense) ───────── */
+      this.torsoMkSub = new ROSLIB.Topic({
+        ros: this.ros, name: '/torso_markers',
+        messageType: 'visualization_msgs/MarkerArray'
+      });
+      this.torsoMkSub.subscribe((msg) => {
+        this.torsoMarkers = msg.markers || [];
+        this.drawRealSenseOverlay();
+      });
+
+      /* ── RealSense camera info ───────────── */
+      this.rsInfoSub = new ROSLIB.Topic({
+        ros: this.ros, name: '/camera/camera/color/camera_info',
+        messageType: 'sensor_msgs/CameraInfo'
+      });
+      this.rsInfoSub.subscribe((msg) => {
+        const k = msg.k || msg.K;
+        if (k && k.length >= 6) {
+          this.rsCamInfo = { fx: k[0], fy: k[4], cx: k[2], cy: k[5], w: msg.width, h: msg.height };
+        }
+      });
+
+      /* ── TF: world → camera_color_optical_frame ── */
+      this.rsTfClient = new ROSLIB.TFClient({
+        ros: this.ros,
+        fixedFrame: 'world',
+        angularThres: 0.02,
+        transThres: 0.02,
+        rate: 10.0
+      });
+      this.rsTfClient.subscribe('camera_color_optical_frame', (tf) => {
+        this.rsCamPose = { pos: tf.translation, rot: tf.rotation };
+        this.drawRealSenseOverlay();
+      });
     }
 
     /* ── Image rendering ───────────────────── */
@@ -410,9 +521,12 @@
       if (canvas.width !== width || canvas.height !== height) {
         canvas.width = width;
         canvas.height = height;
-        /* resize overlay canvas too if orbbec */
+        /* resize overlay canvas too */
         if (canvas.id === 'orbbec-img') {
-          const ov = $id('orbbec-skel');
+          const ov = $id('orbbec-overlay');
+          ov.width = width; ov.height = height;
+        } else if (canvas.id === 'rs-img') {
+          const ov = $id('rs-overlay');
           ov.width = width; ov.height = height;
         }
       }
@@ -461,65 +575,177 @@
 
       ctx.putImageData(imgData, 0, 0);
 
-      /* redraw skeleton overlay after each image frame */
-      if (canvas.id === 'orbbec-img' && this.skeleton && this.orbbecK) {
-        this.drawSkeleton();
+      /* redraw overlay after each image frame */
+      if (canvas.id === 'orbbec-img') this.drawOrbbecOverlay();
+    }
+
+    /* ── Orbbec overlay (skeleton + bboxes + approach) ── */
+    drawOrbbecOverlay() {
+      const canvas = $id('orbbec-overlay');
+      if (!canvas || canvas.width === 0) return;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (!this.orbbecK) return;
+
+      const { fx, fy, cx, cy, w, h } = this.orbbecK;
+      const scX = canvas.width / w;
+      const scY = canvas.height / h;
+      const proj = (px, py, pz) => {
+        if (pz <= 0.01) return null;
+        return { x: (fx * (px / pz) + cx) * scX, y: (fy * (py / pz) + cy) * scY };
+      };
+      const circle = (x, y, r, color, alpha) => {
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = color; ctx.globalAlpha = alpha || 1; ctx.fill();
+        ctx.globalAlpha = 1;
+      };
+      const drawRect = (cx2, cy2, pw, ph, color, alpha) => {
+        ctx.strokeStyle = color; ctx.globalAlpha = alpha || 1;
+        ctx.lineWidth = 2; ctx.setLineDash([6, 3]);
+        ctx.strokeRect(cx2 - pw / 2, cy2 - ph / 2, pw, ph);
+        ctx.setLineDash([]); ctx.globalAlpha = 1;
+      };
+
+      /* ── Skeleton ─────────────────────── */
+      if (this.showOrbbecSkel && this.skeleton && this.skeleton.length > 0) {
+        const pts = this.skeleton.map(p => {
+          if (!p.position || p.position.z <= 0.01) return null;
+          return proj(p.position.x, p.position.y, p.position.z);
+        });
+        ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+        ctx.lineWidth = Math.max(1.5, canvas.width / 500);
+        for (const [i, j] of SKELETON_EDGES) {
+          const a = pts[i], b = pts[j];
+          if (!a || !b) continue;
+          ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        }
+        for (let i = 0; i < pts.length; i++) {
+          const p = pts[i]; if (!p) continue;
+          const r = Math.max(3, canvas.width / 300);
+          ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+          if (i === 0) ctx.fillStyle = '#ffcc00';
+          else if (i <= 4) ctx.fillStyle = '#00ccff';
+          else if (i <= 10) ctx.fillStyle = '#50c878';
+          else ctx.fillStyle = '#ff8844';
+          ctx.fill();
+        }
+      }
+
+      /* ── Body bounding box ─────────────── */
+      if (this.showOrbbecBbox && this.bodyBbox) {
+        const m = this.bodyBbox;
+        const c = proj(m.pose.position.x, m.pose.position.y, m.pose.position.z);
+        if (c) {
+          const pw = fx * (m.scale.x / m.pose.position.z) * scX;
+          const ph = fy * (m.scale.y / m.pose.position.z) * scY;
+          drawRect(c.x, c.y, pw, ph, '#ff8844', 0.7);
+        }
+      }
+
+      /* ── Torso bounding box ────────────── */
+      if (this.showOrbbecTorsoBbox && this.torsoBbox) {
+        const m = this.torsoBbox;
+        const c = proj(m.pose.position.x, m.pose.position.y, m.pose.position.z);
+        if (c) {
+          const pw = fx * (m.scale.x / m.pose.position.z) * scX;
+          const ph = fy * (m.scale.y / m.pose.position.z) * scY;
+          drawRect(c.x, c.y, pw, ph, '#50c878', 0.6);
+        }
+      }
+
+      /* ── Approach point ────────────────── */
+      if (this.showOrbbecApproach && this.approachMk) {
+        const m = this.approachMk;
+        const c = proj(m.pose.position.x, m.pose.position.y, m.pose.position.z);
+        if (c) {
+          const r = fx * (m.scale.x / 2 / m.pose.position.z) * scX;
+          circle(c.x, c.y, Math.max(6, r), '#ff3333', 0.85);
+          // glow
+          circle(c.x, c.y, Math.max(10, r * 1.6), 'rgba(255,50,50,0.2)');
+        }
       }
     }
 
-    /* ── Skeleton overlay ──────────────────── */
-    drawSkeleton() {
-      if (!this.orbbecK || !this.skeleton || this.skeleton.length === 0) return;
-
-      const canvas = $id('orbbec-skel');
+    /* ── RealSense overlay (torso markers) ── */
+    drawRealSenseOverlay() {
+      const canvas = $id('rs-overlay');
+      if (!canvas || canvas.width === 0) return;
       const ctx = canvas.getContext('2d');
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (!this.rsCamInfo || !this.rsCamPose || !this.torsoMarkers) return;
 
-      const { fx, fy, cx, cy, w, h } = this.orbbecK;
-      const scaleX = canvas.width / w;
-      const scaleY = canvas.height / h;
+      const { fx, fy, cx, cy, w, h } = this.rsCamInfo;
+      const scX = canvas.width / w;
+      const scY = canvas.height / h;
+      const camP = this.rsCamPose.pos;
+      const camQ = this.rsCamPose.rot;
 
-      /* project 3D → screen */
-      const pts = this.skeleton.map(p => {
-        if (!p.position || p.position.z <= 0.01) return null;
-        const u = fx * (p.position.x / p.position.z) + cx;
-        const v = fy * (p.position.y / p.position.z) + cy;
-        return { x: u * scaleX, y: v * scaleY, z: p.position.z, conf: p.orientation.w || 1 };
-      });
+      /* world → camera frame */
+      const qx = camQ.x, qy = camQ.y, qz = camQ.z, qw = camQ.w;
+      const worldToCam = (wx, wy, wz) => {
+        const dx = wx - camP.x, dy = wy - camP.y, dz = wz - camP.z;
+        // rotate by inverse quaternion: v' = q_inv * v * q
+        const iqx = -qx, iqy = -qy, iqz = -qz, iqw = qw;
+        // q_inv * (0,dx,dy,dz) * q = rotated vector
+        const a_w = -iqx*dx - iqy*dy - iqz*dz;
+        const a_x =  iqw*dx + iqz*dy - iqy*dz;
+        const a_y = -iqz*dx + iqw*dy + iqx*dz;
+        const a_z =  iqy*dx - iqx*dy + iqw*dz;
+        const r_x = a_w*(-qx) + a_x*qw + a_y*(-qz) - a_z*(-qy);
+        const r_y = a_w*(-qy) - a_x*(-qz) + a_y*qw + a_z*(-qx);
+        const r_z = a_w*(-qz) + a_x*(-qy) - a_y*(-qx) + a_z*qw;
+        return { x: r_x, y: r_y, z: r_z };
+      };
+      const proj = (wx, wy, wz) => {
+        const c = worldToCam(wx, wy, wz);
+        if (c.z <= 0.01) return null;
+        return { x: (fx * (c.x / c.z) + cx) * scX, y: (fy * (c.y / c.z) + cy) * scY };
+      };
 
-      /* edges */
-      ctx.strokeStyle = 'rgba(255,255,255,0.75)';
-      ctx.lineWidth = Math.max(1.5, canvas.width / 500);
-      for (const [i, j] of SKELETON_EDGES) {
-        const a = pts[i], b = pts[j];
-        if (!a || !b) continue;
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-        ctx.stroke();
-      }
+      const circle = (x, y, r, color) => {
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = color; ctx.fill();
+      };
 
-      /* joints */
-      for (let i = 0; i < pts.length; i++) {
-        const p = pts[i];
-        if (!p) continue;
-        const r = Math.max(3, canvas.width / 300);
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-        if (i === 0) {
-          /* nose = yellow */
-          ctx.fillStyle = '#ffcc00';
-        } else if (i <= 4) {
-          /* face = cyan */
-          ctx.fillStyle = '#00ccff';
-        } else if (i <= 10) {
-          /* upper body = green */
-          ctx.fillStyle = '#50c878';
-        } else {
-          /* lower body = orange */
-          ctx.fillStyle = '#ff8844';
+      for (const m of this.torsoMarkers) {
+        const ns = m.ns || '';
+        const isCenter  = ns === 'torso_center';
+        const isKeypoint = ns === 'torso_keypoints' || ns === 'face_keypoints';
+        const isEdge  = ns === 'torso_edges';
+        const isSpoke = ns === 'torso_spokes';
+        const isText  = ns === 'torso_state';
+
+        if (isCenter && this.showRsCenter) {
+          const p = proj(m.pose.position.x, m.pose.position.y, m.pose.position.z);
+          if (p) circle(p.x, p.y, 10, '#50c878');
         }
-        ctx.fill();
+
+        if (isKeypoint && this.showRsCenter) {
+          const p = proj(m.pose.position.x, m.pose.position.y, m.pose.position.z);
+          if (p) circle(p.x, p.y, 5, '#4488ff');
+        }
+
+        if ((isEdge || isSpoke) && this.showRsEdges && m.type === 5) {
+          // LINE_LIST or LINE_STRIP
+          const pts = m.points || [];
+          ctx.strokeStyle = isEdge ? 'rgba(255,255,0,0.8)' : 'rgba(255,80,0,0.6)';
+          ctx.lineWidth = 1.5;
+          for (let i = 0; i < pts.length - 1; i += 2) {
+            const a = proj(pts[i].x, pts[i].y, pts[i].z);
+            const b = proj(pts[i+1].x, pts[i+1].y, pts[i+1].z);
+            if (a && b) {
+              ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+            }
+          }
+        }
+
+        if (isText && this.showRsLabel) {
+          const p = proj(m.pose.position.x, m.pose.position.y, m.pose.position.z);
+          if (p) {
+            ctx.fillStyle = '#50c878'; ctx.font = `${Math.max(10, canvas.width/40)}px monospace`;
+            ctx.fillText(m.text || '', p.x, p.y);
+          }
+        }
       }
     }
 
@@ -577,6 +803,7 @@
         this.rsSub.unsubscribe();
         this.rsReady = false;
         this._clearCanvas('rs-img');
+        this._clearCanvas('rs-overlay');
         $id('rs-dot').className = 'dot';
         $id('rs-tag').textContent = 'hidden';
         $id('rs-tag').classList.remove('active');
@@ -598,6 +825,45 @@
       const canvas = $id(id);
       const ctx = canvas.getContext('2d');
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    /* ── Orbbec overlay toggles ────────────── */
+    toggleOrbbecSkel() {
+      this.showOrbbecSkel = !this.showOrbbecSkel;
+      $id('ob-skel-btn').classList.toggle('active', this.showOrbbecSkel);
+      this.drawOrbbecOverlay();
+    }
+    toggleOrbbecBbox() {
+      this.showOrbbecBbox = !this.showOrbbecBbox;
+      $id('ob-bbox-btn').classList.toggle('active', this.showOrbbecBbox);
+      this.drawOrbbecOverlay();
+    }
+    toggleOrbbecTorsoBbox() {
+      this.showOrbbecTorsoBbox = !this.showOrbbecTorsoBbox;
+      $id('ob-torso-btn').classList.toggle('active', this.showOrbbecTorsoBbox);
+      this.drawOrbbecOverlay();
+    }
+    toggleOrbbecApproach() {
+      this.showOrbbecApproach = !this.showOrbbecApproach;
+      $id('ob-approach-btn').classList.toggle('active', this.showOrbbecApproach);
+      this.drawOrbbecOverlay();
+    }
+
+    /* ── RealSense overlay toggles ──────────── */
+    toggleRsCenter() {
+      this.showRsCenter = !this.showRsCenter;
+      $id('rs-center-btn').classList.toggle('active', this.showRsCenter);
+      this.drawRealSenseOverlay();
+    }
+    toggleRsEdges() {
+      this.showRsEdges = !this.showRsEdges;
+      $id('rs-edges-btn').classList.toggle('active', this.showRsEdges);
+      this.drawRealSenseOverlay();
+    }
+    toggleRsLabel() {
+      this.showRsLabel = !this.showRsLabel;
+      $id('rs-label-btn').classList.toggle('active', this.showRsLabel);
+      this.drawRealSenseOverlay();
     }
 
     /* ── Ping check (alive indicators) ─────── */
