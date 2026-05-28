@@ -514,8 +514,9 @@ class WBCQPControllerNode(Node):
         # ±δ along each basis direction (no diagonali)
         for i in range(n_dir):
             for sign in [-1.0, 1.0]:
-                q_new = np.clip(q[:n_arm] + sign * delta * basis[:, i],
-                                 q_safe_low, q_safe_high)
+                q_new = q.copy()
+                q_new[:n_arm] = np.clip(q[:n_arm] + sign * delta * basis[:, i],
+                                         q_safe_low, q_safe_high)
                 pin.forwardKinematics(self._model, self._data, q_new)
                 pin.updateFramePlacements(self._model, self._data)
                 T_new = self._data.oMf[self._ee_id]
@@ -706,8 +707,9 @@ class WBCQPControllerNode(Node):
         # ±δ along each basis direction
         for i in range(n_dir):
             for sign in [-1.0, 1.0]:
-                q_new = np.clip(q[:n_arm] + sign * delta * basis[:, i],
-                                 q_low, q_high)
+                q_new = q.copy()
+                q_new[:n_arm] = np.clip(q[:n_arm] + sign * delta * basis[:, i],
+                                         q_low, q_high)
                 pin.forwardKinematics(self._model, self._data, q_new)
                 pin.updateFramePlacements(self._model, self._data)
                 T_new = self._data.oMf[self._ee_id]
@@ -721,7 +723,8 @@ class WBCQPControllerNode(Node):
             for i in range(min(n_dir - 1, 2)):
                 j = i + 1
                 for si, sj in [(1, 1), (1, -1)]:
-                    q_new = np.clip(
+                    q_new = q.copy()
+                    q_new[:n_arm] = np.clip(
                         q[:n_arm] + delta * (si * basis[:, i] + sj * basis[:, j]),
                         q_low, q_high)
                     pin.forwardKinematics(self._model, self._data, q_new)
