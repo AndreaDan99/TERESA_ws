@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TERESA — Camera View</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #121220;
+    --bg-light:  #1a1a2e;
+    --bg-card:   #1e1e32;
+    --text:      #c8c8d0;
+    --text-dim:  #6a6a7a;
+    --accent:    #50c878;
+    --danger:    #e05555;
+    --warning:   #e0b040;
+    --border:    #2a2a3e;
+    --font:      'SF Mono', 'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* ── Top status bar ───────────────────────────── */
+  #status-bar {
+    display: flex; align-items: center; gap: 14px;
+    padding: 8px 16px; background: var(--bg-light);
+    border-bottom: 1px solid var(--border); font-size: 12px;
+    flex-shrink: 0;
+  }
+  #status-bar .dot {
+    width: 10px; height: 10px; border-radius: 50%; background: #555;
+    transition: background 0.3s;
+  }
+  #status-bar .dot.online  { background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 2s infinite; }
+  #status-bar .dot.offline { background: var(--danger); }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+  #status-bar .label { color: var(--text-dim); }
+  #status-bar .value { color: var(--text); font-weight: 600; }
+  #status-bar .sep { color: var(--border); }
+  #ros-input { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+  #ros-input input {
+    background: var(--bg); border: 1px solid var(--border);
+    color: var(--text); font-family: var(--font); font-size: 11px;
+    padding: 3px 8px; border-radius: 4px; width: 180px; outline: none;
+  }
+
+  /* ── Camera grid ──────────────────────────────── */
+  #camera-grid {
+    flex: 1; display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px; padding: 10px;
+    overflow: hidden; min-height: 0;
+  }
+  @media (max-width: 900px) {
+    #camera-grid { grid-template-columns: 1fr; }
+  }
+
+  .cam-panel {
+    display: flex; flex-direction: column;
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 8px; overflow: hidden;
+  }
+  .cam-panel.locked   { border-color: var(--accent); box-shadow: 0 0 12px rgba(80,200,120,0.15); }
+  .cam-panel.tracking { border-color: var(--warning); }
+  .cam-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 12px; background: rgba(0,0,0,0.2);
+    border-bottom: 1px solid var(--border); font-size: 11px; flex-shrink: 0;
+  }
+  .cam-header .title { font-weight: 600; color: var(--text); }
+  .cam-header .fps   { color: var(--text-dim); font-size: 10px; }
+  .cam-header .tag {
+    font-size: 10px; padding: 2px 8px; border-radius: 3px;
+    background: rgba(255,255,255,0.06); color: var(--text-dim);
+  }
+  .cam-header .tag.active { color: var(--accent); background: rgba(80,200,120,0.12); }
+
+  .cam-body {
+    flex: 1; position: relative; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    background: #000;
+  }
+  .cam-body canvas {
+    display: block; width: 100%; height: 100%; object-fit: contain;
+  }
+  .cam-body .overlay-canvas {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    pointer-events: none;
+  }
+  .cam-placeholder {
+    position: absolute; color: var(--text-dim); font-size: 14px;
+    text-align: center; line-height: 1.6;
+  }
+
+  /* ── YOLO status bar ──────────────────────────── */
+  #yolo-bar {
+    display: flex; align-items: center; gap: 16px; flex-shrink: 0;
+    padding: 8px 16px; background: var(--bg-light);
+    border-top: 1px solid var(--border); font-size: 12px;
+  }
+  #yolo-bar .stat { display: flex; align-items: center; gap: 6px; }
+  #yolo-bar .val {
+    font-weight: 600; padding: 2px 10px; border-radius: 4px;
+    background: rgba(255,255,255,0.04);
+  }
+  #yolo-bar .val.posture-lying  { color: var(--accent); }
+  #yolo-bar .val.posture-other  { color: var(--text-dim); }
+
+  /* ── Nav bar ──────────────────────────────────── */
+  #nav-bar {
+    display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+    padding: 8px 16px; background: var(--bg-light);
+    border-top: 1px solid var(--border);
+  }
+  #nav-bar button, #nav-bar a {
+    font-family: var(--font); font-size: 12px; font-weight: 600;
+    padding: 6px 14px; border: 1px solid var(--border); border-radius: 5px;
+    background: transparent; color: var(--text);
+    cursor: pointer; text-decoration: none;
+    transition: background 0.15s;
+  }
+  #nav-bar button:hover, #nav-bar a:hover { background: rgba(255,255,255,0.06); }
+  #nav-bar button.active { border-color: var(--accent); color: var(--accent); }
+  #pause-btn { min-width: 75px; }
+</style>
+</head>
+<body>
+
+<div id="status-bar">
+  <span class="label">Rosbridge:</span>
+  <span class="dot" id="ros-dot"></span>
+  <span class="value" id="ros-status">disconnected</span>
+  <span class="sep">|</span>
+  <span class="label">Orbbec:</span>
+  <span class="dot" id="orbbec-dot"></span>
+  <span class="sep">|</span>
+  <span class="label">RealSense:</span>
+  <span class="dot" id="rs-dot"></span>
+  <span class="sep">|</span>
+  <span class="label">YOLO:</span>
+  <span class="value" id="yolo-indicator">---</span>
+  <div id="ros-input">
+    <span class="label" style="margin:0">ws://</span>
+    <input type="text" id="ros-url" value="localhost:9090" placeholder="host:9090">
+  </div>
+</div>
+
+<div id="camera-grid">
+  <!-- Orbbec -->
+  <div class="cam-panel" id="orbbec-panel">
+    <div class="cam-header">
+      <span class="title">ORBBEC — Spot view</span>
+      <span class="tag" id="orbbec-tag">no signal</span>
+      <span class="fps" id="orbbec-fps"></span>
+    </div>
+    <div class="cam-body">
+      <canvas id="orbbec-img"></canvas>
+      <canvas class="overlay-canvas" id="orbbec-skel"></canvas>
+      <div class="cam-placeholder" id="orbbec-placeholder">Waiting for<br>/orbbec/color/image_raw...</div>
+    </div>
+  </div>
+
+  <!-- RealSense -->
+  <div class="cam-panel" id="realsense-panel">
+    <div class="cam-header">
+      <span class="title">REALSENSE — Z1 wrist view</span>
+      <span class="tag" id="rs-tag">no signal</span>
+      <span class="fps" id="rs-fps"></span>
+    </div>
+    <div class="cam-body">
+      <canvas id="rs-img"></canvas>
+      <div class="cam-placeholder" id="rs-placeholder">Waiting for<br>/camera/camera/color/image_raw...</div>
+    </div>
+  </div>
+</div>
+
+<div id="yolo-bar">
+  <span class="label">Posture:</span>
+  <span class="val" id="posture-val">---</span>
+  <span class="label">Confidence:</span>
+  <span class="val" id="conf-val">---</span>
+  <span class="label">Torso tracker:</span>
+  <span class="val" id="tracker-val">---</span>
+  <span class="label">Skeleton joints:</span>
+  <span class="val" id="joints-val">0/17</span>
+</div>
+
+<div id="nav-bar">
+  <a href="teresa_control.html">← Back to Control</a>
+  <button id="pause-btn" onclick="ctrl.togglePause()">⏸ Pause</button>
+</div>
+
+<script src="https://unpkg.com/roslib@1.4.0/build/roslib.min.js"></script>
+<script>
+(function() {
+
+  /* ── Utils ────────────────────────────────────── */
+  function $id(id) { return document.getElementById(id); }
+  function normAngle(a) { return Math.atan2(Math.sin(a), Math.cos(a)); }
+
+  const SKELETON_EDGES = [
+    [15,13],[13,11],[16,14],[14,12],[11,12],  // legs
+    [5,11],[6,12],[5,6],                       // torso
+    [5,7],[6,8],[7,9],[8,10],                  // arms
+    [1,2],[0,1],[0,2],                         // face
+    [1,3],[2,4],[3,5],[4,6]                    // ears → shoulders
+  ];
+
+  const JOINT_NAMES = [
+    'nose','L-eye','R-eye','L-ear','R-ear',
+    'L-shoulder','R-shoulder','L-elbow','R-elbow',
+    'L-wrist','R-wrist','L-hip','R-hip',
+    'L-knee','R-knee','L-ankle','R-ankle'
+  ];
+
+  /* ── CameraView ──────────────────────────────── */
+  class CameraView {
+    constructor() {
+      this.ros = null;
+      this.paused = false;
+
+      /* image counters */
+      this.orbbecFrames = 0;   this.rsFrames = 0;
+      this.orbbecFpsTs = 0;    this.rsFpsTs = 0;
+
+      /* camera intrinsics */
+      this.orbbecK = null;     // {fx, fy, cx, cy, w, h}
+      this.orbbecReady = false;
+      this.rsReady = false;
+
+      /* latest data */
+      this.skeleton = null;  // {poses: [{x,y,z}+]} (PoseArray)
+      this.posture = '---';
+      this.confidence = 0;
+      this.trackerState = '---';
+
+      /* pings */
+      this.lastOrbbecTs = 0;
+      this.lastRsTs = 0;
+      this.lastSkelTs = 0;
+
+      this.connect();
+      document.addEventListener('keydown', (e) => {
+        if (e.key === ' ' || e.key === 'p') { e.preventDefault(); this.togglePause(); }
+      });
+
+      /* reconnect on enter in URL field */
+      $id('ros-url').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') this.connect();
+      });
+
+      /* ping watcher (check if topics are alive) */
+      setInterval(() => this.pingCheck(), 3000);
+    }
+
+    /* ── Connection ─────────────────────────── */
+    connect() {
+      if (this.ros) { this.ros.close(); }
+      const url = $id('ros-url').value.trim() || 'localhost:9090';
+      this.ros = new ROSLIB.Ros({ url: 'ws://' + url });
+
+      this.ros.on('connection', () => {
+        $id('ros-dot').className = 'dot online';
+        $id('ros-status').textContent = 'connected';
+        this.initTopics();
+      });
+
+      this.ros.on('close', () => {
+        $id('ros-dot').className = 'dot offline';
+        $id('ros-status').textContent = 'disconnected';
+        $id('orbbec-dot').className = 'dot';
+        $id('rs-dot').className = 'dot';
+        $id('yolo-indicator').textContent = '---';
+        this.orbbecReady = false; this.rsReady = false;
+      });
+
+      this.ros.on('error', () => {});
+    }
+
+    initTopics() {
+      /* ── Orbbec image ────────────────────── */
+      this.orbbecSub = new ROSLIB.Topic({
+        ros: this.ros, name: '/orbbec/color/image_raw',
+        messageType: 'sensor_msgs/Image',
+        throttle_rate: 200  // max 5 Hz throttling
+      });
+      this.orbbecSub.subscribe((msg) => {
+        this.lastOrbbecTs = Date.now();
+        if (!this.paused) {
+          this.renderImage(msg, $id('orbbec-img'), this.orbbecK);
+          this.orbbecReady = true;
+          $id('orbbec-dot').className = 'dot online';
+          $id('orbbec-tag').textContent = msg.width + '×' + msg.height;
+          $id('orbbec-tag').classList.add('active');
+          $id('orbbec-placeholder').style.display = 'none';
+          this.tickFps('orbbec');
+        }
+      });
+
+      /* ── Orbbec camera info ──────────────── */
+      this.orbbecInfoSub = new ROSLIB.Topic({
+        ros: this.ros, name: '/orbbec/color/camera_info',
+        messageType: 'sensor_msgs/CameraInfo'
+      });
+      this.orbbecInfoSub.subscribe((msg) => {
+        const k = msg.k || msg.K;
+        if (k && k.length >= 6) {
+          this.orbbecK = { fx: k[0], fy: k[4], cx: k[2], cy: k[5], w: msg.width, h: msg.height };
+        }
+      });
+
+      /* ── RealSense image ─────────────────── */
+      this.rsSub = new ROSLIB.Topic({
+        ros: this.ros, name: '/camera/camera/color/image_raw',
+        messageType: 'sensor_msgs/Image',
+        throttle_rate: 200
+      });
+      this.rsSub.subscribe((msg) => {
+        this.lastRsTs = Date.now();
+        if (!this.paused) {
+          this.renderImage(msg, $id('rs-img'), null);
+          this.rsReady = true;
+          $id('rs-dot').className = 'dot online';
+          $id('rs-tag').textContent = msg.width + '×' + msg.height;
+          $id('rs-tag').classList.add('active');
+          $id('rs-placeholder').style.display = 'none';
+          this.tickFps('rs');
+        }
+      });
+
+      /* ── Skeleton points ─────────────────── */
+      this.skelSub = new ROSLIB.Topic({
+        ros: this.ros, name: '/human_pose/points_3d',
+        messageType: 'geometry_msgs/PoseArray'
+      });
+      this.skelSub.subscribe((msg) => {
+        this.lastSkelTs = Date.now();
+        if (!this.paused) {
+          this.skeleton = msg.poses || [];
+          this.drawSkeleton();
+          const visible = this.skeleton.filter(p => p.position.z > 0.01).length;
+          $id('joints-val').textContent = visible + '/17';
+          $id('yolo-indicator').textContent = 'active';
+          $id('yolo-indicator').style.color = 'var(--accent)';
+        }
+      });
+
+      /* ── Posture ─────────────────────────── */
+      this.postureSub = new ROSLIB.Topic({
+        ros: this.ros, name: '/human_pose/posture',
+        messageType: 'std_msgs/String'
+      });
+      this.postureSub.subscribe((msg) => {
+        this.posture = msg.data;
+        const el = $id('posture-val');
+        el.textContent = msg.data;
+        el.className = 'val' + (msg.data === 'LYING' ? ' posture-lying' : ' posture-other');
+        /* glowing border on Orbbec when LYING */
+        $id('orbbec-panel').classList.toggle('locked', msg.data === 'LYING');
+      });
+
+      /* ── Confidence ──────────────────────── */
+      this.confSub = new ROSLIB.Topic({
+        ros: this.ros, name: '/human_pose/posture_confidence',
+        messageType: 'std_msgs/Float32'
+      });
+      this.confSub.subscribe((msg) => {
+        this.confidence = msg.data;
+        $id('conf-val').textContent = (msg.data * 100).toFixed(0) + '%';
+      });
+
+      /* ── Torso tracker state ─────────────── */
+      this.trackerSub = new ROSLIB.Topic({
+        ros: this.ros, name: '/torso_tracker_state',
+        messageType: 'std_msgs/String'
+      });
+      this.trackerSub.subscribe((msg) => {
+        this.trackerState = msg.data;
+        $id('tracker-val').textContent = msg.data;
+        $id('realsense-panel').classList.toggle('locked', msg.data === 'LOCKED');
+        $id('realsense-panel').classList.toggle('tracking', msg.data === 'ESTIMATING' || msg.data === 'TRACKING');
+      });
+    }
+
+    /* ── Image rendering ───────────────────── */
+    renderImage(msg, canvas, camInfo) {
+      const ctx = canvas.getContext('2d');
+      const { width, height, encoding, data, step } = msg;
+
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+        /* resize overlay canvas too if orbbec */
+        if (canvas.id === 'orbbec-img') {
+          const ov = $id('orbbec-skel');
+          ov.width = width; ov.height = height;
+        }
+      }
+
+      let bytes = data;
+      if (typeof bytes === 'string') {
+        const raw = atob(bytes);
+        bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      }
+
+      const imgData = ctx.createImageData(width, height);
+      const px = imgData.data;
+      const rowBytes = step || width * 3;
+      const bpp = 3;
+
+      if (encoding === 'rgb8' || encoding === 'rgb8' || !encoding) {
+        for (let y = 0; y < height; y++) {
+          const rowOff = y * rowBytes;
+          const dstRow = y * width * 4;
+          for (let x = 0; x < width; x++) {
+            const s = rowOff + x * bpp;
+            const d = dstRow + x * 4;
+            px[d]     = bytes[s];
+            px[d + 1] = bytes[s + 1];
+            px[d + 2] = bytes[s + 2];
+            px[d + 3] = 255;
+          }
+        }
+      } else if (encoding === 'bgr8') {
+        for (let y = 0; y < height; y++) {
+          const rowOff = y * rowBytes;
+          const dstRow = y * width * 4;
+          for (let x = 0; x < width; x++) {
+            const s = rowOff + x * bpp;
+            const d = dstRow + x * 4;
+            px[d]     = bytes[s + 2];
+            px[d + 1] = bytes[s + 1];
+            px[d + 2] = bytes[s];
+            px[d + 3] = 255;
+          }
+        }
+      } else {
+        return; // unsupported encoding
+      }
+
+      ctx.putImageData(imgData, 0, 0);
+
+      /* redraw skeleton overlay after each image frame */
+      if (canvas.id === 'orbbec-img' && this.skeleton && this.orbbecK) {
+        this.drawSkeleton();
+      }
+    }
+
+    /* ── Skeleton overlay ──────────────────── */
+    drawSkeleton() {
+      if (!this.orbbecK || !this.skeleton || this.skeleton.length === 0) return;
+
+      const canvas = $id('orbbec-skel');
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const { fx, fy, cx, cy, w, h } = this.orbbecK;
+      const scaleX = canvas.width / w;
+      const scaleY = canvas.height / h;
+
+      /* project 3D → screen */
+      const pts = this.skeleton.map(p => {
+        if (!p.position || p.position.z <= 0.01) return null;
+        const u = fx * (p.position.x / p.position.z) + cx;
+        const v = fy * (p.position.y / p.position.z) + cy;
+        return { x: u * scaleX, y: v * scaleY, z: p.position.z, conf: p.orientation.w || 1 };
+      });
+
+      /* edges */
+      ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+      ctx.lineWidth = Math.max(1.5, canvas.width / 500);
+      for (const [i, j] of SKELETON_EDGES) {
+        const a = pts[i], b = pts[j];
+        if (!a || !b) continue;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
+
+      /* joints */
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        if (!p) continue;
+        const r = Math.max(3, canvas.width / 300);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        if (i === 0) {
+          /* nose = yellow */
+          ctx.fillStyle = '#ffcc00';
+        } else if (i <= 4) {
+          /* face = cyan */
+          ctx.fillStyle = '#00ccff';
+        } else if (i <= 10) {
+          /* upper body = green */
+          ctx.fillStyle = '#50c878';
+        } else {
+          /* lower body = orange */
+          ctx.fillStyle = '#ff8844';
+        }
+        ctx.fill();
+      }
+    }
+
+    /* ── FPS counter ───────────────────────── */
+    tickFps(cam) {
+      const now = performance.now();
+      const keyFrames = cam + 'Frames';
+      const keyTs     = cam + 'FpsTs';
+      this[keyFrames]++;
+      if (now - this[keyTs] >= 2000) {
+        const fps = (this[keyFrames] / ((now - this[keyTs]) / 1000)).toFixed(1);
+        $id(cam + '-fps').textContent = fps + ' fps';
+        this[keyFrames] = 0;
+        this[keyTs] = now;
+      }
+    }
+
+    /* ── Pause / resume ────────────────────── */
+    togglePause() {
+      this.paused = !this.paused;
+      const btn = $id('pause-btn');
+      btn.textContent = this.paused ? '▶ Resume' : '⏸ Pause';
+      btn.classList.toggle('active', this.paused);
+    }
+
+    /* ── Ping check (alive indicators) ─────── */
+    pingCheck() {
+      const now = Date.now();
+      const age = (last) => last ? ((now - last) / 1000).toFixed(0) + 's ago' : '---';
+
+      if (!this.orbbecReady) {
+        $id('orbbec-dot').className = 'dot';
+        $id('orbbec-tag').textContent = 'no signal';
+        $id('orbbec-tag').classList.remove('active');
+      } else if (now - this.lastOrbbecTs > 5000) {
+        $id('orbbec-dot').className = 'dot offline';
+        $id('orbbec-tag').textContent = 'stalled ' + age(this.lastOrbbecTs);
+      }
+
+      if (!this.rsReady) {
+        $id('rs-dot').className = 'dot';
+        $id('rs-tag').textContent = 'no signal';
+        $id('rs-tag').classList.remove('active');
+      } else if (now - this.lastRsTs > 5000) {
+        $id('rs-dot').className = 'dot offline';
+        $id('rs-tag').textContent = 'stalled ' + age(this.lastRsTs);
+      }
+
+      if (now - this.lastSkelTs > 5000 && this.orbbecReady) {
+        $id('yolo-indicator').textContent = 'idle';
+        $id('yolo-indicator').style.color = 'var(--text-dim)';
+      }
+    }
+  }
+
+  window.ctrl = new CameraView();
+})();
+</script>
+</body>
+</html>

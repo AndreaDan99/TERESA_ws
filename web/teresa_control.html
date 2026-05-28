@@ -241,6 +241,7 @@
   <button id="btn-stand"  disabled onclick="ctrl.onStand()"> <span class="btn-icon">⬆</span> STAND </button>
   <button id="btn-sit"    disabled onclick="ctrl.onSit()">   <span class="btn-icon">⬇</span> SIT </button>
   <button id="btn-stop" class="danger" disabled onclick="ctrl.onStop()"> <span class="btn-icon">⏹</span> STOP </button>
+  <a href="camera_view.html" target="_blank" style="font-family:var(--font);font-size:12px;font-weight:600;padding:8px 18px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--text);text-decoration:none;transition:all 0.15s;letter-spacing:0.5px;display:flex;align-items:center;gap:6px" onmouseover="this.style.background='rgba(255,255,255,0.06)'" onmouseout="this.style.background='transparent'"><span class="btn-icon">📷</span> CAMERAS</a>
 </div>
 
 <script src="https://unpkg.com/roslib@1.4.0/build/roslib.min.js"></script>
@@ -306,6 +307,7 @@
           case 'n': e.preventDefault(); this.onStep(); break;
           case 'a': e.preventDefault(); this.onStand(); break;
           case 'c': e.preventDefault(); this.onSit(); break;
+          case 'v': e.preventDefault(); window.open('camera_view.html', '_blank'); break;
           case 'escape': e.preventDefault(); this.onStop(); break;
         }
       });
