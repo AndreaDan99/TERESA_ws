@@ -277,7 +277,7 @@ class TeresaController{
       }
     });
     $('ros-url').addEventListener('keydown',e=>{if(e.key==='Enter')this.connect();});
-    window.addEventListener('beforeunload',()=>{this.stopNavLoop();if(this.cmdVelPub)this.cmdVelPub.publish({linear:{x:0,y:0,z:0},angular:{x:0,y:0,z:0}});});
+    window.addEventListener('beforeunload',()=>{this.stopNavLoop();if(this.restartPub)this.restartPub.publish({data:false});});
     setInterval(()=>this.pingCheck(),3000);
   }
 
@@ -291,7 +291,7 @@ class TeresaController{
 
   /* ── ROS connection ───────────────────────── */
   connect(){
-    if(this.ros){this.ros.close();this.stopNavLoop();}
+    if(this.ros){this.stopNavLoop();this.ros.removeAllListeners?.(this.ros.close());try{this.ros.close()}catch(e){}}
     const url=$('ros-url').value.trim()||'localhost:9090';
     this.ros=new ROSLIB.Ros({url:'ws://'+url});
     this.ros.on('connection',()=>{
