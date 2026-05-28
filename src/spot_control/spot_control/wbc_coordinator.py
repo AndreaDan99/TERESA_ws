@@ -683,10 +683,15 @@ class WBCCoordinatorNode(Node):
     def _tick_pre_approach(self) -> None:
         self._pub_goal.publish(self._filtered_goal())
 
-        elapsed = (self.get_clock().now() - self._pre_approach_start).nanoseconds * 1e-9 \
-            if self._pre_approach_start is not None else 0.0
+        # Step mode: "n" skips RealSense LOCKED requirement
+        if self._step_mode and self._step_confirmed:
+            self._step_confirmed = False
+            self.get_logger().info('[STEP] PRE_APPROACH → APPROACHING (confirmed)')
+            self._pub_spot_ctrl.publish(Bool(data=False))
+            self._set_state(CoordState.APPROACHING)
+            return
 
-        # Wait for 5 consecutive RealSense LOCKED ticks, max 5 seconds
+        # Wait for 5 consecutive RealSense LOCKED ticks
         if self._torso_tracker_state == 'LOCKED':
             self._torso_detected_ticks += 1
             if self._torso_detected_ticks >= 5:
@@ -696,8 +701,6 @@ class WBCCoordinatorNode(Node):
                 return
         else:
             self._torso_detected_ticks = 0
-
-        # No timeout — wait indefinitely for RealSense LOCKED ×5
 
     # ── Helpers ───────────────────────────────────────────────────────
 
