@@ -18,14 +18,17 @@ git status --short
 
 | Document | Contents |
 |----------|----------|
-| [`CHANGELOG.md`](CHANGELOG.md) | Changelog storico (6 May – 24 May 2026) |
+| [`CHANGELOG.md`](CHANGELOG.md) | Changelog storico (6 May – 28 May 2026) |
 | [`DESCRIPTION.md`](DESCRIPTION.md) | Architettura sistema, frame tree, FSM, build/run |
 | [`PLAN.md`](PLAN.md) | Piano futuro (refactoring launch, body pose optimization, paper) |
+| [`web/README.md`](web/README.md) | Web control panel + camera view con YOLO overlay |
 
 ---
 
 ## Current State (26 May 2026)
 
+- **Web Control Panel**: interfaccia web (`web/teresa_control.html`) con pulsanti, stato WBC, navigazione RETURN via P-controller JS. Camera view (`web/camera_view.html`) con feed live Orbbec/RealSense + overlay scheletro YOLO. Comunicazione via rosbridge WebSocket, nessuna connessione diretta a Spot. Vedi [`web/README.md`](web/README.md).
+- **Step mode debugging**: `step_mode:=true` blocca le transizioni FSM automatiche. Conferma con tasto `n` o pulsante STEP.
 - **Ricerca ibrida 360°**: Spot + braccio coordinati in SEARCHING. 18 posizioni Spot (6 yaw × 3 pitch, 360° completi). Braccio esplora con 7 pose QP-based in loop (SEARCH_GRID mode, δ=0.15, safe joint limits). Lock ibrido: Orbbec diretto o RealSense semi-lock (guida Spot, braccio congelato, 3s finestra). Lock confidence: 70%.
 - **Nuovi stati FSM**: SEMI_LOCKING (braccio in pausa, Orbbec cerca) e LOCKING (braccio in home, 5 campioni in parallelo, tolleranza 1s assenza Orbbec, rientro senza azzerare posizione).
 - **FSM a 10 Hz** (era 5 Hz). SEMI_LOCKING: early exit se RealSense perde torso.

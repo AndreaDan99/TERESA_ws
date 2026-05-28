@@ -1,7 +1,59 @@
 # TERESA — Changelog
 
-Storico completo delle modifiche dal 6 maggio 2026 al 26 maggio 2026.
+Storico completo delle modifiche dal 6 maggio 2026 al 28 maggio 2026.
 Per la descrizione del sistema corrente vedi [`DESCRIPTION.md`](DESCRIPTION.md).
+
+---
+
+## 28 May 2026 — Web Control Panel + Step Mode Debugging
+
+### Web Control Panel (`web/`)
+
+Interfaccia web per controllo remoto e debug via rosbridge WebSocket. Due pagine:
+- **`teresa_control.html`** — pannello comandi con pulsanti, stato WBC, log eventi, navigazione RETURN con P-controller JS
+- **`camera_view.html`** — feed live Orbbec + RealSense con overlay scheletro YOLO (proiezione 3D→2D), stato posture e tracker
+
+**Comandi replicati dal keyboard controller:**
+START, RETURN (con navigazione P-controller 10 Hz), UPDATE start pose, STAND, SIT, STOP, STEP (step mode)
+
+**Camera view:**
+- Scheletro YOLO 17 keypoint (COCO) proiettato 3D→2D con CameraInfo
+- Colori: giallo (naso), ciano (viso), verde (busto), arancione (gambe)
+- Bordo RealSense dinamico: verde LOCKED, giallo TRACKING
+- Pulsanti Hide indipendenti per Orbbec e RealSense — fermano lo stream immagine ma mantengono l'overlay scheletro
+- FPS counter per ogni camera
+- Barra YOLO: postura, confidenza, stato tracker, joint visibili
+
+**Nessuna dipendenza lato client** — `roslibjs` da CDN. Comunicazione solo via topic ROS attraverso rosbridge. Nessuna connessione diretta browser↔Spot.
+
+### Step-by-Step Debug Mode
+
+Nuovo parametro `step_mode` (default `false`) in `wbc_params.yaml`. Quando attivo, il coordinator blocca ogni transizione automatica tra stati mission e richiede conferma esplicita via `/wbc/step_confirm` (pulsante STEP o tasto `n`).
+
+Stati sempre liberi (non gate-ati): `IDLE → SEARCHING` (manuale), `any → IDLE/WAITING_TF` (emergenza/TF loss/ESC).
+
+### Files
+
+| File | Modifica |
+|------|----------|
+| `web/teresa_control.html` | **Nuovo** — 622 righe, pannello controllo web |
+| `web/camera_view.html` | **Nuovo** — 641 righe, feed telecamere + YOLO |
+| `web/README.md` | **Nuovo** — documentazione interfaccia web |
+| `wbc_coordinator.py` | Step mode gating: `_set_state(force)`, `_do_set_state`, `/wbc/step_pending`, `/wbc/step_confirm` |
+| `wbc_keyboard_controller.py` | Tasto `n` per step confirm, subscriber `/wbc/step_pending` |
+| `wbc_params.yaml` | +`step_mode: false` |
+
+### Uso
+
+```bash
+# rosbridge
+ros2 run rosbridge_server rosbridge_websocket
+
+# HTTP server per file statici
+cd web && python3 -m http.server 8000
+```
+
+Apri `http://localhost:8000/teresa_control.html`.
 
 ---
 
