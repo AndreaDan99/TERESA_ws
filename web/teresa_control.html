@@ -291,7 +291,7 @@ class TeresaController{
 
   /* ── ROS connection ───────────────────────── */
   connect(){
-    if(this.ros){this.stopNavLoop();this.ros.removeAllListeners?.(this.ros.close());try{this.ros.close()}catch(e){}}
+    if(this.ros){this.stopNavLoop();try{this.ros.close()}catch(e){}}
     const url=$('ros-url').value.trim()||'localhost:9090';
     this.ros=new ROSLIB.Ros({url:'ws://'+url});
     this.ros.on('connection',()=>{
