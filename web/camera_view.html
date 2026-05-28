@@ -102,6 +102,8 @@
   .cam-placeholder {
     position: absolute; color: var(--text-dim); font-size: 14px;
     text-align: center; line-height: 1.6;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    inset: 0;
   }
 
   /* ── YOLO status bar ──────────────────────────── */
@@ -200,6 +202,8 @@
 <div id="nav-bar">
   <a href="teresa_control.html">← Back to Control</a>
   <button id="pause-btn" onclick="ctrl.togglePause()">⏸ Pause</button>
+  <button id="hide-orbbec-btn" onclick="ctrl.toggleOrbbec()">👁 Hide Orbbec</button>
+  <button id="hide-rs-btn" onclick="ctrl.toggleRealSense()">👁 Hide RS</button>
 </div>
 
 <script src="https://unpkg.com/roslib@1.4.0/build/roslib.min.js"></script>
@@ -239,6 +243,10 @@
       this.orbbecK = null;     // {fx, fy, cx, cy, w, h}
       this.orbbecReady = false;
       this.rsReady = false;
+
+      /* hide-image state (skeleton + data still active) */
+      this.orbbecHidden = false;
+      this.rsHidden = false;
 
       /* latest data */
       this.skeleton = null;  // {poses: [{x,y,z}+]} (PoseArray)
@@ -291,23 +299,23 @@
 
     initTopics() {
       /* ── Orbbec image ────────────────────── */
+      this._orbbecCb = (msg) => {
+        this.lastOrbbecTs = Date.now();
+        if (this.paused || this.orbbecHidden) return;
+        this.renderImage(msg, $id('orbbec-img'), this.orbbecK);
+        this.orbbecReady = true;
+        $id('orbbec-dot').className = 'dot online';
+        $id('orbbec-tag').textContent = msg.width + '×' + msg.height;
+        $id('orbbec-tag').classList.add('active');
+        $id('orbbec-placeholder').style.display = 'none';
+        this.tickFps('orbbec');
+      };
       this.orbbecSub = new ROSLIB.Topic({
         ros: this.ros, name: '/orbbec/color/image_raw',
         messageType: 'sensor_msgs/Image',
-        throttle_rate: 200  // max 5 Hz throttling
+        throttle_rate: 200
       });
-      this.orbbecSub.subscribe((msg) => {
-        this.lastOrbbecTs = Date.now();
-        if (!this.paused) {
-          this.renderImage(msg, $id('orbbec-img'), this.orbbecK);
-          this.orbbecReady = true;
-          $id('orbbec-dot').className = 'dot online';
-          $id('orbbec-tag').textContent = msg.width + '×' + msg.height;
-          $id('orbbec-tag').classList.add('active');
-          $id('orbbec-placeholder').style.display = 'none';
-          this.tickFps('orbbec');
-        }
-      });
+      this.orbbecSub.subscribe(this._orbbecCb);
 
       /* ── Orbbec camera info ──────────────── */
       this.orbbecInfoSub = new ROSLIB.Topic({
@@ -322,23 +330,23 @@
       });
 
       /* ── RealSense image ─────────────────── */
+      this._rsCb = (msg) => {
+        this.lastRsTs = Date.now();
+        if (this.paused || this.rsHidden) return;
+        this.renderImage(msg, $id('rs-img'), null);
+        this.rsReady = true;
+        $id('rs-dot').className = 'dot online';
+        $id('rs-tag').textContent = msg.width + '×' + msg.height;
+        $id('rs-tag').classList.add('active');
+        $id('rs-placeholder').style.display = 'none';
+        this.tickFps('rs');
+      };
       this.rsSub = new ROSLIB.Topic({
         ros: this.ros, name: '/camera/camera/color/image_raw',
         messageType: 'sensor_msgs/Image',
         throttle_rate: 200
       });
-      this.rsSub.subscribe((msg) => {
-        this.lastRsTs = Date.now();
-        if (!this.paused) {
-          this.renderImage(msg, $id('rs-img'), null);
-          this.rsReady = true;
-          $id('rs-dot').className = 'dot online';
-          $id('rs-tag').textContent = msg.width + '×' + msg.height;
-          $id('rs-tag').classList.add('active');
-          $id('rs-placeholder').style.display = 'none';
-          this.tickFps('rs');
-        }
-      });
+      this.rsSub.subscribe(this._rsCb);
 
       /* ── Skeleton points ─────────────────── */
       this.skelSub = new ROSLIB.Topic({
@@ -537,10 +545,67 @@
       btn.classList.toggle('active', this.paused);
     }
 
+    /* ── Hide / show individual cameras ────── */
+    toggleOrbbec() {
+      this.orbbecHidden = !this.orbbecHidden;
+      const btn = $id('hide-orbbec-btn');
+      if (this.orbbecHidden) {
+        this.orbbecSub.unsubscribe();
+        this.orbbecReady = false;
+        this._clearCanvas('orbbec-img');
+        $id('orbbec-dot').className = 'dot';
+        $id('orbbec-tag').textContent = 'hidden';
+        $id('orbbec-tag').classList.remove('active');
+        $id('orbbec-placeholder').style.display = 'flex';
+        $id('orbbec-placeholder').innerHTML = 'Image hidden<br><span style="font-size:10px;color:var(--accent)">skeleton active</span>';
+        btn.textContent = '👁 Show Orbbec';
+        btn.classList.add('active');
+      } else {
+        this.orbbecSub.subscribe(this._orbbecCb);
+        $id('orbbec-placeholder').style.display = 'flex';
+        $id('orbbec-placeholder').innerHTML = 'Waiting for<br>/orbbec/color/image_raw...';
+        $id('orbbec-tag').textContent = 'connecting...';
+        btn.textContent = '👁 Hide Orbbec';
+        btn.classList.remove('active');
+      }
+    }
+
+    toggleRealSense() {
+      this.rsHidden = !this.rsHidden;
+      const btn = $id('hide-rs-btn');
+      if (this.rsHidden) {
+        this.rsSub.unsubscribe();
+        this.rsReady = false;
+        this._clearCanvas('rs-img');
+        $id('rs-dot').className = 'dot';
+        $id('rs-tag').textContent = 'hidden';
+        $id('rs-tag').classList.remove('active');
+        $id('rs-placeholder').style.display = 'flex';
+        $id('rs-placeholder').innerHTML = 'Image hidden';
+        btn.textContent = '👁 Show RS';
+        btn.classList.add('active');
+      } else {
+        this.rsSub.subscribe(this._rsCb);
+        $id('rs-placeholder').style.display = 'flex';
+        $id('rs-placeholder').innerHTML = 'Waiting for<br>/camera/camera/color/image_raw...';
+        $id('rs-tag').textContent = 'connecting...';
+        btn.textContent = '👁 Hide RS';
+        btn.classList.remove('active');
+      }
+    }
+
+    _clearCanvas(id) {
+      const canvas = $id(id);
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
     /* ── Ping check (alive indicators) ─────── */
     pingCheck() {
       const now = Date.now();
       const age = (last) => last ? ((now - last) / 1000).toFixed(0) + 's ago' : '---';
+
+      if (this.orbbecHidden) return; // skip ping when hidden
 
       if (!this.orbbecReady) {
         $id('orbbec-dot').className = 'dot';
@@ -550,6 +615,8 @@
         $id('orbbec-dot').className = 'dot offline';
         $id('orbbec-tag').textContent = 'stalled ' + age(this.lastOrbbecTs);
       }
+
+      if (this.rsHidden) return; // skip ping when hidden
 
       if (!this.rsReady) {
         $id('rs-dot').className = 'dot';
