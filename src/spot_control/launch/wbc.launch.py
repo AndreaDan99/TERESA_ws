@@ -24,6 +24,9 @@ def generate_launch_description():
     dry_run_arg = DeclareLaunchArgument('dry_run', default_value='false',
         description='Dry run: publish debug topics only, no robot movement')
 
+    step_mode_arg = DeclareLaunchArgument('step_mode', default_value='false',
+        description='Step mode: gate automatic FSM transitions, press "n" to advance')
+
     params_file = PathJoinSubstitution([
         FindPackageShare('spot_control'), 'config', 'wbc_params.yaml'
     ])
@@ -42,7 +45,8 @@ def generate_launch_description():
         executable='wbc_coordinator',
         name='wbc_coordinator',
         output='screen',
-        parameters=[params_file],
+        parameters=[params_file,
+                    {'step_mode': LaunchConfiguration('step_mode')}],
     )
 
     navigator_node = Node(
@@ -55,6 +59,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         dry_run_arg,
+        step_mode_arg,
         LogInfo(msg=['WBC — arm-only QP + coordinator + spot navigator']),
         qp_node,
         coord_node,
