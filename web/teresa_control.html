@@ -5,617 +5,642 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TERESA Control Panel</title>
 <style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#121220;--bg-light:#1a1a2e;--bg-card:#1e1e32;--text:#c8c8d0;--text-dim:#6a6a7a;
+  --accent:#50c878;--danger:#e05555;--warning:#e0b040;--border:#2a2a3e;
+  --font:'SF Mono','Fira Code','Cascadia Code','JetBrains Mono',monospace;
+}
+body{
+  background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;
+  min-height:100vh;display:flex;flex-direction:column;user-select:none;-webkit-user-select:none;
+}
 
-  :root {
-    --bg:        #121220;
-    --bg-light:  #1a1a2e;
-    --bg-card:   #1e1e32;
-    --text:      #c8c8d0;
-    --text-dim:  #6a6a7a;
-    --accent:    #50c878;
-    --danger:    #e05555;
-    --warning:   #e0b040;
-    --btn-bg:    #f0f0f0;
-    --btn-hover: #ffffff;
-    --btn-text:  #1a1a2e;
-    --border:    #2a2a3e;
-    --font:      'SF Mono', 'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace;
-  }
+/* status bar */
+#status-bar{
+  display:flex;align-items:center;gap:12px;padding:8px 16px;
+  background:var(--bg-light);border-bottom:1px solid var(--border);font-size:12px;flex-shrink:0;
+}
+#status-bar .dot{width:10px;height:10px;border-radius:50%;background:#555;transition:background .3s}
+#status-bar .dot.online{background:var(--accent);box-shadow:0 0 8px var(--accent);animation:pulse 2s infinite}
+#status-bar .dot.offline{background:var(--danger)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+#status-bar .label{color:var(--text-dim)}
+#status-bar .value{color:var(--text);font-weight:600}
+#status-bar .sep{color:var(--border)}
+#ros-input{display:flex;align-items:center;gap:2px;margin-left:auto}
+#ros-input input,#ros-input button{
+  background:var(--bg);border:1px solid var(--border);color:var(--text);
+  font-family:var(--font);font-size:11px;padding:3px 8px;border-radius:4px;outline:none;
+}
+#ros-input input{width:180px}
+#ros-input button{cursor:pointer}
 
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--font);
-    font-size: 13px;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    user-select: none;
-    -webkit-user-select: none;
-  }
+/* step banner */
+#step-banner{
+  display:none;padding:10px 20px;background:rgba(224,176,64,.08);
+  border-bottom:1px solid rgba(224,176,64,.25);color:var(--warning);font-size:12px;animation:blink 1.2s infinite;flex-shrink:0;
+}
+#step-banner.visible{display:flex;align-items:center;gap:8px}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.7}}
 
-  /* ── Top status bar ───────────────────────────── */
-  #status-bar {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 10px 20px;
-    background: var(--bg-light);
-    border-bottom: 1px solid var(--border);
-    font-size: 12px;
-  }
-  #status-bar .dot {
-    width: 10px; height: 10px;
-    border-radius: 50%;
-    background: #555;
-    transition: background 0.3s;
-  }
-  #status-bar .dot.online  { background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 2s infinite; }
-  #status-bar .dot.offline { background: var(--danger); }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50%      { opacity: 0.5; }
-  }
-  #status-bar .label { color: var(--text-dim); margin-right: 4px; }
-  #status-bar .value { color: var(--text); font-weight: 600; }
-  #status-bar .sep { color: var(--border); }
+/* main area */
+#main{flex:1;overflow:auto;display:flex;flex-direction:column}
 
-  #ros-input {
-    display: flex; align-items: center; gap: 2px;
-    margin-left: auto;
-  }
-  #ros-input input {
-    background: var(--bg); border: 1px solid var(--border);
-    color: var(--text); font-family: var(--font); font-size: 11px;
-    padding: 3px 8px; border-radius: 4px; width: 180px; outline: none;
-  }
-  #ros-input input:focus { border-color: var(--accent); }
+/* default view */
+#state-view{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:30px;gap:16px;flex:1}
+#state-big{font-size:28px;font-weight:700;letter-spacing:2px;text-transform:uppercase}
+#state-detail{font-size:12px;color:var(--text-dim);text-align:center;line-height:1.6}
+#log-area{
+  width:100%;max-width:700px;max-height:160px;overflow-y:auto;background:var(--bg-light);
+  border:1px solid var(--border);border-radius:6px;padding:10px;font-size:11px;color:var(--text-dim);line-height:1.5;
+}
+#log-area .entry{margin-bottom:2px}
+#log-area .entry.step{color:var(--warning)}#log-area .entry.error{color:var(--danger)}#log-area .entry.info{color:var(--accent)}
+#log-area::-webkit-scrollbar{width:6px}#log-area::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+#start-indicator{font-size:11px;color:var(--text-dim)}
 
-  /* ── Step pending banner ──────────────────────── */
-  #step-banner {
-    display: none;
-    padding: 10px 20px;
-    background: rgba(224, 176, 64, 0.08);
-    border-bottom: 1px solid rgba(224, 176, 64, 0.25);
-    color: var(--warning);
-    font-size: 12px;
-    animation: blink 1.2s infinite;
-  }
-  #step-banner.visible { display: flex; align-items: center; gap: 8px; }
+/* camera view */
+#camera-view{display:none;flex:1;flex-direction:column;overflow:hidden}
+#camera-view.open{display:flex}
+#camera-grid{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:8px;overflow:hidden;min-height:0}
+@media(max-width:900px){#camera-grid{grid-template-columns:1fr}}
+.cam-panel{
+  display:flex;flex-direction:column;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;overflow:hidden;
+}
+.cam-panel.locked{border-color:var(--accent);box-shadow:0 0 12px rgba(80,200,120,.15)}
+.cam-panel.tracking{border-color:var(--warning)}
+.cam-header{
+  display:flex;align-items:center;justify-content:space-between;padding:5px 10px;
+  background:rgba(0,0,0,.2);border-bottom:1px solid var(--border);font-size:11px;flex-shrink:0;
+}
+.cam-header .title{font-weight:600}
+.cam-header .fps{color:var(--text-dim);font-size:10px}
+.cam-header .tag{font-size:10px;padding:2px 8px;border-radius:3px;background:rgba(255,255,255,.06);color:var(--text-dim)}
+.cam-header .tag.active{color:var(--accent);background:rgba(80,200,120,.12)}
+.cam-body{
+  flex:1;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;background:#000;
+}
+.cam-body canvas{display:block;width:100%;height:100%;object-fit:contain}
+.cam-body .overlay-canvas{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none}
+.cam-placeholder{
+  position:absolute;color:var(--text-dim);font-size:14px;text-align:center;line-height:1.6;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;inset:0;
+}
+.cam-overlay-bar{
+  display:flex;align-items:center;gap:4px;flex-shrink:0;padding:4px 8px;
+  background:rgba(0,0,0,.2);border-top:1px solid var(--border);flex-wrap:wrap;
+}
+.cam-overlay-bar button{
+  font-family:var(--font);font-size:10px;font-weight:500;padding:2px 7px;border:1px solid var(--border);
+  border-radius:4px;background:transparent;color:var(--text-dim);cursor:pointer;transition:all .15s;white-space:nowrap;
+}
+.cam-overlay-bar button:hover{color:var(--text);border-color:var(--text-dim)}
+.cam-overlay-bar button.active{border-color:var(--accent);color:var(--accent);background:rgba(80,200,120,.08)}
+.cam-overlay-bar .ov-label{color:var(--text-dim);font-size:9px;margin-right:2px}
 
-  /* ── Main content area ────────────────────────── */
-  #main {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 30px;
-    gap: 20px;
-  }
-  #state-big {
-    font-size: 28px;
-    font-weight: 700;
-    color: var(--text);
-    letter-spacing: 2px;
-    text-transform: uppercase;
-  }
-  #state-detail {
-    font-size: 12px;
-    color: var(--text-dim);
-    text-align: center;
-    line-height: 1.6;
-  }
-  #log-area {
-    width: 100%; max-width: 700px; max-height: 200px;
-    overflow-y: auto;
-    background: var(--bg-light);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 12px;
-    font-size: 11px;
-    color: var(--text-dim);
-    line-height: 1.5;
-  }
-  #log-area .entry { margin-bottom: 2px; }
-  #log-area .entry.step  { color: var(--warning); }
-  #log-area .entry.error { color: var(--danger); }
-  #log-area .entry.info  { color: var(--accent); }
-  #log-area::-webkit-scrollbar { width: 6px; }
-  #log-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+/* yolo bar */
+#yolo-bar{
+  display:none;align-items:center;gap:14px;flex-shrink:0;padding:7px 16px;
+  background:var(--bg-light);border-top:1px solid var(--border);font-size:12px;
+}
+#camera-view.open #yolo-bar{display:flex}
+#yolo-bar .val{font-weight:600;padding:2px 8px;border-radius:4px;background:rgba(255,255,255,.04)}
+#yolo-bar .val.posture-lying{color:var(--accent)}
+#yolo-bar .val.posture-other{color:var(--text-dim)}
 
-  /* ── Bottom button bar ────────────────────────── */
-  #btn-bar {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    padding: 14px 24px;
-    background: var(--bg-light);
-    border-top: 1px solid var(--border);
-    flex-wrap: wrap;
-  }
-  #btn-bar button {
-    font-family: var(--font);
-    font-size: 12px;
-    font-weight: 600;
-    padding: 8px 18px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--btn-bg);
-    color: var(--btn-text);
-    cursor: pointer;
-    transition: all 0.15s ease;
-    letter-spacing: 0.5px;
-    white-space: nowrap;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  #btn-bar button:hover {
-    background: var(--btn-hover);
-    box-shadow: 0 0 12px rgba(255,255,255,0.15);
-    transform: translateY(-1px);
-  }
-  #btn-bar button:active {
-    transform: translateY(0);
-    box-shadow: none;
-  }
-  #btn-bar button.danger {
-    background: transparent;
-    color: #f0f0f0;
-    border-color: var(--danger);
-  }
-  #btn-bar button.danger:hover {
-    background: var(--danger);
-    color: #fff;
-    box-shadow: 0 0 16px rgba(224,85,85,0.3);
-  }
-  #btn-bar button.accent {
-    background: transparent;
-    color: var(--accent);
-    border-color: var(--accent);
-  }
-  #btn-bar button.accent:hover {
-    background: var(--accent);
-    color: var(--btn-text);
-    box-shadow: 0 0 16px rgba(80,200,120,0.25);
-  }
-  #btn-bar button:disabled {
-    opacity: 0.35;
-    cursor: not-allowed;
-    pointer-events: none;
-  }
-  .btn-icon { font-size: 14px; }
-
-  /* ── Responsive ───────────────────────────────── */
-  @media (max-width: 700px) {
-    #btn-bar { gap: 8px; padding: 10px; }
-    #btn-bar button { padding: 6px 12px; font-size: 11px; }
-    #state-big { font-size: 22px; }
-  }
+/* button bar */
+#btn-bar{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;flex-shrink:0;
+  padding:10px 16px;background:var(--bg-light);border-top:1px solid var(--border);flex-wrap:wrap;
+}
+.btn-group{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+#btn-bar button{
+  font-family:var(--font);font-size:12px;font-weight:600;padding:7px 14px;
+  border:1px solid var(--border);border-radius:5px;background:var(--bg-card);color:var(--text);
+  cursor:pointer;transition:all .15s;white-space:nowrap;display:flex;align-items:center;gap:5px;
+}
+#btn-bar button:hover{background:rgba(255,255,255,.08);transform:translateY(-1px)}
+#btn-bar button:active{transform:translateY(0)}
+#btn-bar button.accent{color:var(--accent);border-color:var(--accent);background:rgba(80,200,120,.06)}
+#btn-bar button.accent:hover{background:var(--accent);color:var(--btn-text,var(--bg));box-shadow:0 0 12px rgba(80,200,120,.2)}
+#btn-bar button.danger{color:var(--danger);border-color:var(--danger);background:rgba(224,85,85,.04)}
+#btn-bar button.danger:hover{background:var(--danger);color:#fff;box-shadow:0 0 14px rgba(224,85,85,.25)}
+#btn-bar button.active{border-color:var(--accent);color:var(--accent)}
+#btn-bar button:disabled{opacity:.35;cursor:not-allowed;pointer-events:none}
+.btn-icon{font-size:14px}
+#pause-btn{min-width:72px}
 </style>
 </head>
 <body>
 
 <div id="status-bar">
-  <span class="label">Rosbridge:</span>
-  <span class="dot" id="ros-dot" title="WebSocket connection"></span>
-  <span class="value" id="ros-status">disconnected</span>
+  <span class="label">Rosbridge:</span><span class="dot" id="ros-dot"></span><span class="value" id="ros-status">disconnected</span>
   <span class="sep">|</span>
-  <span class="label">SpotCore:</span>
-  <span class="dot" id="tf-dot" title="TF ready"></span>
-  <span class="value" id="tf-status">---</span>
+  <span class="label">SpotCore:</span><span class="dot" id="tf-dot"></span><span class="value" id="tf-status">---</span>
   <span class="sep">|</span>
-  <span class="label">WBC:</span>
-  <span class="value" id="wbc-state">---</span>
+  <span class="label">WBC:</span><span class="value" id="wbc-state">---</span>
   <span class="sep">|</span>
-  <span class="label">Start:</span>
-  <span class="value" id="start-indicator">---</span>
+  <span class="label">Start:</span><span class="value" id="start-indicator">---</span>
+  <span class="sep">|</span>
+  <button id="cam-toggle-btn" onclick="ctrl.toggleCameras()" title="Camera view">📷</button>
   <div id="ros-input">
     <span class="label" style="margin:0">ws://</span>
     <input type="text" id="ros-url" value="localhost:9090" placeholder="host:9090">
   </div>
 </div>
 
-<div id="step-banner">
-  <span style="font-size:16px">⏸</span>
-  <span id="step-text"></span>
-</div>
+<div id="step-banner"><span style="font-size:16px">⏸</span><span id="step-text"></span></div>
 
 <div id="main">
-  <div id="state-big">---</div>
-  <div id="state-detail">
-    Press <span style="color:var(--accent)">▶ START</span> to begin the mission.<br>
-    SpotCore must be connected first (green dot).
+  <div id="state-view">
+    <div id="state-big">---</div>
+    <div id="state-detail">Connecting to rosbridge...</div>
+    <div id="log-area"><div class="entry" style="color:var(--text-dim)">---</div></div>
   </div>
-  <div id="log-area"><div class="entry" style="color:var(--text-dim)">Waiting for rosbridge connection...</div></div>
+
+  <div id="camera-view">
+    <div id="camera-grid">
+      <div class="cam-panel" id="orbbec-panel">
+        <div class="cam-header">
+          <span class="title">ORBBEC — Spot view</span>
+          <span class="tag" id="orbbec-tag">no signal</span>
+          <span class="fps" id="orbbec-fps"></span>
+        </div>
+        <div class="cam-body">
+          <canvas id="orbbec-img"></canvas>
+          <canvas class="overlay-canvas" id="orbbec-overlay"></canvas>
+          <div class="cam-placeholder" id="orbbec-placeholder">Waiting for<br>/orbbec/color/image_raw...</div>
+        </div>
+        <div class="cam-overlay-bar">
+          <span class="ov-label">Overlays:</span>
+          <button id="ob-skel-btn" onclick="ctrl.toggleOrbbecSkel()" class="active">Skeleton</button>
+          <button id="ob-bbox-btn" onclick="ctrl.toggleOrbbecBbox()">Body BBox</button>
+          <button id="ob-torso-btn" onclick="ctrl.toggleOrbbecTorsoBbox()">Torso BBox</button>
+          <button id="ob-approach-btn" onclick="ctrl.toggleOrbbecApproach()">Approach</button>
+        </div>
+      </div>
+
+      <div class="cam-panel" id="realsense-panel">
+        <div class="cam-header">
+          <span class="title">REALSENSE — Z1 wrist view</span>
+          <span class="tag" id="rs-tag">no signal</span>
+          <span class="fps" id="rs-fps"></span>
+        </div>
+        <div class="cam-body">
+          <canvas id="rs-img"></canvas>
+          <canvas class="overlay-canvas" id="rs-overlay"></canvas>
+          <div class="cam-placeholder" id="rs-placeholder">Waiting for<br>/camera/camera/color/image_raw...</div>
+        </div>
+        <div class="cam-overlay-bar">
+          <span class="ov-label">Overlays:</span>
+          <button id="rs-center-btn" onclick="ctrl.toggleRsCenter()">Center</button>
+          <button id="rs-edges-btn" onclick="ctrl.toggleRsEdges()">Edges</button>
+          <button id="rs-label-btn" onclick="ctrl.toggleRsLabel()">Label</button>
+        </div>
+      </div>
+    </div>
+    <div id="yolo-bar">
+      <span class="label">Posture:</span><span class="val" id="posture-val">---</span>
+      <span class="label">Conf:</span><span class="val" id="conf-val">---</span>
+      <span class="label">Torso:</span><span class="val" id="tracker-val">---</span>
+      <span class="label">Joints:</span><span class="val" id="joints-val">0/17</span>
+    </div>
+  </div>
 </div>
 
 <div id="btn-bar">
-  <button id="btn-start"  disabled onclick="ctrl.onStart()"> <span class="btn-icon">▶</span> START </button>
-  <button id="btn-return" disabled onclick="ctrl.onReturn()"> <span class="btn-icon">↩</span> RETURN </button>
-  <button id="btn-update" disabled onclick="ctrl.onUpdate()"> <span class="btn-icon">↻</span> UPDATE </button>
-  <button id="btn-step"   disabled onclick="ctrl.onStep()">  <span class="btn-icon">→</span> STEP </button>
-  <button id="btn-stand"  disabled onclick="ctrl.onStand()"> <span class="btn-icon">⬆</span> STAND </button>
-  <button id="btn-sit"    disabled onclick="ctrl.onSit()">   <span class="btn-icon">⬇</span> SIT </button>
-  <button id="btn-stop" class="danger" disabled onclick="ctrl.onStop()"> <span class="btn-icon">⏹</span> STOP </button>
-  <a href="camera_view.html" target="_blank" style="font-family:var(--font);font-size:12px;font-weight:600;padding:8px 18px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--text);text-decoration:none;transition:all 0.15s;letter-spacing:0.5px;display:flex;align-items:center;gap:6px" onmouseover="this.style.background='rgba(255,255,255,0.06)'" onmouseout="this.style.background='transparent'"><span class="btn-icon">📷</span> CAMERAS</a>
+  <div class="btn-group">
+    <button id="btn-start"  disabled onclick="ctrl.onStart()"><span class="btn-icon">▶</span>START</button>
+    <button id="btn-return" disabled onclick="ctrl.onReturn()"><span class="btn-icon">↩</span>RETURN</button>
+    <button id="btn-update" disabled onclick="ctrl.onUpdate()"><span class="btn-icon">↻</span>UPDATE</button>
+    <button id="btn-step"   disabled onclick="ctrl.onStep()"><span class="btn-icon">→</span>STEP</button>
+    <button id="pause-btn" disabled onclick="ctrl.togglePause()">⏸Pause</button>
+  </div>
+  <div class="btn-group">
+    <button id="btn-stand" disabled onclick="ctrl.onStand()"><span class="btn-icon">⬆</span>STAND</button>
+    <button id="btn-sit"   disabled onclick="ctrl.onSit()"><span class="btn-icon">⬇</span>SIT</button>
+    <button id="btn-pon"   disabled onclick="ctrl.onPowerOn()"><span class="btn-icon">🔌</span>POWER ON</button>
+    <button id="btn-poff"  disabled onclick="ctrl.onPowerOff()"><span class="btn-icon">⏻</span>POWER OFF</button>
+    <button id="btn-stop" class="danger" disabled onclick="ctrl.onStop()"><span class="btn-icon">⏹</span>STOP</button>
+  </div>
 </div>
 
 <script src="https://unpkg.com/roslib@1.4.0/build/roslib.min.js"></script>
 <script>
-(function() {
+(function(){
+const $=id=>document.getElementById(id);
+const SKELETON_EDGES=[[15,13],[13,11],[16,14],[14,12],[11,12],[5,11],[6,12],[5,6],[5,7],[6,8],[7,9],[8,10],[1,2],[0,1],[0,2],[1,3],[2,4],[3,5],[4,6]];
 
-  /* ── Helpers ──────────────────────────────────── */
-  function $id(id) { return document.getElementById(id); }
-  function yawFromQuat(qx, qy, qz, qw) {
-    const sy = 2 * (qw * qz + qx * qy);
-    const cy = 1 - 2 * (qy * qy + qz * qz);
-    return Math.atan2(sy, cy);
+class TeresaController{
+  constructor(){
+    this.ros=null;
+    // params
+    this.goalTol=.15;this.angSpeedMax=.4;this.linSpeedMax=.3;this.angleThres=.08;
+    this.odomFrame='my_spot/odom';this.bodyFrame='my_spot/body';this.updateRate=10;
+    // control state
+    this.hasStartPose=false;this.startPose=null;this.goalPose=null;
+    this.isReturning=false;this.kcState='IDLE';this.tfSystemReady=false;this.bodyInOdom=null;
+    // camera state
+    this.camerasOpen=false;this.paused=false;
+    this.orbbecHidden=false;this.rsHidden=false;this.orbbecReady=false;this.rsReady=false;
+    // overlay toggles
+    this.showOrbbecSkel=true;this.showOrbbecBbox=false;this.showOrbbecTorsoBbox=false;this.showOrbbecApproach=false;
+    this.showRsCenter=false;this.showRsEdges=false;this.showRsLabel=false;
+    // camera data
+    this.orbbecK=null;this.rsCamInfo=null;this.rsCamPose=null;
+    this.skeleton=null;this.bodyBbox=null;this.torsoBbox=null;this.approachMk=null;this.torsoMarkers=null;
+    this.posture='---';this.confidence=0;this.trackerState='---';
+    // fps
+    this.orbbecFrames=0;this.rsFrames=0;this.orbbecFpsTs=0;this.rsFpsTs=0;
+    // pings
+    this.lastOrbbecTs=0;this.lastRsTs=0;this.lastSkelTs=0;
+    // ui
+    this.logLines=[];this.maxLog=60;
+    this._navTimer=null;
+
+    this.connect();
+    document.addEventListener('keydown',e=>{
+      if(e.target.tagName==='INPUT')return;
+      switch(e.key.toLowerCase()){
+        case's':e.preventDefault();this.onStart();break;
+        case'r':case'q':e.preventDefault();this.onReturn();break;
+        case'u':e.preventDefault();this.onUpdate();break;
+        case'n':e.preventDefault();this.onStep();break;
+        case'a':e.preventDefault();this.onStand();break;
+        case'c':e.preventDefault();this.onSit();break;
+        case'v':e.preventDefault();this.toggleCameras();break;
+        case'p':case' ':e.preventDefault();this.togglePause();break;
+        case'escape':e.preventDefault();this.onStop();break;
+      }
+    });
+    $('ros-url').addEventListener('keydown',e=>{if(e.key==='Enter')this.connect();});
+    window.addEventListener('beforeunload',()=>{this.stopNavLoop();if(this.cmdVelPub)this.cmdVelPub.publish({linear:{x:0,y:0,z:0},angular:{x:0,y:0,z:0}});});
+    setInterval(()=>this.pingCheck(),3000);
   }
-  function normAngle(a) { return Math.atan2(Math.sin(a), Math.cos(a)); }
 
-  /* ── Controller ───────────────────────────────── */
-  const KCState = { IDLE: 'IDLE', ROTATING: 'ROTATING', DRIVING: 'DRIVING', REALIGNING: 'REALIGNING' };
+  log(msg,cls=''){
+    const t=new Date().toLocaleTimeString('en-GB',{hour12:false});
+    const d=document.createElement('div');d.className='entry'+(cls?' '+cls:'');
+    d.textContent='['+t+'] '+msg;const a=$('log-area');a.appendChild(d);this.logLines.push(d);
+    while(this.logLines.length>this.maxLog){const o=this.logLines.shift();o.remove();}
+    a.scrollTop=a.scrollHeight;
+  }
 
-  class TeresaController {
-    constructor() {
-      /* params (matching wbc_keyboard_controller defaults) */
-      this.goalTol       = 0.15;
-      this.angSpeedMax   = 0.4;
-      this.linSpeedMax   = 0.3;
-      this.angleThres    = 0.08;
-      this.odomFrame     = 'my_spot/odom';
-      this.bodyFrame     = 'my_spot/body';
-      this.updateRate    = 10.0;
-      this.cmdVelTopic   = '/my_spot/cmd_vel';
+  /* ── ROS connection ───────────────────────── */
+  connect(){
+    if(this.ros){this.ros.close();this.stopNavLoop();}
+    const url=$('ros-url').value.trim()||'localhost:9090';
+    this.ros=new ROSLIB.Ros({url:'ws://'+url});
+    this.ros.on('connection',()=>{
+      $('ros-dot').className='dot online';$('ros-status').textContent='connected';
+      this.log('Rosbridge connected','info');this.initTopics();
+    });
+    this.ros.on('close',()=>{
+      $('ros-dot').className='dot offline';$('ros-status').textContent='disconnected';
+      $('tf-dot').className='dot';$('tf-status').textContent='---';$('wbc-state').textContent='---';
+      this.tfSystemReady=false;this.bodyInOdom=null;
+      this.log('Rosbridge disconnected','error');this.disableAll();
+    });
+    this.ros.on('error',()=>{});
+  }
 
-      /* state */
-      this.hasStartPose = false;
-      this.startPose    = null;  // {x, y, yaw}
-      this.kcState      = KCState.IDLE;
-      this.goalPose     = null;  // {x, y, yaw}
-      this.isReturning  = false;
+  initTopics(){
+    /* publishers */
+    this.restartPub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/restart',messageType:'std_msgs/Bool'});
+    this.stepConfirmPub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/step_confirm',messageType:'std_msgs/Bool'});
+    this.cmdVelPub=new ROSLIB.Topic({ros:this.ros,name:'/my_spot/cmd_vel',messageType:'geometry_msgs/Twist'});
 
-      /* TF cache */
-      this.bodyInOdom = null;   // latest TF from odom→body
-      this.tfSystemReady = false;
+    /* control subscribers */
+    this.wbcStateSub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/state',messageType:'std_msgs/String'});
+    this.wbcStateSub.subscribe(msg=>{
+      const p=$('wbc-state').textContent;
+      if(msg.data!==p){$('wbc-state').textContent=msg.data;$('state-big').textContent=msg.data;this.log('WBC state → '+msg.data,'info');}
+    });
+    this.stepPendingSub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/step_pending',messageType:'std_msgs/String'});
+    this.stepPendingSub.subscribe(msg=>{
+      $('step-banner').classList.add('visible');$('step-text').textContent='Transizione in attesa: '+msg.data+' — premi STEP o "n" per confermare.';
+      this.log('STEP pending: '+msg.data,'step');
+    });
+    this.tfReadySub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/tf_ready',messageType:'std_msgs/Bool'});
+    this.tfReadySub.subscribe(msg=>{
+      const p=this.tfSystemReady;this.tfSystemReady=msg.data;
+      if(msg.data&&!p){$('tf-dot').className='dot online';$('tf-status').textContent='ready';this.log('TF READY','info');$('state-detail').textContent='SpotCore connected. Press START or "s" to begin.';this.enableMissionButtons();}
+      else if(!msg.data&&p){$('tf-dot').className='dot offline';$('tf-status').textContent='LOST';this.log('TF LOST','error');}
+    });
 
-      /* UI refs */
-      this.logLines = [];
-      this.maxLog   = 80;
+    /* services */
+    this.standSrv=new ROSLIB.Service({ros:this.ros,name:'/my_spot/stand',serviceType:'std_srvs/srv/Trigger'});
+    this.sitSrv=new ROSLIB.Service({ros:this.ros,name:'/my_spot/sit',serviceType:'std_srvs/srv/Trigger'});
+    this.powerOnSrv=new ROSLIB.Service({ros:this.ros,name:'/my_spot/power_on',serviceType:'std_srvs/srv/Trigger'});
+    this.powerOffSrv=new ROSLIB.Service({ros:this.ros,name:'/my_spot/power_off',serviceType:'std_srvs/srv/Trigger'});
 
-      /* ROS connection */
-      this.ros = null;
-      this.connect();
+    /* TF for navigation */
+    this.tfClient=new ROSLIB.TFClient({ros:this.ros,fixedFrame:this.odomFrame,angularThres:.01,transThres:.01,rate:this.updateRate});
+    this.tfClient.subscribe(this.bodyFrame,tf=>{this.bodyInOdom=tf;});
 
-      /* cleanup on page close */
-      window.addEventListener('beforeunload', () => {
-        this.stopNavLoop();
-        if (this.cmdVelPub) this.cmdVelPub.publish({ linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
-      });
+    this.enableAlways();
+  }
 
-      /* keyboard shortcuts */
-      document.addEventListener('keydown', (e) => {
-        if (e.target.tagName === 'INPUT') return;
-        switch (e.key.toLowerCase()) {
-          case 's': e.preventDefault(); this.onStart(); break;
-          case 'r': case 'q': e.preventDefault(); this.onReturn(); break;
-          case 'u': e.preventDefault(); this.onUpdate(); break;
-          case 'n': e.preventDefault(); this.onStep(); break;
-          case 'a': e.preventDefault(); this.onStand(); break;
-          case 'c': e.preventDefault(); this.onSit(); break;
-          case 'v': e.preventDefault(); window.open('camera_view.html', '_blank'); break;
-          case 'escape': e.preventDefault(); this.onStop(); break;
-        }
-      });
+  /* ── Camera panel lifecycle ───────────────── */
+  toggleCameras(){
+    this.camerasOpen=!this.camerasOpen;
+    $('camera-view').classList.toggle('open',this.camerasOpen);
+    $('state-view').style.display=this.camerasOpen?'none':'';
+    $('cam-toggle-btn').classList.toggle('active',this.camerasOpen);
+    if(this.camerasOpen)this._openCameras();else this._closeCameras();
+  }
 
-      /* URL input */
-      const urlInput = $id('ros-url');
-      urlInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { this.connect(); }
-      });
+  _openCameras(){
+    this._initCameraTopics();
+    this.log('Camera panel opened','info');
+  }
+  _closeCameras(){
+    this._teardownCameraTopics();
+    $('orbbec-tag').textContent='no signal';$('rs-tag').textContent='no signal';
+    this.orbbecReady=false;this.rsReady=false;
+    this.log('Camera panel closed');
+  }
+
+  _initCameraTopics(){
+    /* Orbbec image */
+    this._orbbecCb=msg=>{
+      this.lastOrbbecTs=Date.now();
+      if(this.paused||this.orbbecHidden)return;
+      this.renderImage(msg,$('orbbec-img'),true);
+      this.orbbecReady=true;
+      $('orbbec-tag').textContent=msg.width+'×'+msg.height;$('orbbec-tag').classList.add('active');
+      $('orbbec-placeholder').style.display='none';this.tickFps('orbbec');
+    };
+    this.orbbecSub=new ROSLIB.Topic({ros:this.ros,name:'/orbbec/color/image_raw',messageType:'sensor_msgs/Image',throttle_rate:200});
+    this.orbbecSub.subscribe(this._orbbecCb);
+
+    /* Orbbec camera info */
+    this.orbbecInfoSub=new ROSLIB.Topic({ros:this.ros,name:'/orbbec/color/camera_info',messageType:'sensor_msgs/CameraInfo'});
+    this.orbbecInfoSub.subscribe(msg=>{
+      const k=msg.k||msg.K;if(k&&k.length>=6)this.orbbecK={fx:k[0],fy:k[4],cx:k[2],cy:k[5],w:msg.width,h:msg.height};
+    });
+
+    /* RealSense image */
+    this._rsCb=msg=>{
+      this.lastRsTs=Date.now();
+      if(this.paused||this.rsHidden)return;
+      this.renderImage(msg,$('rs-img'),false);
+      this.rsReady=true;
+      $('rs-tag').textContent=msg.width+'×'+msg.height;$('rs-tag').classList.add('active');
+      $('rs-placeholder').style.display='none';this.tickFps('rs');
+    };
+    this.rsSub=new ROSLIB.Topic({ros:this.ros,name:'/camera/camera/color/image_raw',messageType:'sensor_msgs/Image',throttle_rate:200});
+    this.rsSub.subscribe(this._rsCb);
+
+    /* Skeleton */
+    this.skelSub=new ROSLIB.Topic({ros:this.ros,name:'/human_pose/points_3d',messageType:'geometry_msgs/PoseArray'});
+    this.skelSub.subscribe(msg=>{
+      this.lastSkelTs=Date.now();this.skeleton=msg.poses||[];this.drawOrbbecOverlay();
+      const v=this.skeleton.filter(p=>p.position&&p.position.z>.01).length;
+      $('joints-val').textContent=v+'/17';$('yolo-indicator')&&($('yolo-indicator').textContent='active');
+    });
+
+    /* Body bbox */
+    this.bboxSub=new ROSLIB.Topic({ros:this.ros,name:'/human_pose/bounding_box',messageType:'visualization_msgs/Marker'});
+    this.bboxSub.subscribe(msg=>{this.bodyBbox=(msg.ns==='human_bounding'&&msg.type===1)?msg:null;this.drawOrbbecOverlay();});
+
+    /* Torso bbox */
+    this.torsoBboxSub=new ROSLIB.Topic({ros:this.ros,name:'/human_pose/torso_bounding_box',messageType:'visualization_msgs/Marker'});
+    this.torsoBboxSub.subscribe(msg=>{this.torsoBbox=(msg.ns==='torso_bounding'&&msg.type===1)?msg:null;this.drawOrbbecOverlay();});
+
+    /* Approach marker */
+    this.approachSub=new ROSLIB.Topic({ros:this.ros,name:'/laying_human/approach_marker',messageType:'visualization_msgs/Marker'});
+    this.approachSub.subscribe(msg=>{this.approachMk=(msg.type===2)?msg:null;this.drawOrbbecOverlay();});
+
+    /* Posture */
+    this.postureSub=new ROSLIB.Topic({ros:this.ros,name:'/human_pose/posture',messageType:'std_msgs/String'});
+    this.postureSub.subscribe(msg=>{
+      this.posture=msg.data;const el=$('posture-val');el.textContent=msg.data;
+      el.className='val'+(msg.data==='LYING'?' posture-lying':' posture-other');
+      $('orbbec-panel').classList.toggle('locked',msg.data==='LYING');
+    });
+
+    /* Confidence */
+    this.confSub=new ROSLIB.Topic({ros:this.ros,name:'/human_pose/posture_confidence',messageType:'std_msgs/Float32'});
+    this.confSub.subscribe(msg=>{this.confidence=msg.data;$('conf-val').textContent=(msg.data*100).toFixed(0)+'%';});
+
+    /* Torso tracker state */
+    this.trackerSub=new ROSLIB.Topic({ros:this.ros,name:'/torso_tracker_state',messageType:'std_msgs/String'});
+    this.trackerSub.subscribe(msg=>{
+      this.trackerState=msg.data;$('tracker-val').textContent=msg.data;
+      $('realsense-panel').classList.toggle('locked',msg.data==='LOCKED');
+      $('realsense-panel').classList.toggle('tracking',msg.data==='ESTIMATING'||msg.data==='TRACKING');
+    });
+
+    /* Torso markers */
+    this.torsoMkSub=new ROSLIB.Topic({ros:this.ros,name:'/torso_markers',messageType:'visualization_msgs/MarkerArray'});
+    this.torsoMkSub.subscribe(msg=>{this.torsoMarkers=msg.markers||[];this.drawRealSenseOverlay();});
+
+    /* RS camera info */
+    this.rsInfoSub=new ROSLIB.Topic({ros:this.ros,name:'/camera/camera/color/camera_info',messageType:'sensor_msgs/CameraInfo'});
+    this.rsInfoSub.subscribe(msg=>{
+      const k=msg.k||msg.K;if(k&&k.length>=6)this.rsCamInfo={fx:k[0],fy:k[4],cx:k[2],cy:k[5],w:msg.width,h:msg.height};
+    });
+
+    /* TF world→camera for RS overlay */
+    this.rsTfClient=new ROSLIB.TFClient({ros:this.ros,fixedFrame:'world',angularThres:.02,transThres:.02,rate:10});
+    this.rsTfClient.subscribe('camera_color_optical_frame',tf=>{this.rsCamPose={pos:tf.translation,rot:tf.rotation};this.drawRealSenseOverlay();});
+  }
+
+  _teardownCameraTopics(){
+    const unsub=t=>{if(t)try{t.unsubscribe()}catch(e){}};
+    [this.orbbecSub,this.orbbecInfoSub,this.rsSub,this.rsInfoSub,this.skelSub,this.bboxSub,
+     this.torsoBboxSub,this.approachSub,this.postureSub,this.confSub,this.trackerSub,
+     this.torsoMkSub].forEach(unsub);
+  }
+
+  /* ── Image rendering ──────────────────────── */
+  renderImage(msg,canvas,isOrbbec){
+    const ctx=canvas.getContext('2d');const{width,height,encoding,data,step}=msg;
+    if(canvas.width!==width||canvas.height!==height){
+      canvas.width=width;canvas.height=height;
+      if(isOrbbec){const ov=$('orbbec-overlay');ov.width=width;ov.height=height;}
+      else{const ov=$('rs-overlay');ov.width=width;ov.height=height;}
     }
+    let bytes=data;
+    if(typeof bytes==='string'){const r=atob(bytes);bytes=new Uint8Array(r.length);for(let i=0;i<r.length;i++)bytes[i]=r.charCodeAt(i);}
+    const imgData=ctx.createImageData(width,height),px=imgData.data,rowB=step||width*3,bpp=3;
+    if(encoding==='rgb8'||!encoding){
+      for(let y=0;y<height;y++){const ro=y*rowB,dr=y*width*4;for(let x=0;x<width;x++){const s=ro+x*bpp,d=dr+x*4;px[d]=bytes[s];px[d+1]=bytes[s+1];px[d+2]=bytes[s+2];px[d+3]=255;}}
+    }else if(encoding==='bgr8'){
+      for(let y=0;y<height;y++){const ro=y*rowB,dr=y*width*4;for(let x=0;x<width;x++){const s=ro+x*bpp,d=dr+x*4;px[d]=bytes[s+2];px[d+1]=bytes[s+1];px[d+2]=bytes[s];px[d+3]=255;}}
+    }else{return}
+    ctx.putImageData(imgData,0,0);
+    if(isOrbbec)this.drawOrbbecOverlay();
+  }
 
-    /* ── Logging ─────────────────────────────── */
-    log(msg, cls = '') {
-      const now = new Date().toLocaleTimeString('en-GB', { hour12: false });
-      const div = document.createElement('div');
-      div.className = 'entry' + (cls ? ' ' + cls : '');
-      div.textContent = `[${now}] ${msg}`;
-      const area = $id('log-area');
-      area.appendChild(div);
-      this.logLines.push(div);
-      while (this.logLines.length > this.maxLog) {
-        const old = this.logLines.shift();
-        old.remove();
-      }
-      area.scrollTop = area.scrollHeight;
+  /* ── Orbbec overlay ───────────────────────── */
+  drawOrbbecOverlay(){
+    const c=$('orbbec-overlay');if(!c||c.width===0)return;const ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);
+    if(!this.orbbecK)return;
+    const{fx,fy,cx,cy,w,h}=this.orbbecK,sX=c.width/w,sY=c.height/h;
+    const proj=(px,py,pz)=>{if(pz<=.01)return null;return{x:(fx*(px/pz)+cx)*sX,y:(fy*(py/pz)+cy)*sY};};
+    const crc=(x,y,r,cl,a)=>{ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fillStyle=cl;if(a!==undefined){ctx.globalAlpha=a;ctx.fill();ctx.globalAlpha=1;}else ctx.fill();};
+    const rect=(rx,ry,rw,rh,cl,a)=>{ctx.strokeStyle=cl;ctx.globalAlpha=a||1;ctx.lineWidth=2;ctx.setLineDash([6,3]);ctx.strokeRect(rx-rw/2,ry-rh/2,rw,rh);ctx.setLineDash([]);ctx.globalAlpha=1;};
+
+    if(this.showOrbbecSkel&&this.skeleton&&this.skeleton.length){
+      const pts=this.skeleton.map(p=>{if(!p.position||p.position.z<=.01)return null;return proj(p.position.x,p.position.y,p.position.z);});
+      ctx.strokeStyle='rgba(255,255,255,.75)';ctx.lineWidth=Math.max(1.5,c.width/500);
+      for(const[i,j]of SKELETON_EDGES){const a=pts[i],b=pts[j];if(!a||!b)continue;ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}
+      for(let i=0;i<pts.length;i++){const p=pts[i];if(!p)continue;const r=Math.max(3,c.width/300);ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);
+        if(i===0)ctx.fillStyle='#ffcc00';else if(i<=4)ctx.fillStyle='#00ccff';else if(i<=10)ctx.fillStyle='#50c878';else ctx.fillStyle='#ff8844';ctx.fill();}
     }
-
-    /* ── ROS connection ───────────────────────── */
-    connect() {
-      if (this.ros) { this.ros.close(); this.stopNavLoop(); }
-
-      const url = $id('ros-url').value.trim() || 'localhost:9090';
-      this.ros = new ROSLIB.Ros({ url: 'ws://' + url });
-
-      this.ros.on('connection', () => {
-        $id('ros-dot').className = 'dot online';
-        $id('ros-status').textContent = 'connected';
-        this.log('Rosbridge connected', 'info');
-        this.initTopics();
-      });
-
-      this.ros.on('close', () => {
-        $id('ros-dot').className = 'dot offline';
-        $id('ros-status').textContent = 'disconnected';
-        $id('tf-dot').className = 'dot';
-        $id('tf-status').textContent = '---';
-        $id('wbc-state').textContent = '---';
-        this.tfSystemReady = false;
-        this.bodyInOdom = null;
-        this.log('Rosbridge disconnected', 'error');
-        this.disableAll();
-      });
-
-      this.ros.on('error', (err) => {
-        this.log('Rosbridge error: ' + (err.message || err), 'error');
-      });
+    if(this.showOrbbecBbox&&this.bodyBbox){
+      const m=this.bodyBbox,ct=proj(m.pose.position.x,m.pose.position.y,m.pose.position.z);
+      if(ct){const pw=fx*(m.scale.x/m.pose.position.z)*sX,ph=fy*(m.scale.y/m.pose.position.z)*sY;rect(ct.x,ct.y,pw,ph,'#ff8844',.7);}
     }
-
-    initTopics() {
-      /* Publishers */
-      this.restartPub     = new ROSLIB.Topic({ ros: this.ros, name: '/wbc/restart',   messageType: 'std_msgs/Bool' });
-      this.stepConfirmPub = new ROSLIB.Topic({ ros: this.ros, name: '/wbc/step_confirm', messageType: 'std_msgs/Bool' });
-      this.cmdVelPub      = new ROSLIB.Topic({ ros: this.ros, name: this.cmdVelTopic, messageType: 'geometry_msgs/Twist' });
-
-      /* Subscribers */
-      this.wbcStateSub    = new ROSLIB.Topic({ ros: this.ros, name: '/wbc/state',        messageType: 'std_msgs/String' });
-      this.stepPendingSub = new ROSLIB.Topic({ ros: this.ros, name: '/wbc/step_pending',  messageType: 'std_msgs/String' });
-      this.tfReadySub     = new ROSLIB.Topic({ ros: this.ros, name: '/wbc/tf_ready',      messageType: 'std_msgs/Bool' });
-
-      this.wbcStateSub.subscribe((msg) => {
-        const prev = $id('wbc-state').textContent;
-        if (msg.data !== prev) {
-          $id('wbc-state').textContent = msg.data;
-          $id('state-big').textContent = msg.data;
-          this.log('WBC state → ' + msg.data, 'info');
-        }
-      });
-
-      this.stepPendingSub.subscribe((msg) => {
-        $id('step-banner').classList.add('visible');
-        $id('step-text').textContent = 'Transizione in attesa: ' + msg.data + '  —  premi STEP o "n" per confermare.';
-        $id('state-detail').textContent = 'Step pending. Press STEP to advance.';
-        this.log('STEP pending: ' + msg.data, 'step');
-      });
-
-      this.tfReadySub.subscribe((msg) => {
-        const prev = this.tfSystemReady;
-        this.tfSystemReady = msg.data;
-        if (msg.data && !prev) {
-          $id('tf-dot').className = 'dot online';
-          $id('tf-status').textContent = 'ready';
-          this.log('TF READY — SpotCore connected', 'info');
-          $id('state-detail').textContent = 'SpotCore connected. Press ▶ START or "s" to begin.';
-          this.enableMissionButtons();
-        } else if (!msg.data && prev) {
-          $id('tf-dot').className = 'dot offline';
-          $id('tf-status').textContent = 'LOST';
-          this.log('TF LOST — check tf_monitor', 'error');
-        }
-      });
-
-      /* Services */
-      this.standSrv = new ROSLIB.Service({ ros: this.ros, name: '/my_spot/stand', serviceType: 'std_srvs/srv/Trigger' });
-      this.sitSrv   = new ROSLIB.Service({ ros: this.ros, name: '/my_spot/sit',   serviceType: 'std_srvs/srv/Trigger' });
-
-      /* TF */
-      this.tfClient = new ROSLIB.TFClient({
-        ros: this.ros,
-        fixedFrame: this.odomFrame,
-        angularThres: 0.01,
-        transThres: 0.01,
-        rate: this.updateRate
-      });
-      this.tfClient.subscribe(this.bodyFrame, (tf) => {
-        this.bodyInOdom = tf;
-      });
-
-      /* Enable buttons that don't need TF */
-      this.enableAlways();
+    if(this.showOrbbecTorsoBbox&&this.torsoBbox){
+      const m=this.torsoBbox,ct=proj(m.pose.position.x,m.pose.position.y,m.pose.position.z);
+      if(ct){const pw=fx*(m.scale.x/m.pose.position.z)*sX,ph=fy*(m.scale.y/m.pose.position.z)*sY;rect(ct.x,ct.y,pw,ph,'#50c878',.6);}
     }
-
-    /* ── Button state ─────────────────────────── */
-    disableAll() {
-      ['btn-start','btn-return','btn-update','btn-step','btn-stand','btn-sit','btn-stop'].forEach(id => {
-        $id(id).disabled = true;
-      });
-    }
-    enableAlways() {
-      $id('btn-stop').disabled = false;
-      $id('btn-stand').disabled = false;
-      $id('btn-sit').disabled = false;
-    }
-    enableMissionButtons() {
-      $id('btn-start').disabled = false;
-      $id('btn-return').disabled = false;
-      $id('btn-update').disabled = false;
-      $id('btn-step').disabled = false;
-      $id('btn-stop').disabled = false;
-      $id('btn-stand').disabled = false;
-      $id('btn-sit').disabled = false;
-    }
-
-    /* ── TF helpers ────────────────────────────── */
-    saveStartPose() {
-      if (!this.bodyInOdom) {
-        this.log('Cannot save start pose: TF not available', 'error');
-        return false;
-      }
-      const t = this.bodyInOdom.translation;
-      const r = this.bodyInOdom.rotation;
-      const yaw = yawFromQuat(r.x, r.y, r.z, r.w);
-      this.startPose = { x: t.x, y: t.y, yaw: yaw };
-      this.hasStartPose = true;
-      $id('start-indicator').textContent = `(${t.x.toFixed(2)}, ${t.y.toFixed(2)}) ${(yaw*180/Math.PI).toFixed(1)}°`;
-      $id('start-indicator').style.color = 'var(--accent)';
-      this.log(`Start pose saved: (${t.x.toFixed(2)}, ${t.y.toFixed(2)}) yaw=${(yaw*180/Math.PI).toFixed(1)}°`, 'info');
-      return true;
-    }
-
-    getCurrentYaw() {
-      if (!this.bodyInOdom) return 0;
-      return yawFromQuat(
-        this.bodyInOdom.rotation.x, this.bodyInOdom.rotation.y,
-        this.bodyInOdom.rotation.z, this.bodyInOdom.rotation.w
-      );
-    }
-
-    /* ── Navigation ────────────────────────────── */
-    startNavLoop() { this.stopNavLoop(); this._navTimer = setInterval(() => this.navTick(), 1000 / this.updateRate); }
-    stopNavLoop()  { if (this._navTimer) { clearInterval(this._navTimer); this._navTimer = null; } }
-
-    navTick() {
-      if (!this.goalPose || !this.bodyInOdom || this.kcState === KCState.IDLE) return;
-
-      const goal = this.goalPose;
-      const bodyPos = this.bodyInOdom.translation;
-      const bodyYaw = yawFromQuat(
-        this.bodyInOdom.rotation.x, this.bodyInOdom.rotation.y,
-        this.bodyInOdom.rotation.z, this.bodyInOdom.rotation.w
-      );
-
-      const dx = goal.x - bodyPos.x;
-      const dy = goal.y - bodyPos.y;
-      const dist = Math.hypot(dx, dy);
-      const angleOdom = Math.atan2(dy, dx);
-      let angleBody = normAngle(angleOdom - bodyYaw);
-
-      let vx = 0, wz = 0;
-
-      if (this.kcState === KCState.ROTATING) {
-        if (Math.abs(angleBody) < this.angleThres) {
-          this.kcState = KCState.DRIVING;
-          this.log('DRIVING → start', 'info');
-        }
-      }
-
-      if (this.kcState === KCState.DRIVING) {
-        if (dist < this.goalTol) {
-          this.cmdVelPub.publish({ linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
-          this.log('Start position reached — realigning yaw ...', 'info');
-          this.kcState = KCState.REALIGNING;
-          return;
-        }
-      }
-
-      if (this.kcState === KCState.REALIGNING) {
-        const yawErr = normAngle(goal.yaw - bodyYaw);
-        if (Math.abs(yawErr) < this.angleThres) {
-          this.cmdVelPub.publish({ linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
-          this.kcState = KCState.IDLE;
-          this.goalPose = null;
-          this.isReturning = false;
-          this.stopNavLoop();
-          this.log('Yaw realigned — waiting for START', 'info');
-          $id('state-detail').textContent = 'Return complete. Press ▶ START or "s" to begin.';
-          return;
-        }
-        wz = this.clamp(1.0 * yawErr, -this.angSpeedMax, this.angSpeedMax);
-        this.cmdVelPub.publish({ linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: wz } });
-        return;
-      }
-
-      if (this.kcState === KCState.ROTATING) {
-        wz = this.clamp(1.0 * angleBody, -this.angSpeedMax, this.angSpeedMax);
-      } else if (this.kcState === KCState.DRIVING) {
-        vx = this.clamp(0.5 * dist, 0, this.linSpeedMax);
-        wz = this.clamp(1.0 * angleBody, -this.angSpeedMax / 2, this.angSpeedMax / 2);
-      }
-
-      this.cmdVelPub.publish({ linear: { x: vx, y: 0, z: 0 }, angular: { x: 0, y: 0, z: wz } });
-    }
-
-    startReturnNav(pose) {
-      this.goalPose = { ...pose };
-      this.isReturning = true;
-      this.kcState = KCState.ROTATING;
-      this.startNavLoop();
-      this.log(`Navigating to: (${pose.x.toFixed(2)}, ${pose.y.toFixed(2)})`, 'info');
-    }
-
-    clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
-
-    /* ── Actions ───────────────────────────────── */
-    onStart() {
-      if (!this.tfSystemReady) {
-        this.log('TF not ready — waiting for SpotCore', 'error');
-        return;
-      }
-      if (!this.hasStartPose && !this.saveStartPose()) return;
-      this.log('Start → WBC SEARCHING', 'info');
-      this.restartPub.publish({ data: true });
-      $id('step-banner').classList.remove('visible');
-    }
-
-    onReturn() {
-      if (!this.startPose) {
-        this.log('No start pose — press START first or UPDATE to set one.', 'error');
-        return;
-      }
-      this.log('Return: stopping WBC + navigating back to start ...', 'info');
-      this.restartPub.publish({ data: false });
-      $id('step-banner').classList.remove('visible');
-
-      const pose = this.startPose;
-      const req = new ROSLIB.ServiceRequest();
-      this.standSrv.callService(req, () => { this.startReturnNav(pose); });
-    }
-
-    onUpdate() {
-      if (this.saveStartPose()) {
-        this.log('Start pose updated', 'info');
-      }
-    }
-
-    onStep() {
-      this.stepConfirmPub.publish({ data: true });
-      this.log('Step confirmed → advancing to next phase', 'info');
-      $id('step-banner').classList.remove('visible');
-    }
-
-    onStand() {
-      const req = new ROSLIB.ServiceRequest();
-      this.standSrv.callService(req, (res) => {
-        this.log('Stand: ' + (res && res.success ? 'OK' : 'FAILED'), res && res.success ? 'info' : 'error');
-      });
-    }
-
-    onSit() {
-      const req = new ROSLIB.ServiceRequest();
-      this.sitSrv.callService(req, (res) => {
-        this.log('Sit: ' + (res && res.success ? 'OK' : 'FAILED'), res && res.success ? 'info' : 'error');
-      });
-    }
-
-    onStop() {
-      this.log('EMERGENCY STOP — disabling WBC + zeroing cmd_vel', 'error');
-      this.restartPub.publish({ data: false });
-      this.cmdVelPub.publish({ linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
-      this.stopNavLoop();
-      this.kcState = KCState.IDLE;
-      this.goalPose = null;
-      this.isReturning = false;
-      $id('step-banner').classList.remove('visible');
+    if(this.showOrbbecApproach&&this.approachMk){
+      const m=this.approachMk,ct=proj(m.pose.position.x,m.pose.position.y,m.pose.position.z);
+      if(ct){const r=fx*(m.scale.x/2/m.pose.position.z)*sX;crc(ct.x,ct.y,Math.max(6,r),'#ff3333',.85);crc(ct.x,ct.y,Math.max(10,r*1.6),'rgba(255,50,50,.2)');}
     }
   }
 
-  /* ── Bootstrap ────────────────────────────────── */
-  window.ctrl = new TeresaController();
+  /* ── RealSense overlay ────────────────────── */
+  drawRealSenseOverlay(){
+    const c=$('rs-overlay');if(!c||c.width===0)return;const ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);
+    if(!this.rsCamInfo||!this.rsCamPose||!this.torsoMarkers)return;
+    const{fx,fy,cx,cy,w,h}=this.rsCamInfo,sX=c.width/w,sY=c.height/h;
+    const cp=this.rsCamPose.pos,cq=this.rsCamPose.rot,qx=cq.x,qy=cq.y,qz=cq.z,qw=cq.w;
+    const w2c=(wx,wy,wz)=>{
+      const dx=wx-cp.x,dy=wy-cp.y,dz=wz-cp.z,iqx=-qx,iqy=-qy,iqz=-qz;
+      const aw=-iqx*dx-iqy*dy-iqz*dz,ax=iqw*dx+iqz*dy-iqy*dz,ay=-iqz*dx+iqw*dy+iqx*dz,az=iqy*dx-iqx*dy+iqw*dz;
+      return{x:aw*(-qx)+ax*qw+ay*(-qz)-az*(-qy),y:aw*(-qy)-ax*(-qz)+ay*qw+az*(-qx),z:aw*(-qz)+ax*(-qy)-ay*(-qx)+az*qw};
+    };
+    const proj=(wx,wy,wz)=>{const cc=w2c(wx,wy,wz);if(cc.z<=.01)return null;return{x:(fx*(cc.x/cc.z)+cx)*sX,y:(fy*(cc.y/cc.z)+cy)*sY};};
+    const crc=(x,y,r,cl)=>{ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fillStyle=cl;ctx.fill();};
+
+    for(const m of this.torsoMarkers){
+      const ns=m.ns||'';
+      if((ns==='torso_center'&&this.showRsCenter)||((ns==='torso_keypoints'||ns==='face_keypoints')&&this.showRsCenter)){
+        const p=proj(m.pose.position.x,m.pose.position.y,m.pose.position.z);
+        if(p)crc(p.x,p.y,ns==='torso_center'?10:5,ns==='torso_center'?'#50c878':'#4488ff');
+      }
+      if((ns==='torso_edges'||ns==='torso_spokes')&&this.showRsEdges&&m.type===5){
+        const pts=m.points||[];ctx.strokeStyle=ns==='torso_edges'?'rgba(255,255,0,.8)':'rgba(255,80,0,.6)';ctx.lineWidth=1.5;
+        for(let i=0;i<pts.length-1;i+=2){
+          const a=proj(pts[i].x,pts[i].y,pts[i].z),b=proj(pts[i+1].x,pts[i+1].y,pts[i+1].z);
+          if(a&&b){ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}
+        }
+      }
+      if(ns==='torso_state'&&this.showRsLabel){
+        const p=proj(m.pose.position.x,m.pose.position.y,m.pose.position.z);
+        if(p){ctx.fillStyle='#50c878';ctx.font=`${Math.max(10,c.width/40)}px monospace`;ctx.fillText(m.text||'',p.x,p.y);}
+      }
+    }
+  }
+
+  /* ── FPS ──────────────────────────────────── */
+  tickFps(cam){
+    const n=performance.now(),kf=cam+'Frames',kt=cam+'FpsTs';this[kf]++;
+    if(n-this[kt]>=2000){const fps=(this[kf]/((n-this[kt])/1000)).toFixed(1);$(cam+'-fps').textContent=fps+' fps';this[kf]=0;this[kt]=n;}
+  }
+
+  /* ── Camera toggle methods ────────────────── */
+  togglePause(){this.paused=!this.paused;const b=$('pause-btn');b.textContent=this.paused?'▶Resume':'⏸Pause';b.classList.toggle('active',this.paused);}
+  toggleOrbbec(){
+    this.orbbecHidden=!this.orbbecHidden;
+    if(this.orbbecHidden){this.orbbecSub.unsubscribe();this.orbbecReady=false;this._clearCanvas('orbbec-img');$('orbbec-tag').textContent='hidden';$('orbbec-tag').classList.remove('active');$('orbbec-placeholder').style.display='flex';$('orbbec-placeholder').innerHTML='Image hidden<br><span style="font-size:10px;color:var(--accent)">overlays active</span>';}
+    else{this.orbbecSub.subscribe(this._orbbecCb);$('orbbec-placeholder').style.display='flex';$('orbbec-placeholder').innerHTML='Waiting for<br>/orbbec/color/image_raw...';$('orbbec-tag').textContent='connecting...';}
+  }
+  toggleRealSense(){
+    this.rsHidden=!this.rsHidden;
+    if(this.rsHidden){this.rsSub.unsubscribe();this.rsReady=false;this._clearCanvas('rs-img');this._clearCanvas('rs-overlay');$('rs-tag').textContent='hidden';$('rs-tag').classList.remove('active');$('rs-placeholder').style.display='flex';$('rs-placeholder').innerHTML='Image hidden';}
+    else{this.rsSub.subscribe(this._rsCb);$('rs-placeholder').style.display='flex';$('rs-placeholder').innerHTML='Waiting for<br>/camera/camera/color/image_raw...';$('rs-tag').textContent='connecting...';}
+  }
+  _clearCanvas(id){const c=$(id);c.getContext('2d').clearRect(0,0,c.width,c.height);}
+
+  /* Orbbec overlay toggles */
+  toggleOrbbecSkel(){this.showOrbbecSkel=!this.showOrbbecSkel;$('ob-skel-btn').classList.toggle('active',this.showOrbbecSkel);this.drawOrbbecOverlay();}
+  toggleOrbbecBbox(){this.showOrbbecBbox=!this.showOrbbecBbox;$('ob-bbox-btn').classList.toggle('active',this.showOrbbecBbox);this.drawOrbbecOverlay();}
+  toggleOrbbecTorsoBbox(){this.showOrbbecTorsoBbox=!this.showOrbbecTorsoBbox;$('ob-torso-btn').classList.toggle('active',this.showOrbbecTorsoBbox);this.drawOrbbecOverlay();}
+  toggleOrbbecApproach(){this.showOrbbecApproach=!this.showOrbbecApproach;$('ob-approach-btn').classList.toggle('active',this.showOrbbecApproach);this.drawOrbbecOverlay();}
+
+  /* RealSense overlay toggles */
+  toggleRsCenter(){this.showRsCenter=!this.showRsCenter;$('rs-center-btn').classList.toggle('active',this.showRsCenter);this.drawRealSenseOverlay();}
+  toggleRsEdges(){this.showRsEdges=!this.showRsEdges;$('rs-edges-btn').classList.toggle('active',this.showRsEdges);this.drawRealSenseOverlay();}
+  toggleRsLabel(){this.showRsLabel=!this.showRsLabel;$('rs-label-btn').classList.toggle('active',this.showRsLabel);this.drawRealSenseOverlay();}
+
+  /* ── Control actions ──────────────────────── */
+  saveStartPose(){
+    if(!this.bodyInOdom){this.log('Cannot save start pose: TF not available','error');return false;}
+    const t=this.bodyInOdom.translation,r=this.bodyInOdom.rotation;
+    const yaw=Math.atan2(2*(r.w*r.z+r.x*r.y),1-2*(r.y*r.y+r.z*r.z));
+    this.startPose={x:t.x,y:t.y,yaw:yaw};this.hasStartPose=true;
+    $('start-indicator').textContent=`(${t.x.toFixed(2)},${t.y.toFixed(2)}) ${(yaw*180/Math.PI).toFixed(1)}°`;
+    $('start-indicator').style.color='var(--accent)';
+    this.log(`Start pose: (${t.x.toFixed(2)},${t.y.toFixed(2)}) yaw=${(yaw*180/Math.PI).toFixed(1)}°`,'info');return true;
+  }
+  getCurrentYaw(){if(!this.bodyInOdom)return 0;const r=this.bodyInOdom.rotation;return Math.atan2(2*(r.w*r.z+r.x*r.y),1-2*(r.y*r.y+r.z*r.z));}
+  clamp(v,lo,hi){return Math.max(lo,Math.min(hi,v));}
+  disableAll(){['btn-start','btn-return','btn-update','btn-step','btn-stand','btn-sit','btn-pon','btn-poff','btn-stop','pause-btn'].forEach(id=>$(id).disabled=true);}
+  enableAlways(){$('btn-stop').disabled=false;$('btn-stand').disabled=false;$('btn-sit').disabled=false;$('btn-pon').disabled=false;$('btn-poff').disabled=false;$('pause-btn').disabled=false;}
+  enableMissionButtons(){['btn-start','btn-return','btn-update','btn-step','btn-stop','btn-stand','btn-sit','btn-pon','btn-poff','pause-btn'].forEach(id=>$(id).disabled=false);}
+
+  onStart(){
+    if(!this.tfSystemReady){this.log('TF not ready — waiting for SpotCore','error');return;}
+    if(!this.hasStartPose&&!this.saveStartPose())return;
+    this.log('Start → WBC SEARCHING','info');this.restartPub.publish({data:true});$('step-banner').classList.remove('visible');
+  }
+  onReturn(){
+    if(!this.startPose){this.log('No start pose — press START first.','error');return;}
+    this.log('Return: stopping WBC + navigating...','info');this.restartPub.publish({data:false});$('step-banner').classList.remove('visible');
+    const pose=this.startPose;const req=new ROSLIB.ServiceRequest();
+    this.standSrv.callService(req,()=>{this.startReturnNav(pose);});
+  }
+  onUpdate(){if(this.saveStartPose())this.log('Start pose updated','info');}
+  onStep(){this.stepConfirmPub.publish({data:true});this.log('Step confirmed','info');$('step-banner').classList.remove('visible');}
+  onStand(){this.standSrv.callService(new ROSLIB.ServiceRequest(),r=>{this.log('Stand: '+(r&&r.success?'OK':'FAILED'),r&&r.success?'info':'error');});}
+  onSit(){this.sitSrv.callService(new ROSLIB.ServiceRequest(),r=>{this.log('Sit: '+(r&&r.success?'OK':'FAILED'),r&&r.success?'info':'error');});}
+  onPowerOn(){this.powerOnSrv.callService(new ROSLIB.ServiceRequest(),r=>{this.log('Power ON: '+(r&&r.success?'OK':'FAILED'),r&&r.success?'info':'error');});}
+  onPowerOff(){this.powerOffSrv.callService(new ROSLIB.ServiceRequest(),r=>{this.log('Power OFF: '+(r&&r.success?'OK':'FAILED'),r&&r.success?'info':'error');});}
+  onStop(){this.log('EMERGENCY STOP','error');this.restartPub.publish({data:false});this.cmdVelPub.publish({linear:{x:0,y:0,z:0},angular:{x:0,y:0,z:0}});this.stopNavLoop();this.kcState='IDLE';this.goalPose=null;this.isReturning=false;$('step-banner').classList.remove('visible');}
+
+  /* ── Navigation P-controller ──────────────── */
+  startNavLoop(){this.stopNavLoop();this._navTimer=setInterval(()=>this.navTick(),1000/this.updateRate);}
+  stopNavLoop(){if(this._navTimer){clearInterval(this._navTimer);this._navTimer=null;}}
+  startReturnNav(pose){this.goalPose={...pose};this.isReturning=true;this.kcState='ROTATING';this.startNavLoop();this.log(`Navigating to: (${pose.x.toFixed(2)},${pose.y.toFixed(2)})`,'info');}
+
+  navTick(){
+    if(!this.goalPose||!this.bodyInOdom||this.kcState==='IDLE')return;
+    const g=this.goalPose,bp=this.bodyInOdom.translation,br=this.bodyInOdom.rotation;
+    const by=Math.atan2(2*(br.w*br.z+br.x*br.y),1-2*(br.y*br.y+br.z*br.z));
+    const dx=g.x-bp.x,dy=g.y-bp.y,dist=Math.hypot(dx,dy),ab=Math.atan2(dy,dx)-by;
+    let vx=0,wz=0;
+    if(this.kcState==='ROTATING'&&Math.abs(ab)<this.angleThres){this.kcState='DRIVING';this.log('DRIVING → start','info');}
+    if(this.kcState==='DRIVING'&&dist<this.goalTol){this.cmdVelPub.publish({linear:{x:0,y:0,z:0},angular:{x:0,y:0,z:0}});this.log('Position reached — realigning yaw...','info');this.kcState='REALIGNING';return;}
+    if(this.kcState==='REALIGNING'){
+      const ye=Math.atan2(Math.sin(g.yaw-by),Math.cos(g.yaw-by));
+      if(Math.abs(ye)<this.angleThres){this.cmdVelPub.publish({linear:{x:0,y:0,z:0},angular:{x:0,y:0,z:0}});this.kcState='IDLE';this.goalPose=null;this.isReturning=false;this.stopNavLoop();this.log('Yaw realigned — ready','info');return;}
+      wz=this.clamp(1.0*ye,-this.angSpeedMax,this.angSpeedMax);
+      this.cmdVelPub.publish({linear:{x:0,y:0,z:0},angular:{x:0,y:0,z:wz}});return;
+    }
+    if(this.kcState==='ROTATING')wz=this.clamp(1.0*ab,-this.angSpeedMax,this.angSpeedMax);
+    else if(this.kcState==='DRIVING'){vx=this.clamp(.5*dist,0,this.linSpeedMax);wz=this.clamp(1.0*ab,-this.angSpeedMax/2,this.angSpeedMax/2);}
+    this.cmdVelPub.publish({linear:{x:vx,y:0,z:0},angular:{x:0,y:0,z:wz}});
+  }
+
+  /* ── Ping check ───────────────────────────── */
+  pingCheck(){
+    const now=Date.now(),age=l=>l?((now-l)/1000).toFixed(0)+'s ago':'---';
+    if(!this.camerasOpen)return;
+    if(!this.orbbecReady){$('orbbec-tag').textContent='no signal';$('orbbec-tag').classList.remove('active');}
+    else if(now-this.lastOrbbecTs>5000){$('orbbec-tag').textContent='stalled '+age(this.lastOrbbecTs);}
+    if(!this.rsReady){$('rs-tag').textContent='no signal';$('rs-tag').classList.remove('active');}
+    else if(now-this.lastRsTs>5000){$('rs-tag').textContent='stalled '+age(this.lastRsTs);}
+    if(now-this.lastSkelTs>5000&&this.orbbecReady){const yi=$('yolo-indicator');if(yi){yi.textContent='idle';yi.style.color='var(--text-dim)';}}
+  }
+}
+window.ctrl=new TeresaController();
 })();
 </script>
 </body>
