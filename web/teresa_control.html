@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TERESA Control Panel</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #121220;
+    --bg-light:  #1a1a2e;
+    --bg-card:   #1e1e32;
+    --text:      #c8c8d0;
+    --text-dim:  #6a6a7a;
+    --accent:    #50c878;
+    --danger:    #e05555;
+    --warning:   #e0b040;
+    --btn-bg:    #f0f0f0;
+    --btn-hover: #ffffff;
+    --btn-text:  #1a1a2e;
+    --border:    #2a2a3e;
+    --font:      'SF Mono', 'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* ── Top status bar ───────────────────────────── */
+  #status-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 20px;
+    background: var(--bg-light);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  #status-bar .dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: #555;
+    transition: background 0.3s;
+  }
+  #status-bar .dot.online  { background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 2s infinite; }
+  #status-bar .dot.offline { background: var(--danger); }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.5; }
+  }
+  #status-bar .label { color: var(--text-dim); margin-right: 4px; }
+  #status-bar .value { color: var(--text); font-weight: 600; }
+  #status-bar .sep { color: var(--border); }
+
+  #ros-input {
+    display: flex; align-items: center; gap: 2px;
+    margin-left: auto;
+  }
+  #ros-input input {
+    background: var(--bg); border: 1px solid var(--border);
+    color: var(--text); font-family: var(--font); font-size: 11px;
+    padding: 3px 8px; border-radius: 4px; width: 180px; outline: none;
+  }
+  #ros-input input:focus { border-color: var(--accent); }
+
+  /* ── Step pending banner ──────────────────────── */
+  #step-banner {
+    display: none;
+    padding: 10px 20px;
+    background: rgba(224, 176, 64, 0.08);
+    border-bottom: 1px solid rgba(224, 176, 64, 0.25);
+    color: var(--warning);
+    font-size: 12px;
+    animation: blink 1.2s infinite;
+  }
+  #step-banner.visible { display: flex; align-items: center; gap: 8px; }
+
+  /* ── Main content area ────────────────────────── */
+  #main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 30px;
+    gap: 20px;
+  }
+  #state-big {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+  #state-detail {
+    font-size: 12px;
+    color: var(--text-dim);
+    text-align: center;
+    line-height: 1.6;
+  }
+  #log-area {
+    width: 100%; max-width: 700px; max-height: 200px;
+    overflow-y: auto;
+    background: var(--bg-light);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+  #log-area .entry { margin-bottom: 2px; }
+  #log-area .entry.step  { color: var(--warning); }
+  #log-area .entry.error { color: var(--danger); }
+  #log-area .entry.info  { color: var(--accent); }
+  #log-area::-webkit-scrollbar { width: 6px; }
+  #log-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  /* ── Bottom button bar ────────────────────────── */
+  #btn-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 14px 24px;
+    background: var(--bg-light);
+    border-top: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  #btn-bar button {
+    font-family: var(--font);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 8px 18px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--btn-bg);
+    color: var(--btn-text);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  #btn-bar button:hover {
+    background: var(--btn-hover);
+    box-shadow: 0 0 12px rgba(255,255,255,0.15);
+    transform: translateY(-1px);
+  }
+  #btn-bar button:active {
+    transform: translateY(0);
+    box-shadow: none;
+  }
+  #btn-bar button.danger {
+    background: transparent;
+    color: #f0f0f0;
+    border-color: var(--danger);
+  }
+  #btn-bar button.danger:hover {
+    background: var(--danger);
+    color: #fff;
+    box-shadow: 0 0 16px rgba(224,85,85,0.3);
+  }
+  #btn-bar button.accent {
+    background: transparent;
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  #btn-bar button.accent:hover {
+    background: var(--accent);
+    color: var(--btn-text);
+    box-shadow: 0 0 16px rgba(80,200,120,0.25);
+  }
+  #btn-bar button:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+  .btn-icon { font-size: 14px; }
+
+  /* ── Responsive ───────────────────────────────── */
+  @media (max-width: 700px) {
+    #btn-bar { gap: 8px; padding: 10px; }
+    #btn-bar button { padding: 6px 12px; font-size: 11px; }
+    #state-big { font-size: 22px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="status-bar">
+  <span class="label">Rosbridge:</span>
+  <span class="dot" id="ros-dot" title="WebSocket connection"></span>
+  <span class="value" id="ros-status">disconnected</span>
+  <span class="sep">|</span>
+  <span class="label">SpotCore:</span>
+  <span class="dot" id="tf-dot" title="TF ready"></span>
+  <span class="value" id="tf-status">---</span>
+  <span class="sep">|</span>
+  <span class="label">WBC:</span>
+  <span class="value" id="wbc-state">---</span>
+  <span class="sep">|</span>
+  <span class="label">Start:</span>
+  <span class="value" id="start-indicator">---</span>
+  <div id="ros-input">
+    <span class="label" style="margin:0">ws://</span>
+    <input type="text" id="ros-url" value="localhost:9090" placeholder="host:9090">
+  </div>
+</div>
+
+<div id="step-banner">
+  <span style="font-size:16px">⏸</span>
+  <span id="step-text"></span>
+</div>
+
+<div id="main">
+  <div id="state-big">---</div>
+  <div id="state-detail">
+    Press <span style="color:var(--accent)">▶ START</span> to begin the mission.<br>
+    SpotCore must be connected first (green dot).
+  </div>
+  <div id="log-area"><div class="entry" style="color:var(--text-dim)">Waiting for rosbridge connection...</div></div>
+</div>
+
+<div id="btn-bar">
+  <button id="btn-start"  disabled onclick="ctrl.onStart()"> <span class="btn-icon">▶</span> START </button>
+  <button id="btn-return" disabled onclick="ctrl.onReturn()"> <span class="btn-icon">↩</span> RETURN </button>
+  <button id="btn-update" disabled onclick="ctrl.onUpdate()"> <span class="btn-icon">↻</span> UPDATE </button>
+  <button id="btn-step"   disabled onclick="ctrl.onStep()">  <span class="btn-icon">→</span> STEP </button>
+  <button id="btn-stand"  disabled onclick="ctrl.onStand()"> <span class="btn-icon">⬆</span> STAND </button>
+  <button id="btn-sit"    disabled onclick="ctrl.onSit()">   <span class="btn-icon">⬇</span> SIT </button>
+  <button id="btn-stop" class="danger" disabled onclick="ctrl.onStop()"> <span class="btn-icon">⏹</span> STOP </button>
+</div>
+
+<script src="https://unpkg.com/roslib@1.4.0/build/roslib.min.js"></script>
+<script>
+(function() {
+
+  /* ── Helpers ──────────────────────────────────── */
+  function $id(id) { return document.getElementById(id); }
+  function yawFromQuat(qx, qy, qz, qw) {
+    const sy = 2 * (qw * qz + qx * qy);
+    const cy = 1 - 2 * (qy * qy + qz * qz);
+    return Math.atan2(sy, cy);
+  }
+  function normAngle(a) { return Math.atan2(Math.sin(a), Math.cos(a)); }
+
+  /* ── Controller ───────────────────────────────── */
+  const KCState = { IDLE: 'IDLE', ROTATING: 'ROTATING', DRIVING: 'DRIVING', REALIGNING: 'REALIGNING' };
+
+  class TeresaController {
+    constructor() {
+      /* params (matching wbc_keyboard_controller defaults) */
+      this.goalTol       = 0.15;
+      this.angSpeedMax   = 0.4;
+      this.linSpeedMax   = 0.3;
+      this.angleThres    = 0.08;
+      this.odomFrame     = 'my_spot/odom';
+      this.bodyFrame     = 'my_spot/body';
+      this.updateRate    = 10.0;
+      this.cmdVelTopic   = '/my_spot/cmd_vel';
+
+      /* state */
+      this.hasStartPose = false;
+      this.startPose    = null;  // {x, y, yaw}
+      this.kcState      = KCState.IDLE;
+      this.goalPose     = null;  // {x, y, yaw}
+      this.isReturning  = false;
+
+      /* TF cache */
+      this.bodyInOdom = null;   // latest TF from odom→body
+      this.tfSystemReady = false;
+
+      /* UI refs */
+      this.logLines = [];
+      this.maxLog   = 80;
+
+      /* ROS connection */
+      this.ros = null;
+      this.connect();
+
+      /* cleanup on page close */
+      window.addEventListener('beforeunload', () => {
+        this.stopNavLoop();
+        if (this.cmdVelPub) this.cmdVelPub.publish({ linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
+      });
+
+      /* keyboard shortcuts */
+      document.addEventListener('keydown', (e) => {
+        if (e.target.tagName === 'INPUT') return;
+        switch (e.key.toLowerCase()) {
+          case 's': e.preventDefault(); this.onStart(); break;
+          case 'r': case 'q': e.preventDefault(); this.onReturn(); break;
+          case 'u': e.preventDefault(); this.onUpdate(); break;
+          case 'n': e.preventDefault(); this.onStep(); break;
+          case 'a': e.preventDefault(); this.onStand(); break;
+          case 'c': e.preventDefault(); this.onSit(); break;
+          case 'escape': e.preventDefault(); this.onStop(); break;
+        }
+      });
+
+      /* URL input */
+      const urlInput = $id('ros-url');
+      urlInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { this.connect(); }
+      });
+    }
+
+    /* ── Logging ─────────────────────────────── */
+    log(msg, cls = '') {
+      const now = new Date().toLocaleTimeString('en-GB', { hour12: false });
+      const div = document.createElement('div');
+      div.className = 'entry' + (cls ? ' ' + cls : '');
+      div.textContent = `[${now}] ${msg}`;
+      const area = $id('log-area');
+      area.appendChild(div);
+      this.logLines.push(div);
+      while (this.logLines.length > this.maxLog) {
+        const old = this.logLines.shift();
+        old.remove();
+      }
+      area.scrollTop = area.scrollHeight;
+    }
+
+    /* ── ROS connection ───────────────────────── */
+    connect() {
+      if (this.ros) { this.ros.close(); this.stopNavLoop(); }
+
+      const url = $id('ros-url').value.trim() || 'localhost:9090';
+      this.ros = new ROSLIB.Ros({ url: 'ws://' + url });
+
+      this.ros.on('connection', () => {
+        $id('ros-dot').className = 'dot online';
+        $id('ros-status').textContent = 'connected';
+        this.log('Rosbridge connected', 'info');
+        this.initTopics();
+      });
+
+      this.ros.on('close', () => {
+        $id('ros-dot').className = 'dot offline';
+        $id('ros-status').textContent = 'disconnected';
+        $id('tf-dot').className = 'dot';
+        $id('tf-status').textContent = '---';
+        $id('wbc-state').textContent = '---';
+        this.tfSystemReady = false;
+        this.bodyInOdom = null;
+        this.log('Rosbridge disconnected', 'error');
+        this.disableAll();
+      });
+
+      this.ros.on('error', (err) => {
+        this.log('Rosbridge error: ' + (err.message || err), 'error');
+      });
+    }
+
+    initTopics() {
+      /* Publishers */
+      this.restartPub     = new ROSLIB.Topic({ ros: this.ros, name: '/wbc/restart',   messageType: 'std_msgs/Bool' });
+      this.stepConfirmPub = new ROSLIB.Topic({ ros: this.ros, name: '/wbc/step_confirm', messageType: 'std_msgs/Bool' });
+      this.cmdVelPub      = new ROSLIB.Topic({ ros: this.ros, name: this.cmdVelTopic, messageType: 'geometry_msgs/Twist' });
+
+      /* Subscribers */
+      this.wbcStateSub    = new ROSLIB.Topic({ ros: this.ros, name: '/wbc/state',        messageType: 'std_msgs/String' });
+      this.stepPendingSub = new ROSLIB.Topic({ ros: this.ros, name: '/wbc/step_pending',  messageType: 'std_msgs/String' });
+      this.tfReadySub     = new ROSLIB.Topic({ ros: this.ros, name: '/wbc/tf_ready',      messageType: 'std_msgs/Bool' });
+
+      this.wbcStateSub.subscribe((msg) => {
+        const prev = $id('wbc-state').textContent;
+        if (msg.data !== prev) {
+          $id('wbc-state').textContent = msg.data;
+          $id('state-big').textContent = msg.data;
+          this.log('WBC state → ' + msg.data, 'info');
+        }
+      });
+
+      this.stepPendingSub.subscribe((msg) => {
+        $id('step-banner').classList.add('visible');
+        $id('step-text').textContent = 'Transizione in attesa: ' + msg.data + '  —  premi STEP o "n" per confermare.';
+        $id('state-detail').textContent = 'Step pending. Press STEP to advance.';
+        this.log('STEP pending: ' + msg.data, 'step');
+      });
+
+      this.tfReadySub.subscribe((msg) => {
+        const prev = this.tfSystemReady;
+        this.tfSystemReady = msg.data;
+        if (msg.data && !prev) {
+          $id('tf-dot').className = 'dot online';
+          $id('tf-status').textContent = 'ready';
+          this.log('TF READY — SpotCore connected', 'info');
+          $id('state-detail').textContent = 'SpotCore connected. Press ▶ START or "s" to begin.';
+          this.enableMissionButtons();
+        } else if (!msg.data && prev) {
+          $id('tf-dot').className = 'dot offline';
+          $id('tf-status').textContent = 'LOST';
+          this.log('TF LOST — check tf_monitor', 'error');
+        }
+      });
+
+      /* Services */
+      this.standSrv = new ROSLIB.Service({ ros: this.ros, name: '/my_spot/stand', serviceType: 'std_srvs/srv/Trigger' });
+      this.sitSrv   = new ROSLIB.Service({ ros: this.ros, name: '/my_spot/sit',   serviceType: 'std_srvs/srv/Trigger' });
+
+      /* TF */
+      this.tfClient = new ROSLIB.TFClient({
+        ros: this.ros,
+        fixedFrame: this.odomFrame,
+        angularThres: 0.01,
+        transThres: 0.01,
+        rate: this.updateRate
+      });
+      this.tfClient.subscribe(this.bodyFrame, (tf) => {
+        this.bodyInOdom = tf;
+      });
+
+      /* Enable buttons that don't need TF */
+      this.enableAlways();
+    }
+
+    /* ── Button state ─────────────────────────── */
+    disableAll() {
+      ['btn-start','btn-return','btn-update','btn-step','btn-stand','btn-sit','btn-stop'].forEach(id => {
+        $id(id).disabled = true;
+      });
+    }
+    enableAlways() {
+      $id('btn-stop').disabled = false;
+      $id('btn-stand').disabled = false;
+      $id('btn-sit').disabled = false;
+    }
+    enableMissionButtons() {
+      $id('btn-start').disabled = false;
+      $id('btn-return').disabled = false;
+      $id('btn-update').disabled = false;
+      $id('btn-step').disabled = false;
+      $id('btn-stop').disabled = false;
+      $id('btn-stand').disabled = false;
+      $id('btn-sit').disabled = false;
+    }
+
+    /* ── TF helpers ────────────────────────────── */
+    saveStartPose() {
+      if (!this.bodyInOdom) {
+        this.log('Cannot save start pose: TF not available', 'error');
+        return false;
+      }
+      const t = this.bodyInOdom.translation;
+      const r = this.bodyInOdom.rotation;
+      const yaw = yawFromQuat(r.x, r.y, r.z, r.w);
+      this.startPose = { x: t.x, y: t.y, yaw: yaw };
+      this.hasStartPose = true;
+      $id('start-indicator').textContent = `(${t.x.toFixed(2)}, ${t.y.toFixed(2)}) ${(yaw*180/Math.PI).toFixed(1)}°`;
+      $id('start-indicator').style.color = 'var(--accent)';
+      this.log(`Start pose saved: (${t.x.toFixed(2)}, ${t.y.toFixed(2)}) yaw=${(yaw*180/Math.PI).toFixed(1)}°`, 'info');
+      return true;
+    }
+
+    getCurrentYaw() {
+      if (!this.bodyInOdom) return 0;
+      return yawFromQuat(
+        this.bodyInOdom.rotation.x, this.bodyInOdom.rotation.y,
+        this.bodyInOdom.rotation.z, this.bodyInOdom.rotation.w
+      );
+    }
+
+    /* ── Navigation ────────────────────────────── */
+    startNavLoop() { this.stopNavLoop(); this._navTimer = setInterval(() => this.navTick(), 1000 / this.updateRate); }
+    stopNavLoop()  { if (this._navTimer) { clearInterval(this._navTimer); this._navTimer = null; } }
+
+    navTick() {
+      if (!this.goalPose || !this.bodyInOdom || this.kcState === KCState.IDLE) return;
+
+      const goal = this.goalPose;
+      const bodyPos = this.bodyInOdom.translation;
+      const bodyYaw = yawFromQuat(
+        this.bodyInOdom.rotation.x, this.bodyInOdom.rotation.y,
+        this.bodyInOdom.rotation.z, this.bodyInOdom.rotation.w
+      );
+
+      const dx = goal.x - bodyPos.x;
+      const dy = goal.y - bodyPos.y;
+      const dist = Math.hypot(dx, dy);
+      const angleOdom = Math.atan2(dy, dx);
+      let angleBody = normAngle(angleOdom - bodyYaw);
+
+      let vx = 0, wz = 0;
+
+      if (this.kcState === KCState.ROTATING) {
+        if (Math.abs(angleBody) < this.angleThres) {
+          this.kcState = KCState.DRIVING;
+          this.log('DRIVING → start', 'info');
+        }
+      }
+
+      if (this.kcState === KCState.DRIVING) {
+        if (dist < this.goalTol) {
+          this.cmdVelPub.publish({ linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
+          this.log('Start position reached — realigning yaw ...', 'info');
+          this.kcState = KCState.REALIGNING;
+          return;
+        }
+      }
+
+      if (this.kcState === KCState.REALIGNING) {
+        const yawErr = normAngle(goal.yaw - bodyYaw);
+        if (Math.abs(yawErr) < this.angleThres) {
+          this.cmdVelPub.publish({ linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
+          this.kcState = KCState.IDLE;
+          this.goalPose = null;
+          this.isReturning = false;
+          this.stopNavLoop();
+          this.log('Yaw realigned — waiting for START', 'info');
+          $id('state-detail').textContent = 'Return complete. Press ▶ START or "s" to begin.';
+          return;
+        }
+        wz = this.clamp(1.0 * yawErr, -this.angSpeedMax, this.angSpeedMax);
+        this.cmdVelPub.publish({ linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: wz } });
+        return;
+      }
+
+      if (this.kcState === KCState.ROTATING) {
+        wz = this.clamp(1.0 * angleBody, -this.angSpeedMax, this.angSpeedMax);
+      } else if (this.kcState === KCState.DRIVING) {
+        vx = this.clamp(0.5 * dist, 0, this.linSpeedMax);
+        wz = this.clamp(1.0 * angleBody, -this.angSpeedMax / 2, this.angSpeedMax / 2);
+      }
+
+      this.cmdVelPub.publish({ linear: { x: vx, y: 0, z: 0 }, angular: { x: 0, y: 0, z: wz } });
+    }
+
+    startReturnNav(pose) {
+      this.goalPose = { ...pose };
+      this.isReturning = true;
+      this.kcState = KCState.ROTATING;
+      this.startNavLoop();
+      this.log(`Navigating to: (${pose.x.toFixed(2)}, ${pose.y.toFixed(2)})`, 'info');
+    }
+
+    clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+    /* ── Actions ───────────────────────────────── */
+    onStart() {
+      if (!this.tfSystemReady) {
+        this.log('TF not ready — waiting for SpotCore', 'error');
+        return;
+      }
+      if (!this.hasStartPose && !this.saveStartPose()) return;
+      this.log('Start → WBC SEARCHING', 'info');
+      this.restartPub.publish({ data: true });
+      $id('step-banner').classList.remove('visible');
+    }
+
+    onReturn() {
+      if (!this.startPose) {
+        this.log('No start pose — press START first or UPDATE to set one.', 'error');
+        return;
+      }
+      this.log('Return: stopping WBC + navigating back to start ...', 'info');
+      this.restartPub.publish({ data: false });
+      $id('step-banner').classList.remove('visible');
+
+      const pose = this.startPose;
+      const req = new ROSLIB.ServiceRequest();
+      this.standSrv.callService(req, () => { this.startReturnNav(pose); });
+    }
+
+    onUpdate() {
+      if (this.saveStartPose()) {
+        this.log('Start pose updated', 'info');
+      }
+    }
+
+    onStep() {
+      this.stepConfirmPub.publish({ data: true });
+      this.log('Step confirmed → advancing to next phase', 'info');
+      $id('step-banner').classList.remove('visible');
+    }
+
+    onStand() {
+      const req = new ROSLIB.ServiceRequest();
+      this.standSrv.callService(req, (res) => {
+        this.log('Stand: ' + (res && res.success ? 'OK' : 'FAILED'), res && res.success ? 'info' : 'error');
+      });
+    }
+
+    onSit() {
+      const req = new ROSLIB.ServiceRequest();
+      this.sitSrv.callService(req, (res) => {
+        this.log('Sit: ' + (res && res.success ? 'OK' : 'FAILED'), res && res.success ? 'info' : 'error');
+      });
+    }
+
+    onStop() {
+      this.log('EMERGENCY STOP — disabling WBC + zeroing cmd_vel', 'error');
+      this.restartPub.publish({ data: false });
+      this.cmdVelPub.publish({ linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
+      this.stopNavLoop();
+      this.kcState = KCState.IDLE;
+      this.goalPose = null;
+      this.isReturning = false;
+      $id('step-banner').classList.remove('visible');
+    }
+  }
+
+  /* ── Bootstrap ────────────────────────────────── */
+  window.ctrl = new TeresaController();
+})();
+</script>
+</body>
+</html>
