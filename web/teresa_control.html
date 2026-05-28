@@ -81,7 +81,7 @@ body{
 .cam-body{
   flex:1;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;background:#000;
 }
-.cam-body canvas{display:block;width:100%;height:100%;object-fit:contain}
+.cam-body canvas{display:block;max-width:100%;max-height:100%}
 .cam-body .overlay-canvas{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none}
 .cam-placeholder{
   position:absolute;color:var(--text-dim);font-size:14px;text-align:center;line-height:1.6;
@@ -246,6 +246,7 @@ class TeresaController{
     // camera state
     this.camerasOpen=false;this.paused=false;
     this.orbbecHidden=false;this.rsHidden=false;this.orbbecReady=false;this.rsReady=false;
+    this._orbbecOpenTs=0;this._rsOpenTs=0;
     // overlay toggles
     this.showOrbbecSkel=true;this.showOrbbecBbox=false;this.showOrbbecTorsoBbox=false;this.showOrbbecApproach=false;
     this.showRsCenter=false;this.showRsEdges=false;this.showRsLabel=false;
@@ -354,6 +355,7 @@ class TeresaController{
   }
 
   _openCameras(){
+    this._orbbecOpenTs=Date.now();this._rsOpenTs=Date.now();
     this._initCameraTopics();
     this.log('Camera panel opened','info');
   }
@@ -374,7 +376,7 @@ class TeresaController{
       $('orbbec-tag').textContent=msg.width+'×'+msg.height;$('orbbec-tag').classList.add('active');
       $('orbbec-placeholder').style.display='none';this.tickFps('orbbec');
     };
-    this.orbbecSub=new ROSLIB.Topic({ros:this.ros,name:'/orbbec/color/image_raw',messageType:'sensor_msgs/Image',throttle_rate:200});
+    this.orbbecSub=new ROSLIB.Topic({ros:this.ros,name:'/orbbec/color/image_raw',messageType:'sensor_msgs/Image',throttle_rate:100});
     this.orbbecSub.subscribe(this._orbbecCb);
 
     /* Orbbec camera info */
@@ -392,7 +394,7 @@ class TeresaController{
       $('rs-tag').textContent=msg.width+'×'+msg.height;$('rs-tag').classList.add('active');
       $('rs-placeholder').style.display='none';this.tickFps('rs');
     };
-    this.rsSub=new ROSLIB.Topic({ros:this.ros,name:'/camera/camera/color/image_raw',messageType:'sensor_msgs/Image',throttle_rate:200});
+    this.rsSub=new ROSLIB.Topic({ros:this.ros,name:'/camera/camera/color/image_raw',messageType:'sensor_msgs/Image',throttle_rate:100});
     this.rsSub.subscribe(this._rsCb);
 
     /* Skeleton */
@@ -472,7 +474,7 @@ class TeresaController{
       for(let y=0;y<height;y++){const ro=y*rowB,dr=y*width*4;for(let x=0;x<width;x++){const s=ro+x*bpp,d=dr+x*4;px[d]=bytes[s];px[d+1]=bytes[s+1];px[d+2]=bytes[s+2];px[d+3]=255;}}
     }else if(encoding==='bgr8'){
       for(let y=0;y<height;y++){const ro=y*rowB,dr=y*width*4;for(let x=0;x<width;x++){const s=ro+x*bpp,d=dr+x*4;px[d]=bytes[s+2];px[d+1]=bytes[s+1];px[d+2]=bytes[s];px[d+3]=255;}}
-    }else{return}
+    }else{console.warn('Unsupported image encoding:',encoding);return}
     ctx.putImageData(imgData,0,0);
     if(isOrbbec)this.drawOrbbecOverlay();
   }
@@ -637,9 +639,19 @@ class TeresaController{
   pingCheck(){
     const now=Date.now(),age=l=>l?((now-l)/1000).toFixed(0)+'s ago':'---';
     if(!this.camerasOpen)return;
-    if(!this.orbbecReady){$('orbbec-tag').textContent='no signal';$('orbbec-tag').classList.remove('active');}
+    if(!this.orbbecReady){
+      $('orbbec-tag').textContent='no signal';$('orbbec-tag').classList.remove('active');
+      if(this._orbbecOpenTs&&now-this._orbbecOpenTs>10000&&!this.orbbecHidden){
+        $('orbbec-placeholder').innerHTML='No frames received<br><span style="font-size:10px;color:var(--danger)">check camera driver</span>';
+      }
+    }
     else if(now-this.lastOrbbecTs>5000){$('orbbec-tag').textContent='stalled '+age(this.lastOrbbecTs);}
-    if(!this.rsReady){$('rs-tag').textContent='no signal';$('rs-tag').classList.remove('active');}
+    if(!this.rsReady){
+      $('rs-tag').textContent='no signal';$('rs-tag').classList.remove('active');
+      if(this._rsOpenTs&&now-this._rsOpenTs>10000&&!this.rsHidden){
+        $('rs-placeholder').innerHTML='No frames received<br><span style="font-size:10px;color:var(--danger)">check camera driver</span>';
+      }
+    }
     else if(now-this.lastRsTs>5000){$('rs-tag').textContent='stalled '+age(this.lastRsTs);}
     if(now-this.lastSkelTs>5000&&this.orbbecReady){const yi=$('yolo-indicator');if(yi){yi.textContent='idle';yi.style.color='var(--text-dim)';}}
   }
