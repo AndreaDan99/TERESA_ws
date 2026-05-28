@@ -19,8 +19,8 @@ wbc_qp_controller:
     q_dot_max: 0.6   # [rad/s]
 
     # Null-space grid step sizes
-    search_delta: 0.15   # [rad] ≈9° per giunto — esplorazione ampia ma sicura
-    scan_delta:   0.12   # [rad] ≈7° per giunto — scansione fine vicino al paziente
+    search_delta: 0.30   # [rad] ≈17° per giunto — esplorazione ampia
+    scan_delta:   0.35   # [rad] ≈20° per giunto — scansione ampia vicino al paziente
 
     # Goal update period — controls how often WBC recomputes IK goals.
     # IK solver processes goals sequentially (one trajectory at a time), so higher
@@ -52,7 +52,7 @@ wbc_coordinator:
     # approach_point is published by laying_human_detector at approach_distance in front
     # of the patient. Set handoff_distance to a small arrival tolerance (e.g. 0.3m).
     handoff_distance: 0.05
-    soft_handoff_distance: 0.20   # [m] distance to pause for scanner completion
+    soft_handoff_distance: 0.50   # [m] distance to pause for scanner completion
 
     # Quality monitor: fixed target (mean of first N odom measures) updated
     # only when confidence improves by >= margin. Quality from posture_confidence.
