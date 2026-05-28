@@ -67,10 +67,12 @@ class WBCKeyboardControllerNode(Node):
 
         self._cmd_pub      = self.create_publisher(Twist, self._cmd_vel_topic, 10)
         self._restart_pub  = self.create_publisher(Bool, '/wbc/restart', 10)
+        self._step_confirm_pub = self.create_publisher(Bool, '/wbc/step_confirm', 10)
         self._sit_client   = self.create_client(Trigger, '/my_spot/sit')
         self._stand_client = self.create_client(Trigger, '/my_spot/stand')
 
         self.create_subscription(String, '/wbc/state', self._cb_wbc_state, 10)
+        self.create_subscription(String, '/wbc/step_pending', self._cb_step_pending, 10)
 
         self._tf_system_ready = False
         self.create_subscription(Bool, '/wbc/tf_ready', self._cb_tf_ready, 10)
@@ -94,12 +96,20 @@ class WBCKeyboardControllerNode(Node):
         self.get_logger().info(
             f'WBC Keyboard Controller ready — in attesa TF SpotCore...\n'
             f'  "s" = avvia missione  |  "r" = torna a start  |  "u" = aggiorna start\n'
-            f'  "c" = sit  |  "a" = stand  |  ESC = STOP emergenza')
+            f'  "c" = sit  |  "a" = stand  |  "n" = step mode: conferma prossima fase\n'
+            f'  ESC = STOP emergenza')
 
     def _cb_wbc_state(self, msg: String) -> None:
         if msg.data != self._last_wbc_state:
             self._last_wbc_state = msg.data
             self.get_logger().info(f'WBC state → {msg.data}')
+
+    def _cb_step_pending(self, msg: String) -> None:
+        self.get_logger().info(
+            f'\n'
+            f'  ⏸️  [STEP MODE] Transizione pendente:\n'
+            f'     {msg.data}\n'
+            f'  Premi "n" per confermare e avanzare alla prossima fase.\n')
 
     def _cb_tf_ready(self, msg: Bool) -> None:
         if msg.data and not self._tf_system_ready:
@@ -136,6 +146,8 @@ class WBCKeyboardControllerNode(Node):
                     self._call_trigger(self._sit_client, 'Sit')
                 elif ch == 'a':
                     self._call_trigger(self._stand_client, 'Stand')
+                elif ch == 'n':
+                    self._on_step_confirm()
                 elif ch == '\x1b':  # ESC
                     self._on_emergency_stop()
                 elif ch == '\x03':  # Ctrl+C
@@ -180,6 +192,10 @@ class WBCKeyboardControllerNode(Node):
             self._kc_state = KCState.IDLE
             self._goal_odom = None
             self._is_returning = False
+
+    def _on_step_confirm(self) -> None:
+        self._step_confirm_pub.publish(Bool(data=True))
+        self.get_logger().info('Step confirmed → advancing to next phase')
 
     def _on_start(self) -> None:
         if not self._tf_system_ready:

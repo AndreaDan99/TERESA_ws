@@ -98,6 +98,10 @@ wbc_coordinator:
     ws_ext_dy_bwd_max: 0.30                    # [m] max backward displacement
     navigator_timeout: 5.0                     # [s] max wait for Spot to reach WS_EXT goal
 
+    # Debug: step mode — gates automatic FSM transitions for debugging.
+    # When true, each mission-state transition must be confirmed via /wbc/step_confirm.
+    step_mode: false
+
     # Topics
     posture_confidence_topic: '/human_pose/posture_confidence'
     approach_point_topic:     '/laying_human/approach_point'

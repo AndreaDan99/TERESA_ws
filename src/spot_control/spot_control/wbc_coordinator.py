@@ -187,6 +187,7 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('ws_ext_dy_bwd_max',        0.30)  # [m] max backward displacement
         self.declare_parameter('navigator_timeout',        5.0)   # [s] max wait for Spot to reach WS_EXT goal
         self.declare_parameter('pre_approach_duration',        5.0)   # [s] arm look-at before Spot walks
+        self.declare_parameter('step_mode',                   False)  # gate automatic FSM transitions
 
         p = lambda n: self.get_parameter(n).value
         self._handoff_dist    = float(p('handoff_distance'))
@@ -209,6 +210,7 @@ class WBCCoordinatorNode(Node):
         self._search_lock_confidence = float(p('search_lock_confidence'))
         self._search_lock_samples   = int(p('search_lock_samples'))
         self._pre_approach_duration = float(p('pre_approach_duration'))
+        self._step_mode          = bool(p('step_mode'))
 
         # ── Body pose publisher (height + pitch via /my_spot/body_pose) ──
         self._pub_body_pose = self.create_publisher(Pose, '/my_spot/body_pose', 10)
@@ -230,6 +232,8 @@ class WBCCoordinatorNode(Node):
 
         # ── State ─────────────────────────────────────────────────────
         self._state                  = None   # set via _set_state below
+        self._step_pending_state: str | None = None  # gated transition waiting for confirm
+        self._step_confirmed         = False
         self._posture                = 'UNKNOWN'
         self._confidence             = 0.0
         self._approach_point_odom: PoseStamped | None = None  # odom-frame (world-fixed)
@@ -279,6 +283,8 @@ class WBCCoordinatorNode(Node):
         self._pub_spot_ctrl = self.create_publisher(Bool,       '/wbc/spot_control',       10)
         self._pub_dbg_marker = self.create_publisher(Marker, '/wbc/debug_marker', 10)
         self._pub_body_ready = self.create_publisher(Bool, '/wbc/body_ready', 10)
+        self._pub_step_pending = self.create_publisher(String, '/wbc/step_pending', 10)
+        self.create_subscription(Bool, '/wbc/step_confirm', self._cb_step_confirm, 10)
 
         self.create_timer(0.1, self._tick)   # 10 Hz FSM
         self._set_state(CoordState.WAITING_TF)
@@ -367,8 +373,15 @@ class WBCCoordinatorNode(Node):
             self._set_state(CoordState.SEARCHING)
         elif not msg.data and self._state not in (CoordState.IDLE,):
             self.get_logger().info('Keyboard stop → IDLE')
-            self._set_state(CoordState.IDLE)
+            self._step_pending_state = None
+            self._step_confirmed = False
+            self._set_state(CoordState.IDLE, force=True)
             self._set_wbc_enabled(False)
+
+    def _cb_step_confirm(self, msg: Bool) -> None:
+        if msg.data and self._step_pending_state is not None:
+            self._step_confirmed = True
+            self.get_logger().info(f'[STEP] Confermato passaggio a {self._step_pending_state}')
 
     def _cb_torso_state(self, msg: String) -> None:
         self._torso_tracker_state = msg.data
@@ -388,11 +401,23 @@ class WBCCoordinatorNode(Node):
                 '⚠️  TF perse — tornando in WAITING_TF. '
                 'Spot e braccio fermati.')
             self._tf_ready = False
-            self._set_state(CoordState.WAITING_TF)
+            self._step_pending_state = None
+            self._step_confirmed = False
+            self._set_state(CoordState.WAITING_TF, force=True)
 
     # ── FSM tick ──────────────────────────────────────────────────────
 
     def _tick(self) -> None:
+        if self._step_mode and self._step_pending_state is not None:
+            if self._step_confirmed:
+                self.get_logger().info(
+                    f'[STEP] Eseguo transizione → {self._step_pending_state}')
+                new_state = self._step_pending_state
+                self._step_pending_state = None
+                self._step_confirmed = False
+                self._do_set_state(new_state)
+            return
+
         self._check_lying_timeout()
 
         self._quality.try_best_update(self._confidence, self.get_clock().now())
@@ -437,7 +462,7 @@ class WBCCoordinatorNode(Node):
             elapsed = (self.get_clock().now() - self._last_lying_time).nanoseconds * 1e-9
             if elapsed > self._lying_timeout:
                 self.get_logger().warn('LYING timeout → IDLE')
-                self._set_state(CoordState.IDLE)
+                self._set_state(CoordState.IDLE, force=True)
                 self._set_wbc_enabled(False)
 
     def _tick_idle(self) -> None:
@@ -613,7 +638,7 @@ class WBCCoordinatorNode(Node):
         if self._search_position_idx >= len(self._search_positions):
             self.get_logger().warn('Search sequence complete → IDLE')
             self._set_wbc_enabled(False)
-            self._set_state(CoordState.IDLE)
+            self._set_state(CoordState.IDLE, force=True)
             return
 
         if self._search_position_start is None:
@@ -1038,35 +1063,54 @@ class WBCCoordinatorNode(Node):
         """Publish debug marker for current state visualization."""
         pass
 
-    def _set_state(self, new_state: str) -> None:
-        if new_state != self._state:
-            self.get_logger().info(f'WBC FSM: {self._state} → {new_state}')
-            if new_state == CoordState.WAITING_TF:
-                self._set_wbc_enabled(False)
-                self._set_body_pose(0.0)
-            if new_state == CoordState.IDLE:
-                self._quality.reset()
-                self._set_body_pose(0.0)   # ripristina altezza nominale
-            if new_state == CoordState.SEARCHING:
-                old = self._state
-                self._search_lock_buffer = None
-                self._set_wbc_enabled(True)
-                if old == CoordState.IDLE:
-                    # Fresh start: full reset
-                    self._search_start = self.get_clock().now()
-                    self._search_positions = self._build_search_sequence()
-                    self._search_position_idx = 0
-                    self._search_position_start = None
-                    self._search_saved_idx = 0
-                    pos0 = self._search_positions[0]
-                    self._set_body_pose(self._search_body_height, pos0['pitch'], pos0['yaw'])
-                # else: re-entry from LOCKING or SEMI_LOCKING — resume, don't rebuild
-            if new_state == CoordState.SCANNING:
-                self._set_body_pose(self._handoff_body_height)
-            if new_state == CoordState.PRE_APPROACH:
-                self._set_body_pose(0.0, 0.0)
-                self._torso_detected_ticks = 0
-            self._state = new_state
+    def _set_state(self, new_state: str, force: bool = False) -> None:
+        if new_state == self._state:
+            return
+        if self._step_mode and not force:
+            skip_gate = (
+                (self._state == CoordState.IDLE and new_state == CoordState.SEARCHING) or
+                new_state in (CoordState.IDLE, CoordState.WAITING_TF)
+            )
+            if not skip_gate:
+                self._step_pending_state = new_state
+                old_name = str(self._state)
+                msg = String()
+                msg.data = f'{old_name} → {new_state}'
+                self._pub_step_pending.publish(msg)
+                self.get_logger().info(
+                    f'[STEP] Transizione in attesa: {old_name} → {new_state}. '
+                    'Premi "n" sul keyboard controller per confermare.')
+                return
+        self._do_set_state(new_state)
+
+    def _do_set_state(self, new_state: str) -> None:
+        self.get_logger().info(f'WBC FSM: {self._state} → {new_state}')
+        if new_state == CoordState.WAITING_TF:
+            self._set_wbc_enabled(False)
+            self._set_body_pose(0.0)
+        if new_state == CoordState.IDLE:
+            self._quality.reset()
+            self._set_body_pose(0.0)   # ripristina altezza nominale
+        if new_state == CoordState.SEARCHING:
+            old = self._state
+            self._search_lock_buffer = None
+            self._set_wbc_enabled(True)
+            if old == CoordState.IDLE:
+                # Fresh start: full reset
+                self._search_start = self.get_clock().now()
+                self._search_positions = self._build_search_sequence()
+                self._search_position_idx = 0
+                self._search_position_start = None
+                self._search_saved_idx = 0
+                pos0 = self._search_positions[0]
+                self._set_body_pose(self._search_body_height, pos0['pitch'], pos0['yaw'])
+            # else: re-entry from LOCKING or SEMI_LOCKING — resume, don't rebuild
+        if new_state == CoordState.SCANNING:
+            self._set_body_pose(self._handoff_body_height)
+        if new_state == CoordState.PRE_APPROACH:
+            self._set_body_pose(0.0, 0.0)
+            self._torso_detected_ticks = 0
+        self._state = new_state
 
     def _set_body_pose(self, height: float, pitch: float = 0.0, yaw: float = 0.0) -> None:
         from tf_transformations import quaternion_from_euler
