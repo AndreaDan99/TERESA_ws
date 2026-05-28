@@ -14,7 +14,7 @@ import rclpy
 import rclpy.duration
 import rclpy.time
 from rclpy.node import Node
-from geometry_msgs.msg import PoseStamped, Twist
+from geometry_msgs.msg import PointStamped, PoseStamped, Twist
 from std_msgs.msg import Bool
 from tf2_ros import Buffer, TransformListener, TransformException
 
@@ -92,16 +92,22 @@ class WBCSpotNavigator(Node):
         if goal_raw.header.frame_id == self._p.odom_frame:
             self._goal_odom = goal_raw
             return
-        # Transform to odom
-        goal_stamped = PoseStamped()
-        goal_stamped.header.frame_id = goal_raw.header.frame_id
-        goal_stamped.header.stamp = rclpy.time.Time().to_msg()
-        goal_stamped.pose = goal_raw.pose
+        # Transform to odom (PointStamped: tf2 Buffer non supporta PoseStamped)
+        goal_pt = PointStamped()
+        goal_pt.header.frame_id = goal_raw.header.frame_id
+        goal_pt.header.stamp = rclpy.time.Time().to_msg()
+        goal_pt.point.x = goal_raw.pose.position.x
+        goal_pt.point.y = goal_raw.pose.position.y
+        goal_pt.point.z = goal_raw.pose.position.z
         try:
-            g = self._tf.transform(
-                goal_stamped, self._p.odom_frame,
+            pt = self._tf.transform(
+                goal_pt, self._p.odom_frame,
                 timeout=rclpy.duration.Duration(seconds=0.2))
-            self._goal_odom = g
+            self._goal_odom = PoseStamped()
+            self._goal_odom.header = pt.header
+            self._goal_odom.pose.position.x = pt.point.x
+            self._goal_odom.pose.position.y = pt.point.y
+            self._goal_odom.pose.position.z = pt.point.z
         except TransformException:
             pass
 
@@ -114,21 +120,23 @@ class WBCSpotNavigator(Node):
         if goal is None:
             return
 
-        # Transform goal to body frame for error computation
-        gb_stamped = PoseStamped()
-        gb_stamped.header.frame_id = self._p.odom_frame
-        gb_stamped.header.stamp = rclpy.time.Time().to_msg()
-        gb_stamped.pose = goal.pose
+        # Transform goal to body frame for error computation (PointStamped)
+        gb_pt = PointStamped()
+        gb_pt.header.frame_id = self._p.odom_frame
+        gb_pt.header.stamp = rclpy.time.Time().to_msg()
+        gb_pt.point.x = goal.pose.position.x
+        gb_pt.point.y = goal.pose.position.y
+        gb_pt.point.z = goal.pose.position.z
         try:
-            gb = self._tf.transform(
-                gb_stamped, self._p.robot_frame,
+            pt = self._tf.transform(
+                gb_pt, self._p.robot_frame,
                 timeout=rclpy.duration.Duration(seconds=0.1))
         except TransformException:
             self._pub_vel.publish(Twist())
             return
 
-        dx = gb.pose.position.x
-        dy = gb.pose.position.y
+        dx = pt.point.x
+        dy = pt.point.y
         dist = math.hypot(dx, dy)
         angle = math.atan2(dy, dx)
 

@@ -26,7 +26,7 @@ from rclpy.node import Node
 from rclpy.duration import Duration
 import rclpy.time
 
-from geometry_msgs.msg import Pose, PoseStamped, PoseArray, TransformStamped
+from geometry_msgs.msg import PointStamped, Pose, PoseStamped, PoseArray, TransformStamped
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, String, Float32MultiArray
 
@@ -260,9 +260,20 @@ class WBCQPControllerNode(Node):
 
     def _tf_transform(self, pose: PoseStamped, target_frame: str,
                        timeout_sec: float = 1.0) -> PoseStamped | None:
+        pt = PointStamped()
+        pt.header = pose.header
+        pt.point.x = pose.pose.position.x
+        pt.point.y = pose.pose.position.y
+        pt.point.z = pose.pose.position.z
         try:
-            return self._tf.transform(
-                pose, target_frame, timeout=Duration(seconds=timeout_sec))
+            tf_pt = self._tf.transform(
+                pt, target_frame, timeout=Duration(seconds=timeout_sec))
+            result = PoseStamped()
+            result.header = tf_pt.header
+            result.pose.position.x = tf_pt.point.x
+            result.pose.position.y = tf_pt.point.y
+            result.pose.position.z = tf_pt.point.z
+            return result
         except TransformException:
             return None
 
