@@ -31,6 +31,7 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, String, Float32MultiArray
 
 from tf2_ros import Buffer, TransformListener, TransformException
+import tf2_geometry_msgs  # noqa: F401
 
 from teresa_utils.orientation import (
     compute_ee_orientation, compute_ee_orientation_minrot,
