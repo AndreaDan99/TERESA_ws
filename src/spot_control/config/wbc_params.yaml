@@ -79,7 +79,7 @@ wbc_coordinator:
     search_pitch_angles: [0.0, 0.087, 0.17]       # [rad] 0°, 5°, 10°
     search_dwell: 15.0                             # [s] Spot fermo a ogni posizione
     search_semi_lock_pause: 3.0                   # [s] attesa per rilevamento Orbbec
-    search_lock_confidence: 0.70                   # [0-1] soglia LYING per lock
+    search_lock_confidence: 0.85                   # [0-1] soglia LYING per lock
     search_lock_samples: 5                         # campioni approach_point da mediare
 
     # PRE_APPROACH — arm pre-orientation before Spot starts walking

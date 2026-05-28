@@ -697,10 +697,7 @@ class WBCCoordinatorNode(Node):
         else:
             self._torso_detected_ticks = 0
 
-        if elapsed > 5.0:
-            self.get_logger().warn('PRE_APPROACH timeout (5s) → APPROACHING (fallback)')
-            self._pub_spot_ctrl.publish(Bool(data=False))
-            self._set_state(CoordState.APPROACHING)
+        # No timeout — wait indefinitely for RealSense LOCKED ×5
 
     # ── Helpers ───────────────────────────────────────────────────────
 
