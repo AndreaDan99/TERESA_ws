@@ -88,7 +88,6 @@ class WBCQPControllerNode(Node):
         self.declare_parameter('q_dot_max',     0.6)
         self.declare_parameter('cartesian_step',      0.12)
         self.declare_parameter('cartesian_step_wide', 0.20)
-        self.declare_parameter('search_sweep_angle',  0.26)
         self.declare_parameter('search_timeout_per_point', 2.0)
         self.declare_parameter('scan_timeout_per_point',   3.0)
         self.declare_parameter('scan_adaptive_iters',      3)
@@ -111,7 +110,6 @@ class WBCQPControllerNode(Node):
         self._k_null        = float(p('k_null'))
         self._damping       = float(p('damping'))
         self._q_dot_max     = float(p('q_dot_max'))
-        self._search_sweep_angle = float(p('search_sweep_angle'))
         self._cartesian_step       = float(p('cartesian_step'))
         self._cartesian_step_wide  = float(p('cartesian_step_wide'))
         self._search_timeout_pp    = float(p('search_timeout_per_point'))
@@ -433,35 +431,34 @@ class WBCQPControllerNode(Node):
 
     def _gen_cartesian_search_grid(self, p_ee: np.ndarray) -> list[PoseStamped]:
         """
-        9 pose Cartesiane attorno a p_ee.
+        9 pose Cartesiane attorno a p_ee — orientamento fisso X_ee in avanti.
         Enfasi su Y (wide sweep ±0.20m) per compensare la rotazione di Spot.
-        Rotazione polso combinata (±α) per amplificare la copertura.
         Z mai sotto HOME_POS[2] = 0.44m.
         """
-        s = self._cartesian_step         # 0.12m
-        w = self._cartesian_step_wide    # 0.20m
-        α = self._search_sweep_angle     # 0.26 rad ≈ 15°
-        c, sa = math.cos(α), math.sin(α)
+        s = self._cartesian_step          # 0.12m
+        w = self._cartesian_step_wide     # 0.20m
 
-        waypoints = [
-            (np.array([0,  0,  0]),   np.array([1,   0,   0])),     # HOME
-            (np.array([0,  0,  +s]),  np.array([c,   0,  -sa])),    # +Z — ruota giù
-            (np.array([0,  +w, 0]),   np.array([c,   sa,  0])),     # +Y wide DX
-            (np.array([0,  -w, 0]),   np.array([c,  -sa,  0])),     # -Y wide SX
-            (np.array([0,  +w, +s]),  np.array([c,   sa, -sa])),    # +Y+Z
-            (np.array([0,  -w, +s]),  np.array([c,  -sa, -sa])),    # -Y+Z
-            (np.array([+s, +w, 0]),   np.array([c,   sa,  0])),     # +X+Y avanti DX
-            (np.array([+s, -w, 0]),   np.array([c,  -sa,  0])),     # +X-Y avanti SX
-            (np.array([+s, 0,  +s]),  np.array([c,   0,  -sa])),    # +X+Z avanti SU
+        forward_quat = compute_ee_orientation_minrot(
+            np.array([1.0, 0.0, 0.0]), HOME_ORI.tolist())
+
+        offsets = [
+            np.array([0,  0,  0]),      # HOME
+            np.array([0,  0,  +s]),     # +Z
+            np.array([0,  +w, 0]),      # +Y wide DX
+            np.array([0,  -w, 0]),      # -Y wide SX
+            np.array([0,  +w, +s]),     # +Y+Z
+            np.array([0,  -w, +s]),     # -Y+Z
+            np.array([+s, +w, 0]),      # +X+Y avanti DX
+            np.array([+s, -w, 0]),      # +X-Y avanti SX
+            np.array([+s, 0,  +s]),     # +X+Z avanti SU
         ]
 
         poses = []
-        for offset, look_dir in waypoints:
+        for offset in offsets:
             pos = p_ee + offset
             pos[2] = max(pos[2], HOME_POS[2])
             clipped, _, _ = self._ws_checker.clip_target(pos)
-            quat = compute_ee_orientation(look_dir, HOME_ORI.tolist())
-            poses.append(_make_pose_stamped(clipped, quat))
+            poses.append(_make_pose_stamped(clipped, forward_quat))
         return poses
 
     def _start_active_search(self) -> None:
@@ -496,7 +493,7 @@ class WBCQPControllerNode(Node):
         self.get_logger().info(
             f'ACTIVE_SEARCH: {len(poses)} Cartesian poses '
             f'(step={self._cartesian_step:.2f}m, wide={self._cartesian_step_wide:.2f}m, '
-            f'sweep={math.degrees(self._search_sweep_angle):.0f}°)')
+            f'orientation fixed forward)')
 
     def _tick_active_search(self) -> None:
         if self._scan_scanner is None:
@@ -558,7 +555,7 @@ class WBCQPControllerNode(Node):
             pos = p_ee + offset
             pos[2] = max(pos[2], HOME_POS[2])
             clipped, _, _ = self._ws_checker.clip_target(pos)
-            quat = compute_ee_orientation(x_desired, HOME_ORI.tolist())
+            quat = compute_ee_orientation_minrot(x_desired, HOME_ORI.tolist())
             poses.append(_make_pose_stamped(clipped, quat))
         return poses
 
