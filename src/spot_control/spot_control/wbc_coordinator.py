@@ -725,6 +725,8 @@ class WBCCoordinatorNode(Node):
 
         # ── New position: set height+pitch, begin yaw rotation via cmd_vel ──
         if self._search_position_start is None and not self._search_rotating:
+            if self._search_initial_yaw is None:
+                return    # TF not ready yet, try next tick
             pos = self._search_positions[self._search_position_idx]
             self._set_body_pose(self._search_body_height, pos['pitch'])
             self._search_target_yaw = normalize_angle(
@@ -1226,7 +1228,8 @@ class WBCCoordinatorNode(Node):
             if old == CoordState.IDLE:
                 # Fresh start: full reset, save initial yaw
                 self._search_start = self.get_clock().now()
-                self._search_initial_yaw = self._get_current_yaw()
+                yaw = self._get_current_yaw()
+                self._search_initial_yaw = yaw if yaw is not None else 0.0
                 self._search_positions = self._build_search_sequence()
                 self._search_position_idx = 0
                 self._search_position_start = None
