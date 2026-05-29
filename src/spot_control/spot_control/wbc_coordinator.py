@@ -759,8 +759,6 @@ class WBCCoordinatorNode(Node):
                 self._search_yaw_kp * error,
                 -self._search_max_angular_vel, self._search_max_angular_vel))
             self._pub_cmd_vel.publish(t)
-            self._set_body_pose(self._search_body_height,
-                                self._search_positions[self._search_position_idx]['pitch'])
             return
 
         # ── Dwelling ──
