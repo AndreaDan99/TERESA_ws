@@ -95,11 +95,13 @@ HOMING → WAITING (aspetta segnale WBC + FAST points pre-calcolati dal QP)
 - A ogni posizione: `body_pose(height=0, pitch, yaw)`, pausa 15s, poi prossima
 - Copertura totale: 360° con overlap di 10° a ogni giunzione
 
-### Braccio: QP Controller — SEARCH_GRID mode
-- Genera 7 pose esplorative dal null-space del "guarda avanti" (δ=0.15 rad ≈9°)
-- Safe joint limits per evitare pose estreme (non colpire Spot, non toccare terra)
+### Braccio: QP Controller — ACTIVE_SEARCH mode
+- Genera 9 pose Cartesiane attorno alla posizione corrente EE (non più null-space SVD)
+- Sweep laterale Y = ±0.20m (ampio, compensa la rotazione lenta di Spot)
+- Passo Z = 0.12m, passo X = 0.12m. Rotazione polso combinata ±15° per copertura estesa
+- Z mai sotto la home (0.44m)
 - BodySearchScanner in loop infinito: per ogni posa → 2s raccolta dati → prossima
-- I movimenti cambiano automaticamente quando Spot ruota (FK ricalcolata)
+- Il grid viene rigenerato dalla posizione corrente quando Spot ruota (FK ricalcolata)
 
 ### Lock ibrido — due sensori in parallelo
 
@@ -108,13 +110,14 @@ HOMING → WAITING (aspetta segnale WBC + FAST points pre-calcolati dal QP)
 - `approach_point` disponibile → `LOCKING`
 
 **Semi-lock (RealSense guida Spot):**
-- Torso tracker = `LOCKED`, torso 3D disponibile
+- Torso tracker = `ESTIMATING` o `LOCKED` (basta vedere 3+ keypoint, anche solo gambe)
+- Tracker pubblica `/torso_target_ee` anche in `ESTIMATING` per guidare Spot
 - Coordinator calcola yaw e pitch ottimali per puntare l'Orbbec al torso
 - Spot ruota e si inclina verso il torso
 - Braccio congelato (QP in pausa)
 - 3 secondi di finestra pulita per l'Orbbec
 - Se Orbbec conferma → `LOCKING`
-- Se timeout (3s) o RealSense perde il torso → riprende ricerca dalla posizione corrente
+- Se timeout (3s) o RealSense perde il segnale (< `ESTIMATING`) → riprende ricerca dalla posizione corrente
 
 ### Lock: raccolta e conferma
 - **LOCKING**: braccio torna in home, coordinator raccoglie 5 campioni `approach_point` in odom (10 Hz, ~0.5s)
@@ -133,31 +136,31 @@ HOMING → WAITING (aspetta segnale WBC + FAST points pre-calcolati dal QP)
 `LOCKING → PRE_APPROACH` (dopo 5 campioni + braccio in home)
 
 - Spot si raddrizza: `body_pose(height=0.0, pitch=0.0)`
-- **WBC QP Controller — LOOKAT mode**: calcola ω_des (errore orientamento X_ee → target), risolve il task con damped pseudo-inverse sul Jacobiano angolare J_task (3×6), applica joint centering nel null-space (N @ k_null * (q_mid - q_current)), integra q_dot in FK prediction, pubblica il goal di posa (posizione predetta + orientamento minrot verso il target) all'IK solver. Loop a 10 Hz: l'orientamento si adatta in tempo reale.
-- RealSense YOLO tracker già attivo (da T2). Coordinator conta 5 tick consecutivi di `LOCKED` da RealSense. Timeout 5s → APPROACHING comunque (fallback).
+- **WBC QP Controller — LOOKAT mode**: calcola ω_des (errore orientamento X_ee → target), risolve il task con damped pseudo-inverse sul Jacobiano angolare J_task (3×6), applica joint centering nel null-space (N @ k_null * (q_mid - q_current)), integra q_dot in FK prediction, pubblica il goal di posa all'IK solver. Loop a 10 Hz.
+- Coordinator conta 5 tick consecutivi di `LOCKED` da RealSense. **Timeout 5s** → APPROACHING comunque (fallback con warning).
 - `LOCKED ×5 → APPROACHING`
 
 ---
 
-## Fase 3 — APPROACHING (navigator + QP SCAN_SEQ)
+## Fase 3 — APPROACHING (navigator + QP PERCEPTUAL_SCAN)
 
 `PRE_APPROACH → APPROACHING`
 
 ### Spot: wbc_spot_navigator
 Navigatore semplificato: riceve il goal in odom, trasforma in body frame, rotate → drive → stop. P-controller robusto (1 TF hop `odom→body`), indipendente dal QP.
 
-### Braccio: QP Controller — SCAN_SEQ mode
-Il QP riceve il segnale di APPROACHING e passa in modalità SCAN_SEQ:
+### Braccio: QP Controller — PERCEPTUAL_SCAN mode
+Il QP riceve il segnale di APPROACHING e passa in modalità PERCEPTUAL_SCAN:
 
-1. **Generazione griglia QP-based** (`_gen_scan_poses`): FK + Jacobiano alla configurazione corrente del braccio. Dal Jacobiano angolare J_task (3×6) calcola il proiettore null-space N = I - J_task⁺·J_task. SVD di N → 3 direzioni ortonormali del null-space. Genera 11 pose: 1 home + 6 (±δ lungo ogni direzione, δ=0.12rad ≈7°) + 4 diagonali (v1±v2, v2±v3). Ogni posa è generata via FK di `q + δ·basis_vector` nel null-space → garantisce look-at per costruzione (il null-space preserva ω=0) ed è sempre raggiungibile.
+1. **Generazione griglia Cartesiana** (`_gen_cartesian_scan_grid`): 6 pose attorno alla posizione corrente EE (home, ±Y, +Z, +X, +X+Y) con passo 0.12m. Tutte con look-at verso il target reale (approach_point). Z mai sotto la home (0.44m), workspace clipping automatico.
 
-2. **Sequencing** (`BodySearchScanner`): per ogni posa pubblica goal all'IK solver → attende `ik_done` → raccoglie dati di detection per 4s (minimo 5 frame, early stop se score ≥ 0.95) → passa alla posa successiva.
+2. **Sequencing** (`BodySearchScanner`): per ogni posa pubblica goal all'IK solver → attende `ik_done` → raccoglie dati di detection per 3s (minimo 5 frame, early stop se score ≥ 0.95) → passa alla posa successiva.
 
-3. **Fusione + FAST points**: al termine fonde le stime 3D di tutte le pose (outlier rejection a 0.15m). Calcola i 5 punti FAST (Hub, Subxiphoid, RUQ, LUQ, Suprapubic) con offset fissi dal torso stimato.
+3. **Fusione + FAST points**: al termine fonde le stime 3D di tutte le pose. Calcola i 5 punti FAST (Hub, Subxiphoid, RUQ, LUQ, Suprapubic) con offset fissi dal torso stimato.
 
 ### Handoff
-- Soft handoff a 20cm: se il QP non ha ancora finito la scansione → Spot aspetta
-- Hard handoff a 5cm e FAST points pubblicati → `APPROACHING → SCANNING`
+- Soft handoff a 0.50m: se il QP non ha ancora finito la scansione → Spot aspetta
+- Hard handoff a 0.05m e FAST points pubblicati → `APPROACHING → SCANNING`
 
 ---
 
@@ -241,11 +244,11 @@ I target FSM sono in world frame — quando Spot cambia body_pose, il target si 
 
 | Fase | Spot | Braccio | WBC/QP |
 |------|:----:|:-------:|:------:|
-| **SEARCHING** | 18 posizioni (6 yaw × 3 pitch) | 7 pose QP-based in loop (SEARCH_GRID) | QP-based grid |
+| **SEARCHING** | 18 posizioni (6 yaw × 3 pitch) | 9 pose Cartesiane in loop (ACTIVE_SEARCH) | Cartesian grid + sweep polso |
 | **SEMI_LOCKING** | Ruotato+inclinato verso torso | Congelato (QP in pausa) | Off |
 | **LOCKING** | Fermo | Va in home | Off |
-| **PRE_APPROACH** | Dritto, fermo | LOOKAT (ω_des + null-space joint centering) | Arm-only WBC |
-| **APPROACHING** | Navigatore → goal | SCAN_SEQ (11 pose null-space + BodySearchScanner) | QP-based grid |
+| **PRE_APPROACH** | Dritto, fermo | LOOKAT (ω_des + joint centering) | Arm-only WBC |
+| **APPROACHING** | Navigatore → goal | PERCEPTUAL_SCAN (6 pose Cartesiane + BodySearchScanner) | Cartesian grid |
 | **SCANNING** | Body pose (h,p) + WS_EXT (h,p,dx,dy) | z1_FSM: FAST cycle 5 punti | Off |
 
 ---
@@ -256,8 +259,8 @@ I target FSM sono in world frame — quando Spot cambia body_pose, il target si 
 
 | Nodo | Ruolo |
 |------|-------|
-| `wbc_coordinator` | FSM: WAITING_TF → IDLE → SEARCHING → SEMI_LOCKING → LOCKING → PRE_APPROACH → APPROACHING → SCANNING. Hybrid lock (Orbbec full + RealSense semi-lock). QualityMonitor. Body pose control. FAST body pose grid search (h,p) + WS_EXT fallback (h,p,dx,dy) con navigator drive. |
-| `wbc_qp_controller` | **Arm-only WBC, 3 modalità**: SEARCH_GRID (7 pose esplorative QP-based, δ=0.15, loop infinito), LOOKAT (ω_des + null-space joint centering), SCAN_SEQ (11 pose grid, δ=0.12, BodySearchScanner, FAST points). Safe joint limits in SEARCH_GRID. |
+| `wbc_coordinator` | FSM: WAITING_TF → IDLE → SEARCHING → SEMI_LOCKING → LOCKING → PRE_APPROACH → APPROACHING → SCANNING. Hybrid lock (Orbbec full + RealSense semi-lock da ESTIMATING o LOCKED). WBC spento immediatamente all'ingresso in LOCKING. QualityMonitor. Body pose control. FAST body pose grid search (h,p) + WS_EXT fallback. PRE_APPROACH timeout 5s. |
+| `wbc_qp_controller` | **Arm-only WBC, 3 modalità**: ACTIVE_SEARCH (9 pose Cartesiane + sweep polso ±15°, loop infinito), LOOKAT (ω_des + joint centering), PERCEPTUAL_SCAN (6 pose Cartesiane multi-angolo, BodySearchScanner, FAST points). |
 | `wbc_spot_navigator` | Navigatore semplificato per APPROACHING e WS_EXT. Legge il goal in odom, rotate → drive → stop. P-controller robusto. Spot non è mai controllato dal QP. |
 
 ### Coordinator FSM
@@ -287,21 +290,21 @@ HOMING → WAITING → BODY_SCANNING → CHECKING_WORKSPACE ──────�
 
 ### WBC QP modes (SEARCHING → PRE_APPROACH → APPROACHING)
 
-Durante **SEARCHING** il QP opera in **SEARCH_GRID mode**: target virtuale "body X avanti", δ=0.15 rad, safe joint limits, 7 pose esplorative in loop infinito. Il braccio esplora senza un target reale.
+Durante **SEARCHING** il QP opera in **ACTIVE_SEARCH mode**: 9 pose Cartesiane attorno alla posizione corrente EE (sweep Y ±0.20m, passo Z/X 0.12m, rotazione polso ±15°). Il braccio esplora lo spazio senza un target reale, compensando la rotazione lenta di Spot.
 
-Durante **PRE_APPROACH** il QP opera in **LOOKAT mode**: calcola l'errore di orientamento tra X_ee e target (`ω_des = kp_ang * angle * axis`), risolve con damped pseudo-inverse su J_task (3×6, solo parte angolare), proietta joint centering nel null-space (`N @ k_null * (q_mid - q)`), integra in FK prediction, pubblica il goal all'IK solver. Loop a 10 Hz.
+Durante **PRE_APPROACH** il QP opera in **LOOKAT mode**: calcola l'errore di orientamento tra X_ee e target (`ω_des = kp_ang * angle * axis`), risolve con damped pseudo-inverse su J_task (3×6), proietta joint centering nel null-space (`N @ k_null * (q_mid - q)`), integra in FK prediction, pubblica il goal all'IK solver. Loop a 10 Hz.
 
-In **APPROACHING** il QP passa in **SCAN_SEQ mode**: genera 11 pose dal null-space del look-at verso il target reale (1 home + 6 assi ±δ + 4 diagonali, δ=0.12 rad), le sequenzia con BodySearchScanner, raccoglie dati di detection per ogni posa, fonde le stime 3D, pubblica i 5 punti FAST.
+In **APPROACHING** il QP passa in **PERCEPTUAL_SCAN mode**: 6 pose Cartesiane multi-angolo attorno alla posizione corrente EE (home, ±Y, +Z, +X, +X+Y). Passo 0.12m, look-at verso il target reale. Le sequenzia con BodySearchScanner, raccoglie dati di detection per ogni posa (3s, min 5 frame), fonde le stime 3D, pubblica i 5 punti FAST.
 
 Spot è sempre controllato dal navigatore (APPROACHING) o dal coordinator (body pose in SEARCHING/SCANNING), mai dal QP.
 
 #### SEMI_LOCKING e LOCKING (gestione QP)
-- **SEMI_LOCKING**: il QP va in pausa — il braccio si blocca nella posa corrente. L'Orbbec ha 3s di finestra pulita.
-- **LOCKING**: il QP esce da SEARCH_GRID e manda il braccio in home. Il coordinator raccoglie 5 campioni in parallelo.
-- Se RealSense perde il torso durante SEMI_LOCKING, o se Orbbec perde LYING per >1s durante LOCKING: si riprende la ricerca dalla posizione corrente.
+- **SEMI_LOCKING**: il QP va in pausa — il braccio si blocca nella posa corrente. Triggerato da RealSense `ESTIMATING` o `LOCKED`. L'Orbbec ha 3s di finestra pulita.
+- **LOCKING**: il WBC viene spento immediatamente, poi riattivato per mandare il braccio in home. Il coordinator raccoglie 5 campioni in parallelo.
+- Se RealSense perde il segnale durante SEMI_LOCKING, o se Orbbec perde LYING per >1s durante LOCKING: si riprende la ricerca dalla posizione corrente.
 ```
 SEARCHING:
-  QP Controller (SEARCH_GRID) → 7 pose esplorative, loop infinito
+  QP Controller (ACTIVE_SEARCH) → 9 pose Cartesiane + sweep polso, loop infinito
   Coordinator → body pose cycling (18 posizioni)
 
 SEMI_LOCKING:
@@ -309,16 +312,16 @@ SEMI_LOCKING:
   Coordinator → Spot ruotato+inclinato verso torso
 
 LOCKING:
-  QP Controller → end search + home pose
+  WBC spento → QP Controller → home pose
   Coordinator → 5 campioni approach_point
 
 PRE_APPROACH:
-  QP Controller (LOOKAT) → IK goal (ω_des + null-space joint centering)
+  QP Controller (LOOKAT) → IK goal (ω_des + joint centering)
   Navigatore: fermo
 
 APPROACHING:
   Navigatore → rotate → drive → stop
-  QP Controller (SCAN_SEQ) → 11 pose null-space → BodySearchScanner → fuses → FAST points
+  QP Controller (PERCEPTUAL_SCAN) → 6 pose Cartesiane → BodySearchScanner → fuses → FAST points
 ```
 
 ---

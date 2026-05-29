@@ -18,9 +18,18 @@ wbc_qp_controller:
     # Joint velocity limit
     q_dot_max: 0.6   # [rad/s]
 
-    # Null-space grid step sizes
-    search_delta: 0.30   # [rad] ≈17° per giunto — esplorazione ampia
-    scan_delta:   0.35   # [rad] ≈20° per giunto — scansione ampia vicino al paziente
+    # Active perception Cartesian scanning (replaces null-space joint-space grids)
+    cartesian_step: 0.12          # [m] passo base Cartesian per inner ring e scan
+    cartesian_step_wide: 0.20     # [m] passo Y sweep ampio (compensa rotazione Spot)
+    search_sweep_angle: 0.26      # [rad] ≈15° rotazione polso combinata alla traslazione
+
+    # Timing per ACTIVE_SEARCH (SEARCHING)
+    search_timeout_per_point: 2.0 # [s] raccolta dati per posa in SEARCHING
+
+    # Timing per PERCEPTUAL_SCAN (APPROACHING)
+    scan_timeout_per_point: 3.0   # [s] raccolta dati per posa in APPROACHING
+    scan_adaptive_iters: 3        # max iterazioni adattive dopo griglia statica
+    kp_confidence_ok: 0.4         # [0-1] soglia keypoint per considerarlo "sufficiente"
 
     # Goal update period — controls how often WBC recomputes IK goals.
     # IK solver processes goals sequentially (one trajectory at a time), so higher

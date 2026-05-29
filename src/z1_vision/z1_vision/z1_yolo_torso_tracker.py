@@ -604,6 +604,7 @@ class Z1YoloTorsoTracker(Node):
                 target_world = self._camera_to_world(estimated_cam)
                 if target_world is not None:
                     interpolated = self._interpolate_to_target(target_world)
+                    self._publish_target_world(interpolated)
 
                 if len(self.position_history) >= self.lock_stable_frames:
                     variance = np.var(self.position_history, axis=0).sum()

@@ -536,11 +536,13 @@ class WBCCoordinatorNode(Node):
             z = self._approach_point_odom_pos()
             self._search_lock_buffer = [z]
             self.get_logger().info(f'Full lock (Orbbec): conf={self._confidence:.2f}')
+            self._set_wbc_enabled(False)
             self._set_state(CoordState.LOCKING)
             return
 
-        # FASE 3 — Check semi-lock da RealSense
-        if self._torso_tracker_state == 'LOCKED' and self._torso_pos is not None:
+        # FASE 3 — Check semi-lock da RealSense (ESTIMATING o LOCKED: basta vedere keypoint)
+        if self._torso_tracker_state in ('ESTIMATING', 'LOCKED') \
+                and self._torso_pos is not None:
             if self._check_realsense_guidance():
                 return
 
@@ -553,7 +555,7 @@ class WBCCoordinatorNode(Node):
             if self._search_position_start is not None else 0.0
 
         # RealSense ha perso il torso → torna subito a cercare
-        if self._torso_tracker_state != 'LOCKED':
+        if self._torso_tracker_state not in ('ESTIMATING', 'LOCKED'):
             self.get_logger().info('Semi-lock: RealSense lost torso → resuming search')
             self._search_position_idx = self._search_saved_idx
             self._search_position_start = None
@@ -566,6 +568,7 @@ class WBCCoordinatorNode(Node):
             z = self._approach_point_odom_pos()
             self._search_lock_buffer = [z]
             self.get_logger().info('Semi-lock → Full lock (Orbbec)')
+            self._set_wbc_enabled(False)
             self._set_state(CoordState.LOCKING)
             return
 
@@ -608,7 +611,8 @@ class WBCCoordinatorNode(Node):
 
     def _check_realsense_guidance(self) -> bool:
         """Ruota e inclina Spot verso il torso rilevato dalla RealSense."""
-        if self._torso_tracker_state != 'LOCKED' or self._torso_pos is None:
+        if self._torso_tracker_state not in ('ESTIMATING', 'LOCKED') \
+                or self._torso_pos is None:
             return False
 
         body_tf = self._tf_lookup(self._odom_frame, self._body_frame)
@@ -701,6 +705,16 @@ class WBCCoordinatorNode(Node):
                 return
         else:
             self._torso_detected_ticks = 0
+
+        # Timeout fallback: if RealSense never locks, proceed anyway
+        elapsed = (self.get_clock().now() - self._pre_approach_start).nanoseconds * 1e-9
+        if elapsed >= self._pre_approach_duration:
+            self.get_logger().warn(
+                f'PRE_APPROACH timeout ({self._pre_approach_duration:.1f}s) '
+                f'— RealSense LOCKED {self._torso_detected_ticks}/5, proceeding anyway')
+            self._pub_spot_ctrl.publish(Bool(data=False))
+            self._set_state(CoordState.APPROACHING)
+            return
 
     # ── Helpers ───────────────────────────────────────────────────────
 
@@ -1110,6 +1124,8 @@ class WBCCoordinatorNode(Node):
             # else: re-entry from LOCKING or SEMI_LOCKING — resume, don't rebuild
         if new_state == CoordState.SCANNING:
             self._set_body_pose(self._handoff_body_height)
+        if new_state == CoordState.LOCKING:
+            self._set_wbc_enabled(True)
         if new_state == CoordState.PRE_APPROACH:
             self._set_body_pose(0.0, 0.0)
             self._torso_detected_ticks = 0

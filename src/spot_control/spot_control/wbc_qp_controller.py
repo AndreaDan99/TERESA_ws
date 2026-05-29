@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
-WBC QP Controller — arm-only look-at + QP-based scanning + QP-based search.
+WBC QP Controller — arm-only look-at + active-perception Cartesian scanning.
 
 Modes (selected automatically from /wbc/state):
-  SEARCH_GRID — SEARCHING:    genera 7 pose esplorative dal null-space (loop infinito)
-  LOOKAT      — PRE_APPROACH: ω_des orientamento + null-space joint centering
-  SCAN_SEQ    — APPROACHING:  genera 11 pose dal null-space, le sequenzia,
-                               raccoglie dati, pubblica /z1/fast_points
+  ACTIVE_SEARCH  — SEARCHING:    9 Cartesian poses + wrist sweep (loop infinito)
+  LOOKAT         — PRE_APPROACH: ω_des orientamento + null-space joint centering
+  PERCEPTUAL_SCAN — APPROACHING:  6 Cartesian poses verso target, multi-angolo
 
 State transitions:
-  SEARCHING     → _start_search()
+  SEARCHING     → _start_active_search()
   SEMI_LOCKING  → _pause_search()   (blocca il braccio, Orbbec cerca)
   LOCKING       → _end_search() + _send_home()
   SEARCHING (ripresa) → _resume_search()
@@ -43,21 +42,15 @@ from z1_vision.body_search_scanner import BodySearchScanner, ScanAction, ScanTic
 
 JOINT_ORDER = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']
 
-# ── Safe joint limits for SEARCH_GRID (more restrictive than Z1 native) ───────
-# Restrict extreme poses to avoid hitting Spot body, ground, or unbalancing.
-SAFE_Q_LOW  = [-0.5, -0.3, -1.8,  0.5, -0.5, -0.8]
-SAFE_Q_HIGH = [ 0.5,  0.8, -0.3,  2.0,  0.5,  0.8]
-
 # ── Scan parameters ────────────────────────────────────────────────────────────
-SCAN_POINT_TIMEOUT = 4.0      # [s] tempo raccolta dati per posa (APPROACHING)
-SCAN_MIN_FRAMES    = 5        # frame minimi per posa
+SCAN_POINT_TIMEOUT = 4.0      # [s] unused (now from YAML: scan_timeout_per_point)
+SCAN_MIN_FRAMES    = 5        # frame minimi per posa (sia search che scan)
 SCAN_EARLY_STOP    = 0.95     # early-stop detection score
 SCAN_STABILITY_K   = 10.0     # penalty stabilità 3D
 
 # ── Search parameters ──────────────────────────────────────────────────────────
-SEARCH_POINT_TIMEOUT = 2.0    # [s] tempo raccolta per posa (SEARCHING)
-SEARCH_MIN_FRAMES    = 3      # frame minimi
-SEARCH_EARLY_STOP    = 0.6    # early-stop liberale
+SEARCH_MIN_FRAMES  = 3        # frame minimi per search
+SEARCH_EARLY_STOP  = 0.6      # early-stop liberale
 
 HOME_POS = np.array([-0.09, 0.0, 0.44])
 HOME_ORI = np.array([-0.0062, 0.4107, 0.0021, 0.9118])
@@ -93,8 +86,13 @@ class WBCQPControllerNode(Node):
         self.declare_parameter('k_null',        0.3)
         self.declare_parameter('damping',       1e-3)
         self.declare_parameter('q_dot_max',     0.6)
-        self.declare_parameter('search_delta',  0.15)
-        self.declare_parameter('scan_delta',    0.12)
+        self.declare_parameter('cartesian_step',      0.12)
+        self.declare_parameter('cartesian_step_wide', 0.20)
+        self.declare_parameter('search_sweep_angle',  0.26)
+        self.declare_parameter('search_timeout_per_point', 2.0)
+        self.declare_parameter('scan_timeout_per_point',   3.0)
+        self.declare_parameter('scan_adaptive_iters',      3)
+        self.declare_parameter('kp_confidence_ok',         0.4)
         self.declare_parameter('update_period', 0.1)
         self.declare_parameter('workspace_safety_margin', 0.05)
         self.declare_parameter('ik_goal_topic',      '/wbc/ik_goal_pose')
@@ -113,9 +111,14 @@ class WBCQPControllerNode(Node):
         self._k_null        = float(p('k_null'))
         self._damping       = float(p('damping'))
         self._q_dot_max     = float(p('q_dot_max'))
-        self._search_delta  = float(p('search_delta'))
-        self._scan_delta    = float(p('scan_delta'))
-        self._update_period = float(p('update_period'))
+        self._search_sweep_angle = float(p('search_sweep_angle'))
+        self._cartesian_step       = float(p('cartesian_step'))
+        self._cartesian_step_wide  = float(p('cartesian_step_wide'))
+        self._search_timeout_pp    = float(p('search_timeout_per_point'))
+        self._scan_timeout_pp      = float(p('scan_timeout_per_point'))
+        self._scan_adaptive_iters  = int(p('scan_adaptive_iters'))
+        self._kp_confidence_ok     = float(p('kp_confidence_ok'))
+        self._update_period        = float(p('update_period'))
         self._home_orientation = np.array([float(x) for x in p('home_orientation')])
         self._orientation_mode = p('orientation_mode')
 
@@ -152,7 +155,7 @@ class WBCQPControllerNode(Node):
         self._goal: PoseStamped | None = None
         self._q_meas: np.ndarray | None = None
         self._tf_ready       = False
-        self._mode           = 'LOOKAT'   # 'LOOKAT' | 'SCAN_SEQ' | 'SEARCH_GRID'
+        self._mode           = 'LOOKAT'   # 'LOOKAT' | 'PERCEPTUAL_SCAN' | 'ACTIVE_SEARCH'
         self._wbc_state      = ''
         self._search_paused  = False     # True when paused for SEMI_LOCKING
 
@@ -197,9 +200,9 @@ class WBCQPControllerNode(Node):
         if not self._enabled:
             en = Bool(); en.data = False
             self._pub_en.publish(en)
-            if self._mode == 'SCAN_SEQ':
+            if self._mode == 'PERCEPTUAL_SCAN':
                 self._end_scan()
-            elif self._mode == 'SEARCH_GRID':
+            elif self._mode == 'ACTIVE_SEARCH':
                 self._end_search()
 
     def _cb_goal(self, msg: PoseStamped) -> None:
@@ -220,18 +223,18 @@ class WBCQPControllerNode(Node):
             if prev == 'SEMI_LOCKING':
                 self._resume_search()
             elif prev != 'SEARCHING':
-                self._start_search()
-        elif msg.data == 'SEMI_LOCKING' and self._mode == 'SEARCH_GRID':
+                self._start_active_search()
+        elif msg.data == 'SEMI_LOCKING' and self._mode == 'ACTIVE_SEARCH':
             self._pause_search()
-        elif msg.data == 'LOCKING' and self._mode == 'SEARCH_GRID':
+        elif msg.data == 'LOCKING' and self._mode == 'ACTIVE_SEARCH':
             self._end_search()
             self._send_home()
         elif msg.data == 'APPROACHING' and prev != 'APPROACHING':
-            self._start_scan()
+            self._start_perceptual_scan()
         elif msg.data not in ('SEARCHING', 'SEMI_LOCKING', 'LOCKING', 'APPROACHING'):
-            if self._mode == 'SEARCH_GRID':
+            if self._mode == 'ACTIVE_SEARCH':
                 self._end_search()
-            if self._mode == 'SCAN_SEQ':
+            if self._mode == 'PERCEPTUAL_SCAN':
                 self._end_scan()
 
     def _cb_ik_done(self, msg: Bool) -> None:
@@ -281,12 +284,12 @@ class WBCQPControllerNode(Node):
     # ── Mode dispatch ─────────────────────────────────────────────────────
 
     def _update(self) -> None:
-        if self._mode == 'SCAN_SEQ':
-            self._tick_scan()
+        if self._mode == 'PERCEPTUAL_SCAN':
+            self._tick_perceptual_scan()
             return
-        if self._mode == 'SEARCH_GRID':
+        if self._mode == 'ACTIVE_SEARCH':
             if not self._search_paused:
-                self._tick_search()
+                self._tick_active_search()
             return
         # LOOKAT mode
         self._tick_lookat()
@@ -430,29 +433,65 @@ class WBCQPControllerNode(Node):
             f'angle={math.degrees(angle):.1f}°',
             throttle_duration_sec=2.0)
 
-    # ── SEARCH_GRID mode (SEARCHING) ──────────────────────────────────────
+    # ── ACTIVE_SEARCH mode (SEARCHING) ───────────────────────────────────
 
-    def _start_search(self) -> None:
-        self._mode = 'SEARCH_GRID'
+    def _gen_cartesian_search_grid(self, p_ee: np.ndarray) -> list[PoseStamped]:
+        """
+        9 pose Cartesiane attorno a p_ee.
+        Enfasi su Y (wide sweep ±0.20m) per compensare la rotazione di Spot.
+        Rotazione polso combinata (±α) per amplificare la copertura.
+        Z mai sotto HOME_POS[2] = 0.44m.
+        """
+        s = self._cartesian_step         # 0.12m
+        w = self._cartesian_step_wide    # 0.20m
+        α = self._search_sweep_angle     # 0.26 rad ≈ 15°
+        c, sa = math.cos(α), math.sin(α)
+
+        waypoints = [
+            (np.array([0,  0,  0]),   np.array([1,   0,   0])),     # HOME
+            (np.array([0,  0,  +s]),  np.array([c,   0,  -sa])),    # +Z — ruota giù
+            (np.array([0,  +w, 0]),   np.array([c,   sa,  0])),     # +Y wide DX
+            (np.array([0,  -w, 0]),   np.array([c,  -sa,  0])),     # -Y wide SX
+            (np.array([0,  +w, +s]),  np.array([c,   sa, -sa])),    # +Y+Z
+            (np.array([0,  -w, +s]),  np.array([c,  -sa, -sa])),    # -Y+Z
+            (np.array([+s, +w, 0]),   np.array([c,   sa,  0])),     # +X+Y avanti DX
+            (np.array([+s, -w, 0]),   np.array([c,  -sa,  0])),     # +X-Y avanti SX
+            (np.array([+s, 0,  +s]),  np.array([c,   0,  -sa])),    # +X+Z avanti SU
+        ]
+
+        poses = []
+        for offset, look_dir in waypoints:
+            pos = p_ee + offset
+            pos[2] = max(pos[2], HOME_POS[2])
+            clipped, _, _ = self._ws_checker.clip_target(pos)
+            quat = compute_ee_orientation(look_dir, HOME_ORI.tolist())
+            poses.append(_make_pose_stamped(clipped, quat))
+        return poses
+
+    def _start_active_search(self) -> None:
+        if self._q_meas is None:
+            self.get_logger().warn('_start_active_search: no joint state')
+            return
+
+        n_arm = self._q_meas.shape[0]
+        q = self._q_neutral.copy()
+        q[:n_arm] = self._q_meas
+        pin.forwardKinematics(self._model, self._data, q)
+        pin.updateFramePlacements(self._model, self._data)
+        p_ee = self._data.oMf[self._ee_id].translation
+
+        poses = self._gen_cartesian_search_grid(p_ee)
+        if not poses:
+            self.get_logger().warn('_start_active_search: no poses generated')
+            return
+
+        self._mode = 'ACTIVE_SEARCH'
         self._search_paused = False
         self._scan_ik_done = False
         self._scan_data_queue.clear()
-        self._gen_and_start_search_scanner()
-
-    def _gen_and_start_search_scanner(self) -> None:
-        """Genera 7 pose esplorative dal null-space del 'guarda avanti'."""
-        if self._q_meas is None:
-            self.get_logger().warn('_gen_search_scanner: no joint state')
-            return
-
-        poses = self._gen_search_poses()
-        if not poses:
-            self.get_logger().warn('_gen_search_scanner: no poses generated')
-            return
-
         self._scan_scanner = BodySearchScanner(
             scan_poses=poses,
-            scan_point_timeout=SEARCH_POINT_TIMEOUT,
+            scan_point_timeout=self._search_timeout_pp,
             scan_min_frames=SEARCH_MIN_FRAMES,
             early_stop_score=SEARCH_EARLY_STOP,
             logger=self.get_logger(),
@@ -460,77 +499,12 @@ class WBCQPControllerNode(Node):
         )
         self._scan_scanner.reset()
         self._pub_tracker_scan.publish(Bool(data=True))
-        self.get_logger().info(f'SEARCH_GRID: {len(poses)} poses, delta={self._search_delta:.2f}')
-
-    def _gen_search_poses(self) -> list[PoseStamped]:
-        """Genera pose esplorative dal null-space di 'guarda avanti' (body X).
-        Usa safe joint limits e delta di esplorazione più ampio.
-        Solo 7 pose (home + ±δ×3, senza diagonali)."""
-        if self._q_meas is None:
-            self.get_logger().warn('_gen_search_poses: no joint state')
-            return []
-
-        n_arm = self._q_meas.shape[0]
-        q = self._q_neutral.copy()
-        q[:n_arm] = self._q_meas
-
-        pin.computeJointJacobians(self._model, self._data, q)
-        pin.updateFramePlacements(self._model, self._data)
-        T_ee = self._data.oMf[self._ee_id]
-        p_ee = T_ee.translation
-        J_arm_full = pin.getFrameJacobian(
-            self._model, self._data, self._ee_id,
-            pin.ReferenceFrame.LOCAL_WORLD_ALIGNED)
-        J_arm = J_arm_full[:, :n_arm]
-
-        # Target virtuale: body X (avanti)
-        x_desired = np.array([1.0, 0.0, 0.0])
-
-        # Angular Jacobian (3×6) + null-space projector
-        J_task = J_arm[:3, :]
-        J_pinv = damped_pinv(J_task)
-        N = null_space_projector(J_task, J_pinv)
-
-        # SVD → basis of null-space
-        _, S, Vt = np.linalg.svd(N)
-        rank = int(np.sum(S > 1e-6))
-        if rank < 1:
-            self.get_logger().warn(f'_gen_search_poses: null-space rank={rank}')
-            rank = min(3, n_arm)
-        basis = Vt[:rank, :].T  # 6×rank
-
-        q_safe_low = np.array(SAFE_Q_LOW[:n_arm])
-        q_safe_high = np.array(SAFE_Q_HIGH[:n_arm])
-        delta = self._search_delta
-        n_dir = min(3, rank)
-
-        poses = []
-
-        # Home pose
-        home_pose = _make_pose_stamped(p_ee, compute_ee_orientation(
-            x_desired, HOME_ORI.tolist()))
-        poses.append(home_pose)
-
-        # ±δ along each basis direction (no diagonali)
-        for i in range(n_dir):
-            for sign in [-1.0, 1.0]:
-                q_new = q.copy()
-                q_new[:n_arm] = np.clip(q[:n_arm] + sign * delta * basis[:, i],
-                                         q_safe_low, q_safe_high)
-                pin.forwardKinematics(self._model, self._data, q_new)
-                pin.updateFramePlacements(self._model, self._data)
-                T_new = self._data.oMf[self._ee_id]
-                pose = _make_pose_stamped(T_new.translation,
-                                           compute_ee_orientation(
-                                               x_desired, HOME_ORI.tolist()))
-                poses.append(pose)
-
         self.get_logger().info(
-            f'Search grid: {len(poses)} poses (null-space rank={rank}, delta={delta:.2f})',
-            throttle_duration_sec=5.0)
-        return poses
+            f'ACTIVE_SEARCH: {len(poses)} Cartesian poses '
+            f'(step={self._cartesian_step:.2f}m, wide={self._cartesian_step_wide:.2f}m, '
+            f'sweep={math.degrees(self._search_sweep_angle):.0f}°)')
 
-    def _tick_search(self) -> None:
+    def _tick_active_search(self) -> None:
         if self._scan_scanner is None:
             return
 
@@ -548,21 +522,17 @@ class WBCQPControllerNode(Node):
             self._pub_en.publish(Bool(data=True))
 
         elif st.action in (ScanAction.EXIT_SCAN_MODE, ScanAction.DONE, ScanAction.FAILED):
-            # Loop infinito: restart scanner con nuove pose (adattive alla q corrente)
             self._scan_scanner = None
-            self._gen_and_start_search_scanner()
+            self._start_active_search()
 
     def _pause_search(self) -> None:
-        """Blocca il braccio durante SEMI_LOCKING."""
         self._search_paused = True
         self._pub_en.publish(Bool(data=False))
 
     def _resume_search(self) -> None:
-        """Riprende dal punto in cui era stato messo in pausa."""
         self._search_paused = False
 
     def _end_search(self) -> None:
-        """Esce da SEARCH_GRID mode."""
         self._mode = 'LOOKAT'
         self._search_paused = False
         self._pub_tracker_scan.publish(Bool(data=False))
@@ -571,58 +541,89 @@ class WBCQPControllerNode(Node):
         self._scan_data_queue.clear()
 
     def _send_home(self) -> None:
-        """Pubblica la posa home all'IK solver."""
         home_pose = _make_pose_stamped(HOME_POS, HOME_ORI)
         self._pub_ik.publish(home_pose)
         self._pub_en.publish(Bool(data=True))
         self.get_logger().info('Home pose sent (LOCKING → home)')
 
-    # ── SCAN_SEQ mode (APPROACHING) ───────────────────────────────────────
+    # ── PERCEPTUAL_SCAN mode (APPROACHING) ───────────────────────────────
 
-    def _start_scan(self) -> None:
-        self._mode = 'SCAN_SEQ'
-        self._scan_ik_done = False
-        self._scan_data_queue.clear()
+    def _gen_cartesian_scan_grid(self, p_ee: np.ndarray,
+                                  target: np.ndarray) -> list[PoseStamped]:
+        """
+        6 pose Cartesiane attorno a p_ee. Look-at verso target.
+        Pattern: home, ±Y, +Z, +X, +X+Y. Copertura multi-angolo del torso.
+        """
+        s = self._cartesian_step
+        x_desired = target - p_ee
+        x_desired /= max(float(np.linalg.norm(x_desired)), 1e-6)
 
-        poses = self._gen_scan_poses()
-        if not poses:
-            self.get_logger().warn('No WBC scan poses generated — DONE')
+        waypoints = [
+            np.array([0,  0,  0]),      # HOME
+            np.array([0,  +s, 0]),      # +Y — spalla sx (kp5) + anca sx (kp11)
+            np.array([0,  -s, 0]),      # -Y — spalla dx (kp6) + anca dx (kp12)
+            np.array([0,  0,  +s]),     # +Z — vista dall'alto
+            np.array([+s, 0,  0]),      # +X — più vicino, depth migliore
+            np.array([+s, +s, 0]),      # +X+Y — diagonale
+        ]
+
+        poses = []
+        for offset in waypoints:
+            pos = p_ee + offset
+            pos[2] = max(pos[2], HOME_POS[2])
+            clipped, _, _ = self._ws_checker.clip_target(pos)
+            quat = compute_ee_orientation(x_desired, HOME_ORI.tolist())
+            poses.append(_make_pose_stamped(clipped, quat))
+        return poses
+
+    def _start_perceptual_scan(self) -> None:
+        if self._q_meas is None:
+            self.get_logger().warn('_start_perceptual_scan: no joint state')
             self._publish_fast_points()
-            self._mode = 'LOOKAT'
             return
 
+        n_arm = self._q_meas.shape[0]
+        q = self._q_neutral.copy()
+        q[:n_arm] = self._q_meas
+        pin.forwardKinematics(self._model, self._data, q)
+        pin.updateFramePlacements(self._model, self._data)
+        p_ee = self._data.oMf[self._ee_id].translation
+
+        if self._goal is not None:
+            target = np.array([self._goal.pose.position.x,
+                               self._goal.pose.position.y,
+                               self._goal.pose.position.z])
+        else:
+            target = p_ee + np.array([0.35, 0, 0])
+
+        poses = self._gen_cartesian_scan_grid(p_ee, target)
+        if not poses:
+            self.get_logger().warn('No Cartesian scan poses generated')
+            self._publish_fast_points()
+            return
+
+        self._mode = 'PERCEPTUAL_SCAN'
+        self._scan_ik_done = False
+        self._scan_data_queue.clear()
         self._scan_poses = poses
         self._scan_scanner = BodySearchScanner(
             scan_poses=poses,
-            scan_point_timeout=SCAN_POINT_TIMEOUT,
+            scan_point_timeout=self._scan_timeout_pp,
             scan_min_frames=SCAN_MIN_FRAMES,
             early_stop_score=SCAN_EARLY_STOP,
             logger=self.get_logger(),
             stability_k=SCAN_STABILITY_K,
         )
         self._scan_scanner.reset()
-
-        # Enable tracker scan mode
         self._pub_tracker_scan.publish(Bool(data=True))
+        self.get_logger().info(
+            f'PERCEPTUAL_SCAN: {len(poses)} Cartesian poses '
+            f'(step={self._cartesian_step:.2f}m)')
 
-        self.get_logger().info(f'SCAN_SEQ: {len(poses)} WBC-generated poses')
-
-    def _end_scan(self) -> None:
-        self._mode = 'LOOKAT'
-        self._pub_tracker_scan.publish(Bool(data=False))
-        self._pub_en.publish(Bool(data=False))
-        if self._scan_scanner is not None:
-            torso = self._scan_scanner.fused_torso_xyz()
-            if torso is not None:
-                self._scan_torso_est = torso
-            self._scan_scanner = None
-        self._scan_poses.clear()
-
-    def _tick_scan(self) -> None:
+    def _tick_perceptual_scan(self) -> None:
         if self._scan_scanner is None:
             return
 
-        # Feed accumulated scan data
         for data in self._scan_data_queue:
             self._scan_scanner.feed_scan_data(data)
         self._scan_data_queue.clear()
@@ -637,107 +638,31 @@ class WBCQPControllerNode(Node):
             self._pub_en.publish(Bool(data=True))
 
         elif st.action in (ScanAction.EXIT_SCAN_MODE, ScanAction.DONE):
+            torso = self._scan_scanner.fused_torso_xyz()
+            if torso is not None:
+                self._scan_torso_est = torso
             self._pub_en.publish(Bool(data=False))
             self._pub_tracker_scan.publish(Bool(data=False))
             self._publish_fast_points()
             self._mode = 'LOOKAT'
 
         elif st.action == ScanAction.FAILED:
-            self.get_logger().warn('Scan FAILED')
+            self.get_logger().warn('Perceptual scan FAILED')
             self._pub_en.publish(Bool(data=False))
             self._pub_tracker_scan.publish(Bool(data=False))
             self._publish_fast_points()
             self._mode = 'LOOKAT'
 
-    def _gen_scan_poses(self) -> list[PoseStamped]:
-        """Generate scan poses via null-space of the look-at task."""
-        if self._q_meas is None:
-            self.get_logger().warn('_gen_scan_poses: no joint state')
-            return []
-
-        n_arm = self._q_meas.shape[0]
-        q = self._q_neutral.copy()
-        q[:n_arm] = self._q_meas
-
-        pin.computeJointJacobians(self._model, self._data, q)
-        pin.updateFramePlacements(self._model, self._data)
-        T_ee = self._data.oMf[self._ee_id]
-        p_ee = T_ee.translation
-        J_arm_full = pin.getFrameJacobian(
-            self._model, self._data, self._ee_id,
-            pin.ReferenceFrame.LOCAL_WORLD_ALIGNED)
-        J_arm = J_arm_full[:, :n_arm]
-
-        # Look-at direction: from EE to goal target
-        if self._goal is not None:
-            target = np.array([self._goal.pose.position.x,
-                               self._goal.pose.position.y,
-                               self._goal.pose.position.z])
-        else:
-            target = p_ee + np.array([0.35, 0, 0])
-
-        x_desired = target - p_ee
-        x_desired = x_desired / max(float(np.linalg.norm(x_desired)), 1e-6)
-
-        # Angular Jacobian (3×6) + null-space projector
-        J_task = J_arm[:3, :]
-        J_pinv = damped_pinv(J_task)
-        N = null_space_projector(J_task, J_pinv)
-
-        # SVD → basis of null-space
-        _, S, Vt = np.linalg.svd(N)
-        rank = int(np.sum(S > 1e-6))
-        if rank < 1:
-            self.get_logger().warn(f'_gen_scan_poses: null-space rank={rank} (arm singular?)')
-            rank = min(3, n_arm)
-        basis = Vt[:rank, :].T  # 6×rank
-
-        q_low = self._model.lowerPositionLimit[:n_arm]
-        q_high = self._model.upperPositionLimit[:n_arm]
-        delta = self._scan_delta
-        n_dir = min(3, rank)
-
-        poses = []
-
-        # Home pose
-        home_pose = _make_pose_stamped(p_ee, compute_ee_orientation(
-            x_desired, HOME_ORI.tolist()))
-        poses.append(home_pose)
-
-        # ±δ along each basis direction
-        for i in range(n_dir):
-            for sign in [-1.0, 1.0]:
-                q_new = q.copy()
-                q_new[:n_arm] = np.clip(q[:n_arm] + sign * delta * basis[:, i],
-                                         q_low, q_high)
-                pin.forwardKinematics(self._model, self._data, q_new)
-                pin.updateFramePlacements(self._model, self._data)
-                T_new = self._data.oMf[self._ee_id]
-                pose = _make_pose_stamped(T_new.translation,
-                                           compute_ee_orientation(
-                                               x_desired, HOME_ORI.tolist()))
-                poses.append(pose)
-
-        # Diagonal combinations: v_i + v_j
-        if n_dir >= 2:
-            for i in range(min(n_dir - 1, 2)):
-                j = i + 1
-                for si, sj in [(1, 1), (1, -1)]:
-                    q_new = q.copy()
-                    q_new[:n_arm] = np.clip(
-                        q[:n_arm] + delta * (si * basis[:, i] + sj * basis[:, j]),
-                        q_low, q_high)
-                    pin.forwardKinematics(self._model, self._data, q_new)
-                    pin.updateFramePlacements(self._model, self._data)
-                    T_new = self._data.oMf[self._ee_id]
-                    pose = _make_pose_stamped(T_new.translation,
-                                               compute_ee_orientation(
-                                                   x_desired, HOME_ORI.tolist()))
-                    poses.append(pose)
-
-        self.get_logger().info(
-            f'Scan grid: {len(poses)} poses (null-space rank={rank}, delta={delta:.2f})')
-        return poses
+    def _end_scan(self) -> None:
+        self._mode = 'LOOKAT'
+        self._pub_tracker_scan.publish(Bool(data=False))
+        self._pub_en.publish(Bool(data=False))
+        if self._scan_scanner is not None:
+            torso = self._scan_scanner.fused_torso_xyz()
+            if torso is not None:
+                self._scan_torso_est = torso
+            self._scan_scanner = None
+        self._scan_poses.clear()
 
     # ── FAST point publishing ─────────────────────────────────────────────
 

@@ -1,9 +1,68 @@
 # TERESA — Changelog
 
-Storico completo delle modifiche dal 6 maggio 2026 al 28 maggio 2026.
+Storico completo delle modifiche dal 6 maggio 2026 al 29 maggio 2026.
 Per la descrizione del sistema corrente vedi [`DESCRIPTION.md`](DESCRIPTION.md).
 
 ---
+
+## 29 May 2026 — Active Perception: Cartesian Scanning + Semi-lock Relaxed
+
+### Cartesian Scanning (sostituisce null-space SVD)
+
+**Before:** `SEARCH_GRID` (7 pose joint-space) e `SCAN_SEQ` (11 pose joint-space) generavano waypoint via SVD del null-space projector — imprevedibili, space-giunti, nessuna relazione percezione→azione.
+
+**After:** generazione **Cartesiana** attorno alla posizione corrente dell'EE con rotazione polso combinata:
+
+| Fase | Modo QP | Pose | Pattern |
+|------|---------|:---:|---------|
+| **SEARCHING** | `ACTIVE_SEARCH` | **9** | Home, ±Z, ±Y(w=0.20m), 4 diagonali, 3 pose in +X |
+| **APPROACHING** | `PERCEPTUAL_SCAN` | **6** | Home, ±Y, +Z, +X, +X+Y |
+| Rotazione polso | sweep ±15° | | Amplifica copertura di ±15° per lato |
+
+**Vincoli:** Z ≥ HOME_POS[2] (0.44m, mai sotto la home). Look-at verso body-X in SEARCHING, verso target in APPROACHING. Workspace clipping automatico.
+
+### Semi-lock tracker state rilassato
+
+**Before:** semi-lock si attivava solo su `/torso_tracker_state == 'LOCKED'` (torso completo, 4 keypoint stabilizzati).
+
+**After:** accetta anche `ESTIMATING` (basta vedere 3+ keypoint qualsiasi — anche solo gambe). Il tracker pubblica `/torso_target_ee` anche durante `ESTIMATING` (prima solo in `LOCKED`) per guidare Spot.
+
+| File | Modifica |
+|------|----------|
+| `z1_yolo_torso_tracker.py:606` | `_publish_target_world(interpolated)` anche in `ESTIMATING` |
+| `wbc_coordinator.py:543,556,611` | Stato tracker: `'LOCKED'` → `in ('ESTIMATING', 'LOCKED')` |
+
+### Fix: WBC spento all'ingresso in LOCKING
+
+Quando Orbbec rileva LYING, il coordinator chiama `_set_wbc_enabled(False)` **prima** di cambiare stato in `LOCKING`. Il braccio si blocca immediatamente nella posa corrente, senza aspettare che il QP processi il messaggio di stato. In `_do_set_state(LOCKING)` il WBC viene riattivato per il movimento home.
+
+### Fix: PRE_APPROACH timeout fallback
+
+Aggiunto timeout in `_tick_pre_approach()`: se dopo `pre_approach_duration` (5s) RealSense non ha ancora dato 5 LOCKED consecutivi, forza comunque APPROACHING con un warning.
+
+### Nuovi parametri YAML (sostituiscono `search_delta` / `scan_delta`)
+
+```yaml
+cartesian_step: 0.12          # [m] passo base
+cartesian_step_wide: 0.20     # [m] sweep Y ampio (compensa rotazione Spot)
+search_sweep_angle: 0.26      # [rad] ≈15° rotazione polso
+search_timeout_per_point: 2.0 # [s] SEARCHING
+scan_timeout_per_point: 3.0   # [s] APPROACHING
+scan_adaptive_iters: 3        # max iterazioni adattive
+kp_confidence_ok: 0.4         # soglia keypoint
+```
+
+### Files modificati
+
+| File | Modifica |
+|------|----------|
+| `wbc_qp_controller.py` | Rinominati modi (`ACTIVE_SEARCH`, `PERCEPTUAL_SCAN`). Rimossi `_gen_search_poses`, `_gen_scan_poses` (null-space SVD). Aggiunti `_gen_cartesian_search_grid`, `_gen_cartesian_scan_grid` con rotazione polso combinata. Rimossi `SAFE_Q_LOW`/`SAFE_Q_HIGH`. Nuovi parametri Cartesiani. |
+| `wbc_coordinator.py` | Semi-lock trigger accetta `ESTIMATING`. FASE 2 (SEARCHING→LOCKING): `_set_wbc_enabled(False)` prima del cambio stato. `_do_set_state(LOCKING)`: riattiva WBC. PRE_APPROACH timeout fallback. |
+| `wbc_params.yaml` | -2 parametri (`search_delta`, `scan_delta`), +7 parametri Cartesiani |
+| `z1_yolo_torso_tracker.py` | +1 riga: pubblica `/torso_target_ee` durante `ESTIMATING` |
+
+---
+
 
 ## 28 May 2026 — Web Control Panel + Step Mode Debugging
 

@@ -25,17 +25,15 @@ git status --short
 
 ---
 
-## Current State (26 May 2026)
+## Current State (29 May 2026)
 
-- **Web Control Panel**: interfaccia web (`web/teresa_control.html`) con pulsanti, stato WBC, navigazione RETURN via P-controller JS. Camera view (`web/camera_view.html`) con feed live Orbbec/RealSense + overlay scheletro YOLO. Comunicazione via rosbridge WebSocket, nessuna connessione diretta a Spot. Vedi [`web/README.md`](web/README.md).
+- **Active Perception Cartesian Scanning**: il QP controller genera waypoint **Cartesiani** (non più null-space SVD). `ACTIVE_SEARCH` (9 pose + sweep polso ±15° in SEARCHING) e `PERCEPTUAL_SCAN` (6 pose multi-angolo in APPROACHING). Movimenti prevedibili, Z ≥ home (0.44m). Rotazione polso combinata alla traslazione per amplificare la copertura (fino a ±26°/lato a 1m).
+- **Semi-lock rilassato**: il tracker accetta `ESTIMATING` oltre a `LOCKED` — basta vedere 3+ keypoint qualsiasi per guidare Spot verso il corpo. `/torso_target_ee` pubblicato anche durante `ESTIMATING`.
+- **Web Control Panel**: interfaccia web (`web/teresa_control.html`) con pulsanti, stato WBC, navigazione RETURN via P-controller JS. Camera view (`web/camera_view.html`) con feed live Orbbec/RealSense + overlay scheletro YOLO.
 - **Step mode debugging**: `step_mode:=true` blocca le transizioni FSM automatiche. Conferma con tasto `n` o pulsante STEP.
-- **Ricerca ibrida 360°**: Spot + braccio coordinati in SEARCHING. 18 posizioni Spot (6 yaw × 3 pitch, 360° completi). Braccio esplora con 7 pose QP-based in loop (SEARCH_GRID mode, δ=0.15, safe joint limits). Lock ibrido: Orbbec diretto o RealSense semi-lock (guida Spot, braccio congelato, 3s finestra). Lock confidence: 70%.
-- **Nuovi stati FSM**: SEMI_LOCKING (braccio in pausa, Orbbec cerca) e LOCKING (braccio in home, 5 campioni in parallelo, tolleranza 1s assenza Orbbec, rientro senza azzerare posizione).
-- **FSM a 10 Hz** (era 5 Hz). SEMI_LOCKING: early exit se RealSense perde torso.
-- **QP Controller — 3 modalità**: SEARCH_GRID, LOOKAT, SCAN_SEQ. Arm-only, Spot mai controllato dal QP.
+- **Ricerca ibrida 360°**: Spot + braccio coordinati in SEARCHING. 18 posizioni Spot (6 yaw × 3 pitch). Braccio esplora con 9 pose Cartesiane in loop (ACTIVE_SEARCH, sweep Y ±0.20m, rotazione polso ±15°). Semi-lock: RealSense triggera da `ESTIMATING` (basta vedere keypoint, anche solo gambe). WBC spento immediatamente all'ingresso in LOCKING. PRE_APPROACH con timeout 5s.
+- **QP Controller — 3 modalità**: ACTIVE_SEARCH, LOOKAT, PERCEPTUAL_SCAN. Arm-only.
 - **Spot P-controller rimosso dal QP**. Spot mosso solo da navigatore e coordinator.
-- **wbc_approach_scanner deprecato** (stub). Tutta la logica nel QP controller.
-- **wbc_math.py**: `damped_pinv()`, `null_space_projector()`. Vecchie `wbc_split` deprecated.
 - **Paper reframing**: Whole-Body Active Perception for Emergency Assessment.
 
 ---
