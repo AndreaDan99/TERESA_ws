@@ -739,14 +739,6 @@ class WBCCoordinatorNode(Node):
     def _tick_pre_approach(self) -> None:
         self._pub_goal.publish(self._filtered_goal())
 
-        # Step mode: "n" skips RealSense LOCKED requirement
-        if self._step_mode and self._step_confirmed:
-            self._step_confirmed = False
-            self.get_logger().info('[STEP] PRE_APPROACH → APPROACHING (confirmed)')
-            self._pub_spot_ctrl.publish(Bool(data=False))
-            self._set_state(CoordState.APPROACHING)
-            return
-
         # Wait for 5 consecutive RealSense LOCKED ticks
         if self._torso_tracker_state == 'LOCKED':
             self._torso_detected_ticks += 1
@@ -1138,7 +1130,9 @@ class WBCCoordinatorNode(Node):
         if self._step_mode and not force:
             skip_gate = (
                 (self._state == CoordState.IDLE and new_state == CoordState.SEARCHING) or
-                new_state in (CoordState.IDLE, CoordState.WAITING_TF)
+                new_state in (CoordState.IDLE, CoordState.WAITING_TF) or
+                (self._state == CoordState.SEMI_LOCKING and new_state == CoordState.SEARCHING) or
+                (self._state == CoordState.LOCKING and new_state == CoordState.SEARCHING)
             )
             if not skip_gate:
                 self._step_pending_state = new_state
