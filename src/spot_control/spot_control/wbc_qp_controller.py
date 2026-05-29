@@ -9,9 +9,9 @@ Modes (selected automatically from /wbc/state):
 
 State transitions:
   SEARCHING     → _start_active_search()
-  SEMI_LOCKING  → _pause_search()   (blocca il braccio, Orbbec cerca)
+  SEMI_LOCKING  → _end_search() (braccio in LOOKAT, traccia torso mentre Spot ruota)
   LOCKING       → _end_search() + _send_home()
-  SEARCHING (ripresa) → _resume_search()
+  SEARCHING (ripresa) → _start_active_search() (rigenera griglia)
 """
 
 import math
@@ -157,7 +157,6 @@ class WBCQPControllerNode(Node):
         self._tf_ready       = False
         self._mode           = 'LOOKAT'   # 'LOOKAT' | 'PERCEPTUAL_SCAN' | 'ACTIVE_SEARCH'
         self._wbc_state      = ''
-        self._search_paused  = False     # True when paused for SEMI_LOCKING
 
         # ── Scan state ────────────────────────────────────────────────────
         self._scan_scanner: BodySearchScanner | None = None
@@ -220,13 +219,11 @@ class WBCQPControllerNode(Node):
         self._wbc_state = msg.data
 
         if msg.data == 'SEARCHING':
-            if prev == 'SEMI_LOCKING':
-                self._resume_search()
-            elif prev != 'SEARCHING':
+            if prev != 'SEARCHING':
                 self._start_active_search()
         elif msg.data == 'SEMI_LOCKING' and self._mode == 'ACTIVE_SEARCH':
-            self._pause_search()
-        elif msg.data == 'LOCKING' and self._mode == 'ACTIVE_SEARCH':
+            self._end_search()
+        elif msg.data == 'LOCKING':
             self._end_search()
             self._send_home()
         elif msg.data == 'APPROACHING' and prev != 'APPROACHING':
@@ -288,8 +285,7 @@ class WBCQPControllerNode(Node):
             self._tick_perceptual_scan()
             return
         if self._mode == 'ACTIVE_SEARCH':
-            if not self._search_paused:
-                self._tick_active_search()
+            self._tick_active_search()
             return
         # LOOKAT mode
         self._tick_lookat()
@@ -486,7 +482,6 @@ class WBCQPControllerNode(Node):
             return
 
         self._mode = 'ACTIVE_SEARCH'
-        self._search_paused = False
         self._scan_ik_done = False
         self._scan_data_queue.clear()
         self._scan_scanner = BodySearchScanner(
@@ -498,7 +493,6 @@ class WBCQPControllerNode(Node):
             stability_k=SCAN_STABILITY_K,
         )
         self._scan_scanner.reset()
-        self._pub_tracker_scan.publish(Bool(data=True))
         self.get_logger().info(
             f'ACTIVE_SEARCH: {len(poses)} Cartesian poses '
             f'(step={self._cartesian_step:.2f}m, wide={self._cartesian_step_wide:.2f}m, '
@@ -525,16 +519,8 @@ class WBCQPControllerNode(Node):
             self._scan_scanner = None
             self._start_active_search()
 
-    def _pause_search(self) -> None:
-        self._search_paused = True
-        self._pub_en.publish(Bool(data=False))
-
-    def _resume_search(self) -> None:
-        self._search_paused = False
-
     def _end_search(self) -> None:
         self._mode = 'LOOKAT'
-        self._search_paused = False
         self._pub_tracker_scan.publish(Bool(data=False))
         self._pub_en.publish(Bool(data=False))
         self._scan_scanner = None

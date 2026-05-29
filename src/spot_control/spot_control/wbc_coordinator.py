@@ -172,8 +172,11 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('search_yaw_steps',             6)     # posizioni = 360°
         self.declare_parameter('search_pitch_angles',       [0.0, 0.087, 0.17])  # 0°,5°,10°
         self.declare_parameter('search_dwell',                  15.0)  # [s] attesa per posizione
-        self.declare_parameter('search_semi_lock_pause',       3.0)   # [s] attesa per Orbbec
-        self.declare_parameter('search_lock_confidence',        0.85)
+        self.declare_parameter('search_semi_lock_dwell',         3.0)   # [s] Orbbec dwell dopo settle
+        self.declare_parameter('search_semi_lock_settle_timeout', 5.0)   # [s] timeout settle Spot
+        self.declare_parameter('search_semi_lock_yaw_tol',        0.05)  # [rad] ≈3° tolleranza yaw
+        self.declare_parameter('search_semi_lock_pitch_tol',      0.03)  # [rad] ≈2° tolleranza pitch
+        self.declare_parameter('search_lock_confidence',          0.85)
         self.declare_parameter('search_lock_samples',           5)
 
         # FAST body pose optimization
@@ -209,7 +212,10 @@ class WBCCoordinatorNode(Node):
         self._search_yaw_steps      = int(p('search_yaw_steps'))
         self._search_pitch_angles   = self._read_float_array('search_pitch_angles')
         self._search_dwell          = float(p('search_dwell'))
-        self._search_semi_lock_pause = float(p('search_semi_lock_pause'))
+        self._search_semi_lock_dwell          = float(p('search_semi_lock_dwell'))
+        self._search_semi_lock_settle_timeout = float(p('search_semi_lock_settle_timeout'))
+        self._search_semi_lock_yaw_tol        = float(p('search_semi_lock_yaw_tol'))
+        self._search_semi_lock_pitch_tol      = float(p('search_semi_lock_pitch_tol'))
         self._search_lock_confidence = float(p('search_lock_confidence'))
         self._search_lock_samples   = int(p('search_lock_samples'))
         self._pre_approach_duration = float(p('pre_approach_duration'))
@@ -254,6 +260,14 @@ class WBCCoordinatorNode(Node):
         self._torso_tracker_state: str = ''           # LOCKED / TRACKING / IDLE
         self._torso_detected_ticks: int = 0           # consecutive LOCKED ticks
         self._torso_pos: PoseStamped | None = None    # ultima posa torso da RealSense
+
+        # SEMI_LOCKING settle tracking
+        self._semi_lock_start_yaw: float = 0.0
+        self._semi_lock_start_pitch: float = 0.0
+        self._semi_lock_target_yaw: float = 0.0
+        self._semi_lock_target_pitch: float = 0.0
+        self._semi_lock_settle_done: bool = False
+        self._semi_lock_dwell_start: rclpy.time.Time | None = None
 
         # FAST body pose optimization + WS_EXTENSION
         self._fast_points: PoseArray | None = None
@@ -550,18 +564,45 @@ class WBCCoordinatorNode(Node):
         self._tick_search_positions()
 
     def _tick_semi_locking(self) -> None:
-        """Spot ruotato+inclinato, braccio fermo, Orbbec cerca."""
-        elapsed = (self.get_clock().now() - self._search_position_start).nanoseconds * 1e-9 \
-            if self._search_position_start is not None else 0.0
+        """Spot ruota+inclina verso corpo, braccio LOOKAT. Settle via TF → dwell Orbbec."""
+        now_ns = self.get_clock().now().nanoseconds * 1e-9
 
-        # RealSense ha perso il torso → torna subito a cercare
-        if self._torso_tracker_state not in ('ESTIMATING', 'LOCKED'):
-            self.get_logger().info('Semi-lock: RealSense lost torso → resuming search')
-            self._search_position_idx = self._search_saved_idx
-            self._search_position_start = None
-            self._set_state(CoordState.SEARCHING)
+        if self._torso_pos is not None:
+            self._pub_goal.publish(self._torso_pos)
+
+        # ── Fase A — Attendi che Spot completi la rotazione (TF-based) ──
+        if not self._semi_lock_settle_done:
+            body_tf = self._tf_lookup(self._odom_frame, self._body_frame)
+            if body_tf is not None:
+                from tf_transformations import euler_from_quaternion
+                q = body_tf.transform.rotation
+                _, cur_pitch, cur_yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
+
+                dy = cur_yaw - self._semi_lock_start_yaw
+                dp = cur_pitch - self._semi_lock_start_pitch
+
+                yaw_ok = abs(dy - self._semi_lock_target_yaw) < self._search_semi_lock_yaw_tol
+                pitch_ok = abs(dp - self._semi_lock_target_pitch) < self._search_semi_lock_pitch_tol
+
+                if yaw_ok and pitch_ok:
+                    self._semi_lock_settle_done = True
+                    self._semi_lock_dwell_start = self.get_clock().now()
+                    self.get_logger().info(
+                        f'Semi-lock: Spot settled (Δyaw={math.degrees(dy):.1f}° '
+                        f'Δpitch={math.degrees(dp):.1f}°) → Orbbec dwell {self._search_semi_lock_dwell:.1f}s')
+                    return
+
+            elapsed = now_ns - self._search_position_start.nanoseconds * 1e-9 \
+                if self._search_position_start is not None else 0.0
+            if elapsed >= self._search_semi_lock_settle_timeout:
+                self._semi_lock_settle_done = True
+                self._semi_lock_dwell_start = self.get_clock().now()
+                self.get_logger().warn(
+                    f'Semi-lock: settle timeout ({self._search_semi_lock_settle_timeout:.1f}s) '
+                    f'→ dwell anyway')
             return
 
+        # ── Fase B — Spot è fermo e allineato, Orbbec cerca LYING ──
         if self._posture == 'LYING' \
                 and self._confidence >= self._search_lock_confidence \
                 and self._approach_point_odom is not None:
@@ -572,8 +613,10 @@ class WBCCoordinatorNode(Node):
             self._set_state(CoordState.LOCKING)
             return
 
-        if elapsed >= self._search_semi_lock_pause:
-            self.get_logger().info('Semi-lock timeout → resuming search')
+        dwell_elapsed = now_ns - self._semi_lock_dwell_start.nanoseconds * 1e-9 \
+            if self._semi_lock_dwell_start is not None else 0.0
+        if dwell_elapsed >= self._search_semi_lock_dwell:
+            self.get_logger().info('Semi-lock dwell timeout → resuming search')
             self._search_position_idx = self._search_saved_idx
             self._search_position_start = None
             self._set_state(CoordState.SEARCHING)
@@ -610,7 +653,8 @@ class WBCCoordinatorNode(Node):
             self._set_state(CoordState.SEARCHING)
 
     def _check_realsense_guidance(self) -> bool:
-        """Ruota e inclina Spot verso il torso rilevato dalla RealSense."""
+        """Ruota e inclina Spot verso il corpo rilevato dalla RealSense.
+        Salva orientamento corrente e target per il TF-based settle in SEMI_LOCKING."""
         if self._torso_tracker_state not in ('ESTIMATING', 'LOCKED') \
                 or self._torso_pos is None:
             return False
@@ -619,17 +663,19 @@ class WBCCoordinatorNode(Node):
         if body_tf is None:
             return False
 
-        # Trasforma torso da world/link00 a body frame
+        from tf_transformations import euler_from_quaternion
+        q = body_tf.transform.rotation
+        roll, start_pitch, start_yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
+
         torso_body = self._transform_to_body_frame(self._torso_pos)
         if torso_body is None:
             return False
 
-        # Orbbec in body frame: (0.30, 0, 0.15)
         dir_vec = np.array([torso_body[0] - 0.30, torso_body[1], torso_body[2] - 0.15])
         horiz = math.sqrt(dir_vec[0]**2 + dir_vec[1]**2)
 
         target_pitch = float(np.clip(math.atan2(-dir_vec[2], horiz), 0.0, 0.26))
-        target_yaw = math.atan2(dir_vec[1], dir_vec[0])
+        target_yaw = float(math.atan2(dir_vec[1], dir_vec[0]))
 
         self.get_logger().info(
             f'Semi-lock (RealSense): torso_body=({torso_body[0]:.2f},{torso_body[1]:.2f},{torso_body[2]:.2f}) '
@@ -637,7 +683,13 @@ class WBCCoordinatorNode(Node):
 
         self._search_saved_idx = self._search_position_idx
         self._search_position_start = self.get_clock().now()
-        self._set_body_pose(self._search_body_height, float(target_pitch), float(target_yaw))
+        self._semi_lock_start_yaw = float(start_yaw)
+        self._semi_lock_start_pitch = float(start_pitch)
+        self._semi_lock_target_yaw = target_yaw
+        self._semi_lock_target_pitch = target_pitch
+        self._semi_lock_settle_done = False
+        self._semi_lock_dwell_start = None
+        self._set_body_pose(self._search_body_height, target_pitch, target_yaw)
         self._set_state(CoordState.SEMI_LOCKING)
         return True
 
