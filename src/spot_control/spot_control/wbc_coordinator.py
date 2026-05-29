@@ -265,6 +265,8 @@ class WBCCoordinatorNode(Node):
         self._search_initial_yaw: float = 0.0         # yaw Spot all'ingresso in SEARCHING [rad, odom]
         self._search_rotating: bool = False           # True mentre ruota verso il target yaw
         self._search_target_yaw: float = 0.0          # yaw assoluto desiderato [rad, odom]
+        self._search_pitch: float = 0.0               # pitch corrente della posizione
+        self._last_body_tick: int = 0                 # contatore tick per refresh body_pose
         self._lock_lost_ticks: int = 0                # tick consecutivi senza Orbbec in LOCKING
         self._torso_tracker_state: str = ''           # LOCKED / TRACKING / IDLE
         self._torso_detected_ticks: int = 0           # consecutive LOCKED ticks
@@ -564,8 +566,8 @@ class WBCCoordinatorNode(Node):
             self._set_state(CoordState.LOCKING)
             return
 
-        # FASE 3 — Check semi-lock da RealSense (ESTIMATING o LOCKED: basta vedere keypoint)
-        if self._torso_tracker_state in ('ESTIMATING', 'LOCKED') \
+        # FASE 3 — Check semi-lock da RealSense (GUIDING, ESTIMATING o LOCKED)
+        if self._torso_tracker_state in ('GUIDING', 'ESTIMATING', 'LOCKED') \
                 and self._torso_pos is not None:
             if self._check_realsense_guidance():
                 return
@@ -728,10 +730,12 @@ class WBCCoordinatorNode(Node):
             if self._search_initial_yaw is None:
                 return    # TF not ready yet, try next tick
             pos = self._search_positions[self._search_position_idx]
+            self._search_pitch = pos['pitch']
             self._set_body_pose(self._search_body_height, pos['pitch'])
             self._search_target_yaw = normalize_angle(
                 self._search_initial_yaw + pos['yaw'])
             self._search_rotating = True
+            self._last_body_tick = 0
             self.get_logger().info(
                 f'Search pos {self._search_position_idx+1}/{len(self._search_positions)}: '
                 f'yaw={math.degrees(pos["yaw"]):.0f}° '
@@ -739,12 +743,24 @@ class WBCCoordinatorNode(Node):
                 f'(abs target={math.degrees(self._search_target_yaw):.0f}°)')
             return
 
+        self._last_body_tick += 1
+        refresh_body = (self._last_body_tick % 30 == 0)  # ogni 3s
+
         # ── Rotating: P-control yaw via cmd_vel.angular.z ──
         if self._search_rotating:
             cur_yaw = self._get_current_yaw()
             if cur_yaw is None:
+                if hasattr(self, '_last_yaw_error'):
+                    t = Twist()
+                    t.angular.z = float(np.clip(
+                        self._search_yaw_kp * self._last_yaw_error,
+                        -self._search_max_angular_vel, self._search_max_angular_vel))
+                    self._pub_cmd_vel.publish(t)
+                    if refresh_body:
+                        self._set_body_pose(self._search_body_height, self._search_pitch)
                 return
             error = normalize_angle(self._search_target_yaw - cur_yaw)
+            self._last_yaw_error = error
             if abs(error) < self._search_yaw_tolerance:
                 self._pub_cmd_vel.publish(Twist())
                 self._search_rotating = False
@@ -759,9 +775,13 @@ class WBCCoordinatorNode(Node):
                 self._search_yaw_kp * error,
                 -self._search_max_angular_vel, self._search_max_angular_vel))
             self._pub_cmd_vel.publish(t)
+            if refresh_body:
+                self._set_body_pose(self._search_body_height, self._search_pitch)
             return
 
         # ── Dwelling ──
+        if refresh_body:
+            self._set_body_pose(self._search_body_height, self._search_pitch)
         elapsed = now_ns - self._search_position_start.nanoseconds * 1e-9
         if elapsed >= self._search_dwell:
             self._search_position_idx += 1
