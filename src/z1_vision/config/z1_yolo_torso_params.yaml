@@ -33,3 +33,22 @@ z1_yolo_torso_tracker:
     #                   attivo quando i fianchi non sono rilevati (es. persona seduta)
     use_face_fallback:            true
     chest_offset_from_shoulder:   0.15   # [m] distanza shoulder_mid → centro petto
+
+    # ── Lock state ───────────────────────────────────────────────────
+    min_detection_conf:           0.6
+    min_keypoints:                3
+    lock_stable_frames:           20
+    lock_variance_thr:            0.005
+    lock_stable_checks:           5
+    lock_drift_thr:               0.25
+    lock_drift_frames:            5
+
+    # ── Interpolazione ──────────────────────────────────────────────
+    tracking_speed:  0.05
+
+    # ── Scan mode ───────────────────────────────────────────────────
+    scan_min_frames:  8
+
+    # ── Guidance mode (SEARCHING: any keypoint → GUIDING) ───────────
+    guidance_min_conf:       0.3      # conf minima per considerare un keypoint
+    guidance_recovery_frames: 15      # frame persi prima di tornare IDLE

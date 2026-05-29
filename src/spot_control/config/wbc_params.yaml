@@ -86,6 +86,9 @@ wbc_coordinator:
     search_yaw_steps: 6                           # posizioni = 360° (6 × 60°)
     search_pitch_angles: [0.0, 0.087, 0.17]       # [rad] 0°, 5°, 10°
     search_dwell: 15.0                             # [s] Spot fermo a ogni posizione
+    search_yaw_kp: 0.8                            # P-gain for yaw rotation via cmd_vel.angular.z
+    search_yaw_tolerance: 0.08                    # [rad] ~4.6° tolleranza per yaw raggiunto
+    search_max_angular_vel: 0.5                   # [rad/s] max angular velocity for search rotation
     search_semi_lock_dwell: 3.0                  # [s] Orbbec osserva dopo settle completato
     search_semi_lock_settle_timeout: 5.0         # [s] timeout se Spot non raggiunge il target
     search_semi_lock_yaw_tol: 0.05               # [rad] tolleranza yaw per considerare settle OK

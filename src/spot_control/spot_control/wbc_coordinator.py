@@ -172,6 +172,9 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('search_yaw_steps',             6)     # posizioni = 360°
         self.declare_parameter('search_pitch_angles',       [0.0, 0.087, 0.17])  # 0°,5°,10°
         self.declare_parameter('search_dwell',                  15.0)  # [s] attesa per posizione
+        self.declare_parameter('search_yaw_kp',                    0.8)   # P-gain per rotazione yaw
+        self.declare_parameter('search_yaw_tolerance',             0.08)  # [rad] ~4.6° tolleranza yaw raggiunto
+        self.declare_parameter('search_max_angular_vel',          0.5)   # [rad/s] max velocità angolare search
         self.declare_parameter('search_semi_lock_dwell',         3.0)   # [s] Orbbec dwell dopo settle
         self.declare_parameter('search_semi_lock_settle_timeout', 5.0)   # [s] timeout settle Spot
         self.declare_parameter('search_semi_lock_yaw_tol',        0.05)  # [rad] ≈3° tolleranza yaw
@@ -212,6 +215,9 @@ class WBCCoordinatorNode(Node):
         self._search_yaw_steps      = int(p('search_yaw_steps'))
         self._search_pitch_angles   = self._read_float_array('search_pitch_angles')
         self._search_dwell          = float(p('search_dwell'))
+        self._search_yaw_kp         = float(p('search_yaw_kp'))
+        self._search_yaw_tolerance  = float(p('search_yaw_tolerance'))
+        self._search_max_angular_vel = float(p('search_max_angular_vel'))
         self._search_semi_lock_dwell          = float(p('search_semi_lock_dwell'))
         self._search_semi_lock_settle_timeout = float(p('search_semi_lock_settle_timeout'))
         self._search_semi_lock_yaw_tol        = float(p('search_semi_lock_yaw_tol'))
@@ -256,6 +262,9 @@ class WBCCoordinatorNode(Node):
         self._search_position_idx: int = 0
         self._search_position_start: rclpy.time.Time | None = None
         self._search_saved_idx: int = 0               # idx da riprendere dopo semi-lock
+        self._search_initial_yaw: float = 0.0         # yaw Spot all'ingresso in SEARCHING [rad, odom]
+        self._search_rotating: bool = False           # True mentre ruota verso il target yaw
+        self._search_target_yaw: float = 0.0          # yaw assoluto desiderato [rad, odom]
         self._lock_lost_ticks: int = 0                # tick consecutivi senza Orbbec in LOCKING
         self._torso_tracker_state: str = ''           # LOCKED / TRACKING / IDLE
         self._torso_detected_ticks: int = 0           # consecutive LOCKED ticks
@@ -301,6 +310,7 @@ class WBCCoordinatorNode(Node):
         self._pub_dbg_marker = self.create_publisher(Marker, '/wbc/debug_marker', 10)
         self._pub_body_ready = self.create_publisher(Bool, '/wbc/body_ready', 10)
         self._pub_step_pending = self.create_publisher(String, '/wbc/step_pending', 10)
+        self._pub_guidance = self.create_publisher(Bool, '/tracker_guidance_mode', 10)
         self.create_subscription(Bool, '/wbc/step_confirm', self._cb_step_confirm, 10)
 
         self.create_timer(0.1, self._tick)   # 10 Hz FSM
@@ -570,7 +580,7 @@ class WBCCoordinatorNode(Node):
         if self._torso_pos is not None:
             self._pub_goal.publish(self._torso_pos)
 
-        # ── Fase A — Attendi che Spot completi la rotazione (TF-based) ──
+        # ── Fase A — Ruota Spot via cmd_vel.angular.z, attendi settle TF ──
         if not self._semi_lock_settle_done:
             body_tf = self._tf_lookup(self._odom_frame, self._body_frame)
             if body_tf is not None:
@@ -585,16 +595,27 @@ class WBCCoordinatorNode(Node):
                 pitch_ok = abs(dp - self._semi_lock_target_pitch) < self._search_semi_lock_pitch_tol
 
                 if yaw_ok and pitch_ok:
+                    self._pub_cmd_vel.publish(Twist())
                     self._semi_lock_settle_done = True
                     self._semi_lock_dwell_start = self.get_clock().now()
                     self.get_logger().info(
                         f'Semi-lock: Spot settled (Δyaw={math.degrees(dy):.1f}° '
                         f'Δpitch={math.degrees(dp):.1f}°) → Orbbec dwell {self._search_semi_lock_dwell:.1f}s')
                     return
+                elif not yaw_ok:
+                    error = normalize_angle(
+                        (self._semi_lock_start_yaw + self._semi_lock_target_yaw)
+                        - cur_yaw)
+                    t = Twist()
+                    t.angular.z = float(np.clip(
+                        self._search_yaw_kp * error,
+                        -self._search_max_angular_vel, self._search_max_angular_vel))
+                    self._pub_cmd_vel.publish(t)
 
             elapsed = now_ns - self._search_position_start.nanoseconds * 1e-9 \
                 if self._search_position_start is not None else 0.0
             if elapsed >= self._search_semi_lock_settle_timeout:
+                self._pub_cmd_vel.publish(Twist())
                 self._semi_lock_settle_done = True
                 self._semi_lock_dwell_start = self.get_clock().now()
                 self.get_logger().warn(
@@ -689,7 +710,7 @@ class WBCCoordinatorNode(Node):
         self._semi_lock_target_pitch = target_pitch
         self._semi_lock_settle_done = False
         self._semi_lock_dwell_start = None
-        self._set_body_pose(self._search_body_height, target_pitch, target_yaw)
+        self._set_body_pose(self._search_body_height, target_pitch)
         self._set_state(CoordState.SEMI_LOCKING)
         return True
 
@@ -700,19 +721,58 @@ class WBCCoordinatorNode(Node):
             self._set_state(CoordState.IDLE, force=True)
             return
 
-        if self._search_position_start is None:
+        now_ns = self.get_clock().now().nanoseconds * 1e-9
+
+        # ── New position: set height+pitch, begin yaw rotation via cmd_vel ──
+        if self._search_position_start is None and not self._search_rotating:
             pos = self._search_positions[self._search_position_idx]
-            self._set_body_pose(self._search_body_height, pos['pitch'], pos['yaw'])
-            self._search_position_start = self.get_clock().now()
+            self._set_body_pose(self._search_body_height, pos['pitch'])
+            self._search_target_yaw = normalize_angle(
+                self._search_initial_yaw + pos['yaw'])
+            self._search_rotating = True
             self.get_logger().info(
                 f'Search pos {self._search_position_idx+1}/{len(self._search_positions)}: '
-                f'yaw={math.degrees(pos["yaw"]):.0f}° pitch={math.degrees(pos["pitch"]):.0f}°')
+                f'yaw={math.degrees(pos["yaw"]):.0f}° '
+                f'pitch={math.degrees(pos["pitch"]):.0f}° '
+                f'(abs target={math.degrees(self._search_target_yaw):.0f}°)')
             return
 
-        elapsed = (self.get_clock().now() - self._search_position_start).nanoseconds * 1e-9
+        # ── Rotating: P-control yaw via cmd_vel.angular.z ──
+        if self._search_rotating:
+            cur_yaw = self._get_current_yaw()
+            if cur_yaw is None:
+                return
+            error = normalize_angle(self._search_target_yaw - cur_yaw)
+            if abs(error) < self._search_yaw_tolerance:
+                self._pub_cmd_vel.publish(Twist())
+                self._search_rotating = False
+                self._search_position_start = self.get_clock().now()
+                self.get_logger().info(
+                    f'Search pos {self._search_position_idx+1}: yaw reached '
+                    f'(error={math.degrees(error):.1f}°) → dwell {self._search_dwell:.0f}s')
+                return
+
+            t = Twist()
+            t.angular.z = float(np.clip(
+                self._search_yaw_kp * error,
+                -self._search_max_angular_vel, self._search_max_angular_vel))
+            self._pub_cmd_vel.publish(t)
+            self._set_body_pose(self._search_body_height,
+                                self._search_positions[self._search_position_idx]['pitch'])
+            return
+
+        # ── Dwelling ──
+        elapsed = now_ns - self._search_position_start.nanoseconds * 1e-9
         if elapsed >= self._search_dwell:
             self._search_position_idx += 1
             self._search_position_start = None
+
+    def _get_current_yaw(self) -> float | None:
+        """Return current Spot yaw in odom frame [rad], or None if TF unavailable."""
+        body_tf = self._tf_lookup(self._odom_frame, self._body_frame)
+        if body_tf is None:
+            return None
+        return _yaw_from_quat(body_tf.transform.rotation)
 
     def _approach_point_odom_pos(self) -> np.ndarray:
         p = self._approach_point_odom.pose.position
@@ -1150,29 +1210,42 @@ class WBCCoordinatorNode(Node):
         self.get_logger().info(f'WBC FSM: {self._state} → {new_state}')
         if new_state == CoordState.WAITING_TF:
             self._set_wbc_enabled(False)
+            self._pub_cmd_vel.publish(Twist())
+            self._pub_guidance.publish(Bool(data=False))
             self._set_body_pose(0.0)
         if new_state == CoordState.IDLE:
             self._quality.reset()
+            self._pub_cmd_vel.publish(Twist())
+            self._pub_guidance.publish(Bool(data=False))
             self._set_body_pose(0.0)   # ripristina altezza nominale
         if new_state == CoordState.SEARCHING:
+            self._pub_guidance.publish(Bool(data=True))
             old = self._state
             self._search_lock_buffer = None
             self._set_wbc_enabled(True)
             if old == CoordState.IDLE:
-                # Fresh start: full reset
+                # Fresh start: full reset, save initial yaw
                 self._search_start = self.get_clock().now()
+                self._search_initial_yaw = self._get_current_yaw()
                 self._search_positions = self._build_search_sequence()
                 self._search_position_idx = 0
                 self._search_position_start = None
                 self._search_saved_idx = 0
-                pos0 = self._search_positions[0]
-                self._set_body_pose(self._search_body_height, pos0['pitch'], pos0['yaw'])
+                self._search_rotating = False
+            else:
+                # Re-entry: stop residual cmd_vel, resume from current position
+                self._pub_cmd_vel.publish(Twist())
             # else: re-entry from LOCKING or SEMI_LOCKING — resume, don't rebuild
         if new_state == CoordState.SCANNING:
             self._set_body_pose(self._handoff_body_height)
         if new_state == CoordState.LOCKING:
+            self._pub_cmd_vel.publish(Twist())
+            self._pub_guidance.publish(Bool(data=False))
+            self._search_rotating = False
             self._set_wbc_enabled(True)
         if new_state == CoordState.PRE_APPROACH:
+            self._pub_cmd_vel.publish(Twist())
+            self._pub_guidance.publish(Bool(data=False))
             self._set_body_pose(0.0, 0.0)
             self._torso_detected_ticks = 0
         self._state = new_state

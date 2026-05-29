@@ -42,6 +42,7 @@ STATE_COLORS = {
     'IDLE':       ColorRGBA(r=0.5, g=0.5, b=0.5, a=0.5),  # grigio
     'ESTIMATING': ColorRGBA(r=1.0, g=0.5, b=0.0, a=0.9),  # arancione
     'LOCKED':     ColorRGBA(r=0.0, g=1.0, b=0.0, a=0.9),  # verde
+    'GUIDING':    ColorRGBA(r=1.0, g=1.0, b=0.0, a=0.9),  # giallo
     'SCANNING':   ColorRGBA(r=0.0, g=1.0, b=1.0, a=0.9),  # ciano (scan mode)
 }
 
@@ -90,6 +91,10 @@ class Z1YoloTorsoTracker(Node):
         self.declare_parameter('sync_slop',          0.10)   # secondi tolleranza sync timestamp
         self.declare_parameter('sync_queue_size',    10)
 
+        # ── Parametri guidance (SEARCHING) ──────────────────────────
+        self.declare_parameter('guidance_min_conf',      0.3)    # conf minima in guidance mode
+        self.declare_parameter('guidance_recovery_frames', 15)   # frame persi prima di tornare IDLE
+
         # ── Leggi parametri ────────────────────────────────────────
         self.conf_thr           = float(self.get_parameter('conf_thr').value)
         self.max_depth          = float(self.get_parameter('max_depth').value)
@@ -112,6 +117,8 @@ class Z1YoloTorsoTracker(Node):
         sync_slop               = float(self.get_parameter('sync_slop').value)
         sync_queue_size         = int(self.get_parameter('sync_queue_size').value)
         self._scan_min_frames   = int(self.get_parameter('scan_min_frames').value)
+        self._guidance_min_conf = float(self.get_parameter('guidance_min_conf').value)
+        self._guidance_recovery = int(self.get_parameter('guidance_recovery_frames').value)
 
         device = self.get_parameter('device').value
 
@@ -157,6 +164,10 @@ class Z1YoloTorsoTracker(Node):
         self.sub_tracker_reset = self.create_subscription(
             Bool, '/tracker_reset', self.cb_tracker_reset, 10)
 
+        # ── Guidance mode: True in SEARCHING → any keypoint triggers GUIDING ──
+        self.sub_guidance_mode = self.create_subscription(
+            Bool, '/tracker_guidance_mode', self._cb_guidance_mode, 10)
+
         # ── Scan mode: comandi dalla FSM ────────────────────────────
         # /tracker_scan_mode True  → attiva scan mode
         # /tracker_scan_mode False → disattiva scan mode (reset a IDLE normale)
@@ -193,6 +204,11 @@ class Z1YoloTorsoTracker(Node):
         self.drift_counter    = 0
         self.position_history = []
         self.locked_target    = None  # world frame
+
+        # ── Stato guidance mode (SEARCHING) ─────────────────────────
+        self._guidance_mode    = False
+        self._guidance_counter = 0     # conteggio frame validi in GUIDING
+        self._guidance_missed  = 0     # conteggio frame persi in GUIDING
 
         # ── Stato scan mode ────────────────────────────────────────
         # _scan_mode:  True quando la FSM ha attivato la modalità scan
@@ -241,7 +257,21 @@ class Z1YoloTorsoTracker(Node):
         self.drift_counter    = 0
         self.recovery_counter = 0
         self.kf.reset()
+        self._guidance_counter = 0
+        self._guidance_missed  = 0
         self.get_logger().info(f'🔄 Tracker reset: {prev} → IDLE (richiesto da FSM)')
+
+    def _cb_guidance_mode(self, msg: Bool):
+        self._guidance_mode = msg.data
+        if msg.data:
+            self._guidance_counter = 0
+            self._guidance_missed  = 0
+            self.get_logger().info('🎯 Guidance mode ON (any keypoint → GUIDING)')
+        else:
+            if self.state == 'GUIDING':
+                self.state = 'IDLE'
+                self._publish_target_world(np.zeros(3))  # clear stale target
+            self.get_logger().info('🎯 Guidance mode OFF')
 
     def _cb_scan_mode(self, msg: Bool):
         """
@@ -374,6 +404,16 @@ class Z1YoloTorsoTracker(Node):
             self.get_logger().error(f'YOLO fallita: {e}')
             return
 
+        # ── Guidance mode (SEARCHING): any keypoint → GUIDING ──────
+        if self._guidance_mode and not self._scan_mode:
+            torso_raw, kp_3d, n_valid, avg_conf = self._extract_guidance(results, depth)
+            self._update_guidance(torso_raw, n_valid, avg_conf, rgb_msg.header)
+            target = (self._camera_to_world(torso_raw)
+                      if torso_raw is not None else None)
+            if target is not None:
+                self._publish_markers(target, kp_3d, rgb_msg.header)
+            return
+
         # ── Estrai misura torso (camera frame) ────────────────────
         torso_raw, kp_3d, n_valid, avg_conf = self._extract_torso(results, depth)
 
@@ -469,6 +509,69 @@ class Z1YoloTorsoTracker(Node):
                 return torso_raw, kp_3d, n_valid, avg_conf
 
         return None, kp_3d, 0, 0.0
+
+    # ──────────────────────────────────────────────────────────────
+    def _extract_guidance(self, results, depth):
+        """Extract centroid of ANY visible keypoint for rough body guidance."""
+        if len(results) == 0 or results[0].keypoints is None:
+            return None, {}, 0, 0.0
+        kp_data = results[0].keypoints
+        if kp_data.xy is None or kp_data.xy.shape[0] == 0:
+            return None, {}, 0, 0.0
+
+        kp_xy   = kp_data.xy.cpu().numpy()[0]
+        kp_conf = kp_data.conf.cpu().numpy()[0]
+
+        K      = np.array(self.cam_info.k).reshape(3, 3)
+        fx, fy = K[0, 0], K[1, 1]
+        cx, cy = K[0, 2], K[1, 2]
+
+        kp_3d, kp_3d_conf = {}, {}
+        for idx in range(min(17, len(kp_conf))):
+            if kp_conf[idx] < self._guidance_min_conf:
+                continue
+            u, v = int(kp_xy[idx, 0]), int(kp_xy[idx, 1])
+            if not (0 <= v < depth.shape[0] and 0 <= u < depth.shape[1]):
+                continue
+            d = self._get_depth_robust(depth, u, v, window=5)
+            if d is None:
+                continue
+            kp_3d[idx]      = [float((u - cx) * d / fx), float((v - cy) * d / fy), float(d)]
+            kp_3d_conf[idx] = float(kp_conf[idx])
+
+        if len(kp_3d) < 1:
+            return None, kp_3d, 0, 0.0
+
+        pts    = [kp_3d[i] for i in kp_3d]
+        confs  = [kp_3d_conf[i] for i in kp_3d]
+        return np.mean(pts, axis=0), kp_3d, len(pts), float(np.mean(confs))
+
+    # ──────────────────────────────────────────────────────────────
+    def _update_guidance(self, torso_raw, n_valid, avg_conf, header):
+        prev_state = self.state
+
+        if torso_raw is not None and n_valid >= 1:
+            self.state = 'GUIDING'
+            self._guidance_missed = 0
+            self._guidance_counter += 1
+
+            torso_world = self._camera_to_world(torso_raw)
+            if torso_world is not None:
+                self._publish_target_world(torso_world)
+        else:
+            if self.state == 'GUIDING':
+                self._guidance_missed += 1
+                if self._guidance_missed >= self._guidance_recovery:
+                    self.state = 'IDLE'
+                    self._guidance_counter = 0
+                    self.get_logger().info('Guidance lost → IDLE')
+
+        if self.state != prev_state:
+            self.get_logger().info(
+                f'🎯 Guidance: {prev_state} → {self.state} '
+                f'(kp={n_valid} conf={avg_conf:.2f})')
+
+        self.pub_tracker_state.publish(String(data=self.state))
 
     # ──────────────────────────────────────────────────────────────
     def _update_scan(self, torso_raw, n_valid, avg_conf):
@@ -572,6 +675,12 @@ class Z1YoloTorsoTracker(Node):
     # ──────────────────────────────────────────────────────────────
     def _update_state(self, torso_raw, n_valid, avg_conf, header):
         prev_state = self.state
+
+        # ── GUIDING (fallback se guidance mode è stato disattivato) ──
+        if self.state == 'GUIDING':
+            self.state = 'IDLE'
+            self._guidance_counter = 0
+            self._guidance_missed  = 0
 
         # ── IDLE ──────────────────────────────────────────────────
         if self.state == 'IDLE':

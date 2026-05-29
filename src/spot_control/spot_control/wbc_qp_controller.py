@@ -3,7 +3,7 @@
 WBC QP Controller — arm-only look-at + active-perception Cartesian scanning.
 
 Modes (selected automatically from /wbc/state):
-  ACTIVE_SEARCH  — SEARCHING:    5 Cartesian poses attorno a HOME_POS (loop infinito)
+  ACTIVE_SEARCH  — SEARCHING:    6 pose ad arco attorno a HOME_POS (loop infinito)
   LOOKAT         — PRE_APPROACH: ω_des orientamento + null-space joint centering
   PERCEPTUAL_SCAN — APPROACHING:  6 Cartesian poses verso target, multi-angolo
 
@@ -431,21 +431,20 @@ class WBCQPControllerNode(Node):
 
     def _gen_cartesian_search_grid(self) -> list[PoseStamped]:
         """
-        5 pose Cartesiane attorno a HOME_POS — orientamento fisso X_ee in avanti.
-        Sweep Y ±0.20m, Z +0.12m, X +0.12m. Il braccio resta sempre vicino alla home.
+        6 pose ad arco attorno a HOME_POS — orientamento fisso X_ee in avanti.
+        Sweep diagonale X+Y combinato, Z cresce al centro, mai X indietro.
         """
-        s = self._cartesian_step          # 0.12m
-        w = self._cartesian_step_wide     # 0.20m
-
         forward_quat = compute_ee_orientation_minrot(
             np.array([1.0, 0.0, 0.0]), HOME_ORI.tolist())
 
+        # Arco 3D: base Z=0.50, arco da sx a dx passando dal centro alto
         offsets = [
-            np.array([0,  0,  0]),      # HOME
-            np.array([0,  +w, 0]),      # +Y wide DX
-            np.array([0,  -w, 0]),      # -Y wide SX
-            np.array([0,  0,  +s]),     # +Z
-            np.array([+s, 0,  0]),      # +X avanti
+            np.array([0.0,   0.0,   0.06]),   # HOME  — centro retratto
+            np.array([+0.06, -0.12, 0.08]),   # sx-soft
+            np.array([+0.10, -0.18, 0.12]),   # sx-up
+            np.array([+0.08,  0.0,  0.14]),   # center-peak
+            np.array([+0.10, +0.18, 0.12]),   # dx-up
+            np.array([+0.06, +0.12, 0.08]),   # dx-soft
         ]
 
         poses = []
@@ -478,9 +477,8 @@ class WBCQPControllerNode(Node):
         )
         self._scan_scanner.reset()
         self.get_logger().info(
-            f'ACTIVE_SEARCH: {len(poses)} Cartesian poses '
-            f'(step={self._cartesian_step:.2f}m, wide={self._cartesian_step_wide:.2f}m, '
-            f'centered on HOME_POS, fixed forward)')
+            f'ACTIVE_SEARCH: {len(poses)} arc poses '
+            f'(Z 0.50→0.58, Y ±0.18, X +0.0→+0.1, fixed forward)')
 
     def _tick_active_search(self) -> None:
         if self._scan_scanner is None:
