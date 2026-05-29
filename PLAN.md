@@ -1,8 +1,573 @@
-# TERESA — Piano rifattorizzazione launch (Core + App)
+# TERESA — Piani futuri
+
+---
+
+# ⭐ Exposure Body Scanning (Sitting + Standing) — NUOVO
 
 ## Obiettivo
 
-Ridurre i 6 terminali attuali a 3, separando i driver hardware (Orbbec, RealSense, Z1) dalla logica applicativa (percezione, controllo, WBC). Il Core segnala quando tutto è attivo via `/core/ready`.
+Estendere TERESA per gestire pazienti **non supini**. Oggi il sistema cerca solo `LYING` (pancia in su) per FAST ultrasound.
+Con questa estensione, se il paziente è seduto a terra (`SITTING`) o in piedi (`STANDING`), il robot esegue una
+**scansione corporea completa** per rilevare ferite, bruciature ed emorragie visibili (copre la **"E"** di ABCDE — Exposure).
+
+La fase SEARCHING (18 posizioni Spot, Orbbec cerca il corpo) **rimane invariata**. La differenza è dopo il lock.
+
+## Architettura generale
+
+```
+SEARCHING (Orbbec trova corpo)
+    │
+    ├── posture == LYING ──► FAST ultrasound (percorso esistente, INVARIATO)
+    │    LOCKING → PRE_APPROACH → APPROACHING → SCANNING
+    │
+    └── posture in [SITTING, STANDING] ──► Exposure body scan (NUOVO)
+         LOCKING → PRE_APPROACH → APPROACHING → EXPOSURE_SCANNING
+```
+
+PRE_APPROACH e APPROACHING servono anche per l'exposure (Spot deve comunque navigare verso il paziente e pre-orientarsi).
+In APPROACHING non si attiva SCAN_SEQ (non servono le 11 pose QP per FAST), si attende solo handoff.
+
+## Lock generalizzato
+
+**Oggi:** il lock richiede `posture == 'LYING' + confidence >= 0.70`.
+**Dopo:** il lock accetta qualsiasi postura con soglia differenziata:
+- `posture == 'LYING'` → soglia 0.70 (esistente, invariata)
+- `posture in ['SITTING', 'STANDING']` → soglia 0.55 (`exposure_lock_confidence`)
+- `posture == 'UNKNOWN'` con conf > 0.40 → trattato come SITTING (fail-safe)
+
+## Approccio Spot: frontale per corpi eretti
+
+A differenza del LYING (approccio laterale), per corpi eretti Spot si mette **davanti** al paziente:
+
+```
+     Paziente seduto/standing
+          ┌───┐
+          │ T │  testa
+          ├───┤
+          │   │  torso
+          │   │
+          ├───┤
+          │   │  gambe
+          └───┘
+            ↑
+            │  body_axis (alto→basso, parallelo a world Z)
+            │
+     ┌──────┴──────┐
+     │    Spot     │
+     │  camera →   │  RealSense punta al torso
+     └─────────────┘
+         
+   distanza = standoff_distance (~0.80m)
+   Spot altezza = adattata (seduto: -0.05m, standing: 0.0m)
+```
+
+L'`approach_point` frontale viene calcolato da un **nuovo nodo** `human_approach_detector.py`,
+che generalizza `laying_human_detector.py` per posture non-LYING.
+
+### Geometria approach_point per SITTING/STANDING
+
+```python
+# kp da /human_pose/points_3d (Orbbec, in camera_optical_frame)
+torso_center = mean([kp5, kp6, kp11, kp12])    # spalle + anche
+head_center  = mean([kp0, kp1, kp2, kp3, kp4]) # naso + occhi + orecchie
+
+# Approccio frontale: Spot si posiziona davanti al paziente
+# Nel frame camera Orbbec: Z = profondità (avanti verso il corpo)
+# Spot deve stare a distanza standoff lungo Z negativa (indietro dalla camera)
+approach_pos = torso_center + np.array([0, 0, -standoff_distance])
+
+# Orientamento: Spot guarda il torso (yaw = atan2(dx, dz))
+```
+
+**Nuovo topic:** `/human/approach_point` (PoseStamped) pubblicato da `human_approach_detector`.
+Il `laying_human_detector` esistente rimane invariato e continua a pubblicare su `/laying_human/approach_point`.
+Il coordinator si subscribe ad entrambi.
+
+## Griglia di punti: adattiva dai keypoint YOLO
+
+**Principio:** invece di una griglia fissa 3×2, i punti di scansione sono calcolati **dai 17 keypoint COCO** di YOLO.
+Ogni segmento anatomico ha la sua griglia, proporzionale alla taglia del corpo.
+
+### Segmenti anatomici e generazione griglia
+
+```
+kp0  (nose)    ──►  HEAD segment     (griglia 2×2 centrata sul naso)
+kp1-4 (occhi/orecchie)
+    │
+kp5  (spalla sx) ──┐
+kp6  (spalla dx) ──┤  TORSO segment   (griglia bilineare 3×3 tra spalle e anche)
+kp7  (gomito sx) ──┤  LEFT_ARM seg.   (polyline spalla→gomito→polso, N punti × 2 laterali)
+kp8  (gomito dx) ──┤  RIGHT_ARM seg.  (polyline spalla→gomito→polso, N punti × 2 laterali)
+kp9  (polso sx)  ──┘
+kp10 (polso dx)  ──┘
+    │
+kp11 (anca sx)   ──┐
+kp12 (anca dx)   ──┤  LEFT_LEG seg.   (polyline anca→ginocchio→caviglia, N punti × 2. Solo STANDING)
+kp13 (ginocchio sx)─┤  RIGHT_LEG seg.  (polyline anca→ginocchio→caviglia, N punti × 2. Solo STANDING)
+kp14 (ginocchio dx)─┤
+kp15 (caviglia sx) ─┘
+kp16 (caviglia dx) ─┘
+```
+
+### Metodo di generazione per segmento
+
+**TORSO** (griglia bilineare 3×3 = 9 punti):
+- 4 corner = kp5, kp6, kp11, kp12 (3D, camera_optical_frame)
+- Interpolazione bilineare: `point(row, col) = lerp(lerp(tl, tr, u), lerp(bl, br, u), v)`
+- `u = col/2`, `v = row/2`
+
+**HEAD** (griglia 2×2 = 4 punti):
+- Centro = kp0 (naso)
+- Raggio = `|kp0 - kp1| * 1.2` (distanza naso→orecchio × margine)
+- 4 punti a ±radius su X e Y
+
+**ARMS** (polyline 4 punti × 2 laterali = 8 punti per braccio):
+- 3 anchor = spalla → gomito → polso
+- Interpolazione lineare: 4 punti lungo la spezzata
+- Per ogni punto, offset perpendicolare ±0.05m per coprire larghezza braccio
+
+**LEGS** (solo per STANDING, 5 punti × 2 laterali = 10 punti per gamba):
+- 3 anchor = anca → ginocchio → caviglia
+- Stessa logica delle braccia, 5 punti lungo (gambe più lunghe)
+
+### Punti totali
+
+| Postura | Segmenti | Punti griglia |
+|---------|----------|:------------:|
+| **SITTING** | HEAD + TORSO + L_ARM + R_ARM | 4 + 9 + 8 + 8 = **29** |
+| **STANDING** | + L_LEG + R_LEG | 29 + 10 + 10 = **49** |
+
+## Per-point Spot + Arm coordination (pattern FAST riutilizzato)
+
+Per **ogni punto della griglia**, Spot e braccio si coordinano con lo stesso pattern dei 5 punti FAST:
+
+```
+Per ogni punto griglia (N punti):
+
+  1. Ottimizza body_pose(h, p)
+     Grid search su 3×4 (altezza × pitch).
+     Score = -‖target_in_link00 - sweet_spot‖
+     sweet_spot = [0.35, 0.0, 0.30] (centro workspace Z1)
+
+  2. _set_body_pose(h*, p*) + cmd_vel flush
+
+  3. Attendi settle 1.5s → body_ready
+
+  4. Trasforma grid_point da odom → link00 via TF live
+
+  5. Calcola IK goal:
+     posizione = grid_point in link00 + standoff lungo Z camera
+     orientamento = look-at (X_ee punta al grid_point)
+     clippato al workspace con WorkspaceChecker
+
+  6. Pubblica IK goal via ik_goal_mux → /z1/ik_goal_pose
+
+  7. Attendi /ik_done (timeout 3s)
+
+  8. Raccogli detection da /injury/detections (dwell_time secondi)
+
+  9. Associa detection al segmento + coordinate UV + posizione 3D in odom
+
+  10. NMS 3D intra-segmento (distanza < 0.10m → stessa detection, tieni max conf)
+
+  11. Salva foto JPEG se detection trovata
+
+  12. Avanza al prossimo punto
+```
+
+### Meccanismi riusati (zero codice nuovo per Spot movement)
+
+| Meccanismo | File | Riuso |
+|-----------|------|:----:|
+| Grid search body_pose (h×p) | `wbc_coordinator._optimize_body_poses()` | 100% |
+| Applica body_pose + cmd_vel flush | `wbc_coordinator._set_body_pose()` | 100% |
+| Settle timer 1.5s | `wbc_coordinator._tick_fast_settle()` | 100% |
+| Topic body_ready | `/wbc/body_ready` | 100% |
+| IK goal via mux | `ik_goal_mux` | 100% |
+| Topic ik_done | `/ik_done` | 100% |
+| Transform odom→link00 | `wbc_coordinator._tf_transform()` | 100% |
+| Workspace checking | `WorkspaceChecker.clip_target()` | 100% |
+
+## FSM modificato
+
+```
+WAITING_TF
+    │
+    └── tf_ready ──► IDLE
+                        │
+                        └── keyboard 's' ──► SEARCHING
+                                               │
+                    ┌──────────────────────────┼──────────────────────┐
+                    ▼                          ▼                      ▼
+              Orbbec lock               RealSense semi-lock     Sequenza esausta
+              (full lock)              (guida Spot → Orbbec)    → IDLE
+                    │                          │
+                    └──────────┬───────────────┘
+                               ▼
+                           LOCKING   ←── accetta LYING, SITTING, STANDING
+                               │
+                    ┌──────────┴──────────┐
+                    ▼                     ▼
+            posture == LYING      posture in [SITTING, STANDING]
+                    │                     │
+                    ▼                     ▼
+            PRE_APPROACH           PRE_APPROACH
+            APPROACHING            APPROACHING
+            SCANNING (FAST)        EXPOSURE_SCANNING  ← NUOVO STATO
+                    │                     │
+                    │                     ├── _tick_exposure()
+                    │                     │   │
+                    │                     │   ├─ _gen_exposure_grid()
+                    │                     │   │   da keypoint 3D YOLO
+                    │                     │   │
+                    │                     │   ├─ per ogni punto:
+                    │                     │   │    body_pose(h,p) → settle
+                    │                     │   │    IK goal → ik_done
+                    │                     │   │    raccolta /injury/detections
+                    │                     │   │    associazione segmento + UV
+                    │                     │   │    NMS 3D
+                    │                     │   │    salva foto
+                    │                     │   │
+                    │                     │   └─ _finalize_exposure_report()
+                    │                     │       report JSON su /exposure/report
+                    │                     │
+                    ▼                     ▼
+              HOMING → WAITING      IDLE
+```
+
+### Nuovo stato: `EXPOSURE_SCANNING`
+
+Metodo `_tick_exposure()` nel coordinator. Logica:
+
+```
+Fase 0 — Init: genera griglia punti da keypoint YOLO in odom, idx=0
+Fase 1 — Fine: idx >= len(points) → report finale → IDLE
+Fase 2 — Body pose: grid search (h,p) per punto corrente, _set_body_pose, avvia settle timer
+Fase 3 — Settle: attesa 1.5s
+Fase 4 — IK goal: calcola look-at + standoff, pubblica via ik_goal_mux
+Fase 5 — IK wait: attesa /ik_done (timeout 3s)
+Fase 6 — Collect: raccogli da /injury/detections per dwell_time secondi
+      — Associa a segmento + coordinate UV
+      — NMS 3D intra-segmento
+      — Salva foto JPEG se detection presente
+      — Avanza idx
+```
+
+### Modifiche a `_tick_locking` (branching dopo lock)
+
+```python
+# Oggi: 5 campioni → sempre PRE_APPROACH
+# Domani: 5 campioni → PRE_APPROACH, ma ricorda la postura
+if len(self._search_lock_buffer) >= self._search_lock_samples:
+    target = np.mean(self._search_lock_buffer, axis=0)
+    self._quality.set_target(target, lock_confidence)
+    self._exposure_mode = (self._posture in ['SITTING', 'STANDING'])
+    self._set_state(CoordState.PRE_APPROACH)
+```
+
+### Modifiche a `_tick_approaching` (handoff)
+
+```python
+# Dopo handoff (dist < handoff_distance):
+if self._exposure_mode:
+    self._set_state(CoordState.EXPOSURE_SCANNING)
+elif self._fast_points is not None:
+    self._set_state(CoordState.SCANNING)
+```
+
+### Modifiche a `_set_state`
+
+```python
+if new_state == CoordState.EXPOSURE_SCANNING:
+    self._init_exposure()  # resetta buffer, genera griglia
+```
+
+## Nuovi componenti
+
+### injury_detector.py — nodo detection ferite/ustioni
+
+```
+Package: spot_perception
+Nodo:    injury_detector
+
+Subscribers:
+  /camera/camera/color/image_raw              (RealSense RGB)
+  /camera/camera/aligned_depth_to_color/image_raw  (depth allineato)
+  /camera/camera/color/camera_info
+
+Publishers:
+  /injury/detections       (InjuryDetectionArray)
+  /injury/detection_image  (CompressedImage, solo se ci sono detection)
+
+Parametri:
+  wound_model_path:  'best_yolov8n_roboV3.pt'     # YOLOv8 nano ferite (6MB)
+  burn_model_path:   'skin_burn_2022_8_21.pt'     # YOLOv7 bruciature (~40MB)
+  conf_threshold:    0.30
+  depth_valid_range: [0.2, 3.0]                   # range profondità valido [m]
+  frame_stride:      1                             # processa 1 frame ogni N
+
+Logica inferenza:
+  1. Frame RGB → resize 640×640
+  2. Frame pari: YOLOv8 ferite. Frame dispari: YOLOv7 bruciature. (alternanza 5 Hz eff)
+  3. Per ogni detection con conf > threshold:
+     a. Centro bbox → profondità (mediana 5×5 da depth frame)
+     b. De-proiezione 2D→3D via camera_info → camera_optical_frame
+     c. Trasforma in my_spot/odom via TF lookup
+     d. Accoda a InjuryDetectionArray
+  4. Se detection presenti → salva frame JPEG compresso → pub /injury/detection_image
+  5. Pubblica /injury/detections
+```
+
+### human_approach_detector.py — approccio frontale
+
+```
+Package: spot_perception
+Nodo:    human_approach_detector
+
+Subscribers:
+  /human_pose/points_3d          (da yolo_skeleton_spot)
+  /human_pose/posture            (String)
+  /human_pose/posture_confidence (Float32)
+
+Publishers:
+  /human/approach_point   (PoseStamped, per SITTING/STANDING)
+  /human/body_axis        (Vector3Stamped)
+
+Gating:
+  posture in ['SITTING', 'STANDING'] AND conf >= 0.5 AND valid_keypoints >= 4
+
+Geometria (frontale, non laterale):
+  - torso_center = mean([kp5, kp6, kp11, kp12])
+  - approach_pos = torso_center + [0, 0, -standoff_distance]
+    (davanti al corpo, lungo Z negativa camera Orbbec)
+  - Orientamento: Spot guarda torso_center (yaw = atan2(dx, dz))
+```
+
+**Nota:** `laying_human_detector.py` esistente **rimane invariato**. Continua a pubblicare
+su `/laying_human/approach_point` per LYING. Il coordinator si subscribe a entrambi i topic.
+
+## Messaggi custom
+
+### InjuryDetection.msg (nuovo, spot_msgs/)
+
+```
+std_msgs/Header header
+string injury_class              # 'wound' | 'burn_1st' | 'burn_2nd' | 'burn_3rd'
+float32 confidence
+float32[4] bbox_pixels           # [x1, y1, x2, y2]
+geometry_msgs/Pose pose          # posizione 3D in my_spot/odom
+string body_segment              # 'HEAD' | 'TORSO' | 'LEFT_ARM' | 'RIGHT_ARM' | 'LEFT_LEG' | 'RIGHT_LEG'
+float32 ratio_u                  # 0.0 → 1.0 orizzontale nel segmento
+float32 ratio_v                  # 0.0 → 1.0 verticale nel segmento
+int32 source_point_idx           # indice del punto griglia che l'ha rilevata
+```
+
+### InjuryDetectionArray.msg (nuovo, spot_msgs/)
+
+```
+std_msgs/Header header
+InjuryDetection[] detections
+```
+
+## Topic
+
+### Nuovi topic
+
+| Topic | Tipo | Publisher | Subscriber |
+|-------|------|-----------|------------|
+| `/human/approach_point` | `PoseStamped` | `human_approach_detector` | `wbc_coordinator` |
+| `/injury/detections` | `InjuryDetectionArray` | `injury_detector` | `wbc_coordinator` |
+| `/injury/detection_image` | `CompressedImage` | `injury_detector` | RViz / log |
+| `/exposure/report` | `String` (JSON) | `wbc_coordinator` | log / external |
+| `/exposure/scan_state` | `String` | `wbc_coordinator` | monitor |
+
+### Topic esistenti riusati
+
+| Topic | Scopo esposizione |
+|-------|-------------------|
+| `/wbc/state` | Pubblica `'EXPOSURE_SCANNING'` |
+| `/wbc/body_ready` | Settle completato per punto corrente |
+| `/wbc/ik_goal_pose` | IK goal via ik_goal_mux |
+| `/wbc/ik_enable` | Abilita IK solver |
+| `/ik_done` | Conferma completamento traiettoria |
+| `/my_spot/body_pose` | Comandi altezza/pitch/yaw Spot |
+| `/human_pose/points_3d` | Keypoint YOLO per generare griglia |
+| `/human_pose/posture` | String (SITTING/STANDING) |
+| `/human_pose/posture_confidence` | Confidenza postura |
+
+## Report finale
+
+Al termine della scansione, il coordinator pubblica un JSON su `/exposure/report`:
+
+```json
+{
+  "timestamp": "2026-05-29T14:30:00.000Z",
+  "patient_posture": "SITTING",
+  "segments_scanned": ["HEAD", "TORSO", "LEFT_ARM", "RIGHT_ARM"],
+  "total_grid_points": 29,
+  "points_visited": 29,
+  "detections": [
+    {
+      "id": 0,
+      "injury_class": "burn_2nd",
+      "confidence": 0.67,
+      "body_segment": "TORSO",
+      "ratio_u": 0.35,
+      "ratio_v": 0.60,
+      "position_odom": {"x": 1.23, "y": 0.45, "z": 0.12},
+      "photo_path": "/tmp/teresa_exposure/burn_2nd_0_20260529_143005.jpg"
+    }
+  ],
+  "summary": {
+    "total_wounds": 2,
+    "total_burns_1st": 0,
+    "total_burns_2nd": 1,
+    "total_burns_3rd": 0,
+    "total_unknown": 0
+  },
+  "scan_duration_s": 145.2
+}
+```
+
+## Salvataggio foto
+
+Ogni detection attiva un salvataggio JPEG:
+- Directory: `/tmp/teresa_exposure/` (configurabile via `exposure_photo_dir`)
+- Nome file: `{class}_{id}_{timestamp}.jpg`
+- L'immagine è il frame RGB compresso con bounding box disegnata
+
+## Parametri YAML (nuovo blocco in wbc_params.yaml)
+
+```yaml
+# ── wbc_coordinator: EXPOSURE body scanning ───────────────────────────────
+
+# Lock per posture non-LYING
+exposure_lock_confidence: 0.55       # [0-1] soglia confidenza per lock SITTING/STANDING
+
+# Body pose Spot per inquadrare il corpo
+exposure_body_height_sitting: -0.05  # [m] Spot leggermente abbassato per paziente seduto
+exposure_body_pitch_sitting: 0.10    # [rad] ≈6° inclinazione verso busto
+exposure_body_height_standing: 0.0   # [m] altezza nominale per paziente in piedi
+exposure_body_pitch_standing: 0.15   # [rad] ≈8.6° inclinazione verso l'alto
+
+# Griglia punti — generazione adattiva dai keypoint YOLO
+exposure_grid_torso_rows: 3          # righe griglia TORSO
+exposure_grid_torso_cols: 3          # colonne griglia TORSO
+exposure_grid_head_size: 2           # griglia HEAD: N×N centrata sul naso
+exposure_grid_limb_along: 4          # punti lungo braccio (spalla→polso)
+exposure_grid_limb_across: 2         # punti trasversali braccio (± offset)
+exposure_grid_leg_along: 5           # punti lungo gamba (anca→caviglia), solo STANDING
+exposure_grid_leg_across: 2          # punti trasversali gamba
+exposure_limb_offset: 0.05           # [m] offset laterale per braccia/gambe
+exposure_head_radius_scale: 1.2      # fattore scala raggio testa (× distanza naso→orecchio)
+
+# Timing
+exposure_dwell_per_point: 3.0        # [s] tempo raccolta detection per punto
+exposure_ik_timeout: 3.0             # [s] timeout attesa ik_done
+
+# Camera
+exposure_standoff_distance: 0.80     # [m] distanza camera→superficie corporea
+
+# Detection
+exposure_detection_conf: 0.30        # [0-1] soglia minima YOLO
+exposure_3d_nms_dist: 0.10           # [m] distanza NMS 3D tra detection duplicate
+exposure_min_detections: 3           # frame minimi per early-stop (non implementato in v1)
+
+# Segmenti da scansionare (ordinati per priorità)
+exposure_segments: ['TORSO', 'HEAD', 'LEFT_ARM', 'RIGHT_ARM', 'LEFT_LEG', 'RIGHT_LEG']
+
+# Modelli YOLO
+wound_model_path: 'best_yolov8n_roboV3.pt'      # path al modello ferite
+burn_model_path:  'skin_burn_2022_8_21.pt'      # path al modello bruciature
+
+# Salvataggio
+exposure_save_photos: True
+exposure_photo_dir: '/tmp/teresa_exposure'
+```
+
+## File inventory
+
+### File nuovi
+
+| # | File | Package | Ruolo |
+|---|------|---------|-------|
+| **N1** | `injury_detector.py` | `spot_perception` | Nodo ROS: carica 2 modelli YOLO (ferite+bruciature), subscribe RealSense RGB+Depth, pubblica detection 3D in odom con riferimento anatomico |
+| **N2** | `human_approach_detector.py` | `spot_perception` | Nodo ROS: calcola approach_point frontale per SITTING/STANDING (generalizza laying_human_detector) |
+| **N3** | `InjuryDetection.msg` | `spot_msgs` | Messaggio custom: classe, conf, bbox, posizione 3D, segmento anatomico, coordinate UV |
+| **N4** | `InjuryDetectionArray.msg` | `spot_msgs` | Array di InjuryDetection |
+| **N5** | `download_injury_models.sh` | `scripts/` | Scarica best_yolov8n_roboV3.pt da HuggingFace e skin_burn_2022_8_21.pt da GitHub Releases |
+
+### File modificati
+
+| # | File | Modifica |
+|---|------|----------|
+| **M1** | `wbc_coordinator.py` | Nuovo stato `EXPOSURE_SCANNING` + `_tick_exposure()`. Lock generalizzato (accetta SITTING/STANDING). Branching dopo LOCKING. Metodi: `_gen_exposure_grid()`, `_compute_exposure_ik_goal()`, `_collect_exposure_detections()`, `_associate_detection()`, `_nms_3d()`, `_finalize_exposure_report()`, `_save_detection_photo()`. Nuovi subscriber: `/human/approach_point`, `/injury/detections`. Nuovi publisher: `/exposure/report`, `/exposure/scan_state` |
+| **M2** | `wbc_params.yaml` | Nuovo blocco `exposure_*` (vedi sopra) |
+| **M3** | `wbc.launch.py` | Aggiunge nodi `injury_detector` e `human_approach_detector` (condizionati da param `enable_exposure:=true`) |
+| **M4** | `setup.py` (spot_control) | Aggiunge entry point: `human_approach_detector`, `injury_detector` (se il nodo sta in spot_control) |
+| **M5** | `setup.py` (spot_perception) | Entry point `injury_detector`, `human_approach_detector` |
+| **M6** | `CMakeLists.txt` (spot_msgs) | Aggiunge `InjuryDetection.msg`, `InjuryDetectionArray.msg` |
+| **M7** | `DESCRIPTION.md` | Nuova fase EXPOSURE_SCANNING, topic, flow |
+| **M8** | `CHANGELOG.md` | Entry esposizione body scanning |
+| **M9** | `INIT.md` | Aggiornamento current state |
+
+### File invariati
+
+| File | Motivo |
+|------|--------|
+| `z1_FSM.py` | L'EXPOSURE_SCANNING non usa la Z1 FSM (salta BODY_SCANNING, CHECKING_WORKSPACE, FAST cycle). Il controllo braccio è diretto via ik_goal_mux dal coordinator |
+| `wbc_qp_controller.py` | Non si attiva SCAN_SEQ per EXPOSURE, resta in LOOKAT mode o idle |
+| `ik_goal_mux.py` | Invariato: riceve goal dal coordinator come sempre |
+| `laying_human_detector.py` | Invariato: continua a pubblicare approccio laterale per LYING |
+| `posture_classifier.py` | Invariato: già classifica SITTING e STANDING |
+| `wbc_spot_navigator.py` | Invariato: usato in APPROACHING come sempre |
+| `yolo_skeleton_spot.py` | Invariato: già fornisce keypoint 3D per tutte le posture |
+| `wbc_math.py` | Invariato |
+
+## Tempi stimati
+
+| Postura | Punti griglia | Tempo/punto (settle+dwell) | Totale |
+|---------|:------------:|:---------------------------:|:------:|
+| **SITTING** | ~29 | 1.5s + 3s = 4.5s | **~130s (2 min)** |
+| **STANDING** | ~49 | 1.5s + 3s = 4.5s | **~220s (3.7 min)** |
+
+Con early-stop su regioni senza detection il tempo si riduce ulteriormente (non implementato in v1).
+
+## Casi edge e fallback
+
+| Scenario | Comportamento |
+|----------|---------------|
+| **Posture UNKNOWN con conf > 0.4** | Lock accettato come SITTING → EXPOSURE (fail-safe: meglio scansione inutile che non fare nulla) |
+| **Nessun approach_point calcolabile** | Lock ignorato, SEARCHING continua a ruotare |
+| **Keypoint insufficienti per griglia** | Salta il segmento (es. braccia non visibili → solo TORSO+HEAD) |
+| **Modello YOLO non trovato** | `injury_detector` logga errore, EXPOSURE_SCANNING raccoglie solo foto senza detection |
+| **Nessuna detection dopo sweep completo** | Report con summary tutto a zero, Spot torna a IDLE |
+| **Spot perde TF durante sweep** | Emergency stop, torna in WAITING_TF |
+| **Spazio insufficiente per avvicinarsi** | APPROACHING timeout → IDLE con warning |
+| **Dry-run mode** | `injury_detector` pubblica su topic debug, nessun movimento braccio/Spot |
+| **Paziente si muove durante sweep** | Detection 3D sono in odom (world-fixed). Se il corpo si sposta, le detection diventano stale — le coordinate parametriche (segmento+UV) sopravvivono meglio delle coordinate odom raw |
+
+## Ordine di implementazione
+
+| Step | Cosa | Dipende da | Complessità |
+|:----:|------|:----------:|:-----------:|
+| 1 | `InjuryDetection.msg` + `InjuryDetectionArray.msg` in spot_msgs | — | Bassa |
+| 2 | `human_approach_detector.py` (nodo approccio frontale) | — | Media |
+| 3 | `injury_detector.py` (nodo YOLO ferite+bruciature) | Step 1 | Alta |
+| 4 | `wbc_params.yaml` — nuovo blocco `exposure_*` | — | Bassa |
+| 5 | `wbc_coordinator.py` — lock generalizzato, EXPOSURE_SCANNING, griglia keypoint, per-point, report | Step 2,4 | Alta |
+| 6 | `wbc.launch.py` + `setup.py` (×2) — nuovi nodi nel launch | Step 2,3 | Bassa |
+| 7 | `download_injury_models.sh` | — | Bassa |
+| 8 | Docs (`DESCRIPTION.md`, `CHANGELOG.md`, `INIT.md`) | Step 5 | Bassa |
+| 9 | Test integrato dry-run | Step 6 | Media |
+
+---
+
+# Launch Refactoring (Core + App)
+
+## Obiettivo
+
+Ridurre i 5 terminali attuali a 3, separando i driver hardware (Orbbec, RealSense, Z1) dalla logica applicativa.
 
 ```
 T1: ros2 launch spot_control teresa_core.launch.py
@@ -10,87 +575,10 @@ T2: ros2 launch spot_control teresa_app.launch.py
 T3: ros2 run spot_control wbc_keyboard_node
 ```
 
----
-
-## Architettura
-
-### `teresa_core.launch.py` — nuovo file in `spot_control/launch/`
-
-| Cosa | Provenienza |
-|---|---|
-| Orbbec Femto Bolt driver | `spot_perception.launch.py` → estrarre `IncludeLaunchDescription` di `femto_bolt.launch.py` |
-| TF statica `my_spot/body → orbbec_link` | `spot_perception.launch.py` → spostare `static_transform_publisher` |
-| TF statica `orbbec_link → orbbec_color_optical_frame` | `spot_perception.launch.py` → spostare |
-| Z1 bringup (`z1.launch.py`, robot_state_publisher + JTC + `/joint_states`) | `z1_realsense.launch.py` → estrarre `IncludeLaunchDescription` di `z1.launch.py` |
-| RealSense driver | `z1_realsense.launch.py` → estrarre `IncludeLaunchDescription` di `rs_launch.py` |
-| TF statica `link06 → camera_link` | `z1_realsense.launch.py` → spostare `static_transform_publisher` |
-| Nodo `core_ready` | **Nuovo**: monitora `/joint_states` + `/orbbec/color/image_raw` + TF `link00→link06`. Quando tutti attivi, pubblica `/core/ready` Bool True una volta sola. |
-
-### `teresa_app.launch.py` — nuovo file in `spot_control/launch/`
-
-Include tramite `IncludeLaunchDescription`:
-- `spot_perception.launch.py` con `use_orbbec_driver:=false`
-- `z1_perception.launch.py`
-- `z1_control.launch.py`
-- `wbc.launch.py`
-
-### `spot_perception.launch.py` — modifica
-
-Aggiungere argomento `use_orbbec_driver` (default `true` per retrocompatibilità):
-
-```python
-use_orbbec_driver_arg = DeclareLaunchArgument(
-    'use_orbbec_driver', default_value='true',
-    description='Lancia Orbbec driver + TF statiche. false se già lanciato da teresa_core')
-```
-
-Quando `false`:
-- **Salta** `orbbec_launch` (IncludeLaunchDescription di femto_bolt)
-- **Salta** `static_tf_body_camera` e `static_tf_camera_optical`
-- **Riduce** i `TimerAction`: yolo+posture+bbox+laying a t=1s invece di t=4s (Orbbec già attivo dal core)
-- **Lancia** solo: yolo_skeleton, posture_analyzer, bbox_visualizer, laying_human_detector
-
-### `core_ready` node — nuovo file `spot_control/spot_control/core_ready.py`
-
-Nodo ROS 2 minimale:
-1. Si sottoscrive a `/joint_states` → ricevuto almeno un messaggio = Z1 driver attivo
-2. Si sottoscrive a `/orbbec/color/image_raw` (o un topic equivalente) → Orbbec attivo
-3. Controlla TF `link00 → link06` con `lookup_transform` → robot_state_publisher funzionante
-4. Quando tutti e 3 OK → pubblica `/core/ready` = True (una volta), logga conferma, esce
-
-### `setup.py` — modifica
-
-Aggiungere entry point per `core_ready`:
-```python
-'core_ready = spot_control.core_ready:main',
-```
-
-I nuovi launch file sono già coperti da `glob('launch/*.py')`.
-
----
-
-## Terminali finali
-
-```bash
-# T1: Core (driver hardware + TF statiche)
-ros2 launch spot_control teresa_core.launch.py
-# Aspettare: [core_ready] Core pronto — tutti i driver attivi.
-
-# T2: App (percezione + controllo + WBC)
-ros2 launch spot_control teresa_app.launch.py
-# Aspettare: [TF READY] SpotCore connesso — premi "s" per iniziare.
-
-# T3: Keyboard
-ros2 run spot_control wbc_keyboard_node
-# Premere "s" → missione parte
-```
-
----
-
 ## File da creare
 
 | File | Ruolo |
-|---|---|
+|------|-------|
 | `src/spot_control/launch/teresa_core.launch.py` | Core launch: driver + TF statiche + core_ready |
 | `src/spot_control/launch/teresa_app.launch.py` | App launch: include i 4 sub-launch applicativi |
 | `src/spot_control/spot_control/core_ready.py` | Nodo monitor: controlla driver attivi → pubblica `/core/ready` |
@@ -98,214 +586,22 @@ ros2 run spot_control wbc_keyboard_node
 ## File da modificare
 
 | File | Modifica |
-|---|---|
-| `src/spot_perception/launch/spot_perception.launch.py` | Aggiungere arg `use_orbbec_driver`; quando false, salta driver e TF, riduce TimerAction |
-| `src/spot_control/setup.py` | Aggiungere entry point `core_ready` |
-| `INIT.md` | Aggiornare sezione "Running Spot + Z1 WBC" con i 3 terminali |
-
-## File invariati
-
-`z1_realsense.launch.py`, `z1_perception.launch.py`, `z1_control.launch.py`, `wbc.launch.py` restano come sono — usabili standalone per debug, inclusi da `teresa_app.launch.py`.
-
----
-
-# TERESA — Body Height/Pitch Optimization per FAST Points
-
-## Obiettivo
-
-Aggiungere controllo di altezza e inclinazione (pitch) del corpo di Spot durante la fase FAST, per ridurre l'estensione del braccio Z1 e mantenere configurazioni più naturali (miglior manipulability). Spot si adatta a ogni punto FAST invece di restare fermo all'handoff_height (-0.15m) per tutti i 5 punti.
-
-## Contesto
-
-**Problema attuale:** dopo BODY_SCANNING, i 5 punti FAST sono calcolati in frame `world` (= link00). Per i punti non-centro (idx 1-4), il FSM usa la posa centro salvata al punto 0 + offset relativo. Se Spot cambiasse altezza tra un punto e l'altro, la posa centro salvata diventerebbe stale (calcolata con la vecchia posizione link00). Inoltre la camera RealSense (su link06) non vede più il torso dopo il punto 0 (braccio vicino al paziente), quindi non si può ricalcolare live.
-
-**Soluzione:** pre-calcolare tutti i target in frame **odom** (world-fixed, invariante ai movimenti Spot) durante BODY_SCANNING quando la camera ha piena visibilità. Poi, per ogni punto, trasformare il target da odom al link00 corrente (che riflette la nuova postura Spot) e usarlo come IK goal.
-
-## Vincoli
-
-- **Altezza:** `[-0.20, -0.15]` m (5 cm di range, Spot resta basso)
-- **Pitch:** `[0°, 15°]` (0-0.26 rad)
-- **Nessun cambio yaw** (lo yaw è gestito dal WBC durante APPROACHING)
-- **Nessun impedance control** per questa fase di test
-
-## Architettura
-
-### Nuovi topic
-
-| Topic | Direction | Tipo | Contenuto |
-|-------|-----------|------|-----------|
-| `/z1/fast_points` | FSM → Coordinator | `PoseArray` | 5 target FAST in frame `my_spot/odom`, più surface Z per ciascuno |
-| `/z1/fast_ready` | Coordinator → FSM | `Bool` | Conferma: ottimizzazione completata, body_pose impostato per punto 0 |
-| `/z1/approach_target` | Coordinator → FSM | `PoseStamped` | Target corrente in frame `world`/link00 (già trasformato da odom) |
-| `/z1/next_point_idx` | FSM → Coordinator | `Int32` | Richiesta: prepara body_pose per il prossimo punto FAST (idx 1-4) |
-| `/wbc/body_ready` | Coordinator → FSM | `Bool` | Spot ha raggiunto la postura richiesta, target disponibile su `/z1/approach_target` |
-
-### Flusso
-
-```
-BODY_SCANNING (camera RealSense ha piena visibilità del torso)
-  │
-  ├─ BodySearchScanner completa 3 fasi → fused keypoints + torso_center
-  ├─ ScanManager.set_fast_points() → 5 target FAST in world/link00
-  ├─ Cattura surface frame (p_surf, normal) da realsense_surface_node
-  ├─ Trasforma ogni target + surface da world/link00 → my_spot/odom via TF
-  └─ Pubblica /z1/fast_points (PoseArray in odom, 5 pose + surface z)
-  │
-  ▼
-FSM: HOMING → WAITING (aspetta /z1/fast_ready)
-  │
-Coordinator riceve /z1/fast_points:
-  ├─ Per ogni idx 0..4, grid search su (height ∈ [-0.20,-0.15], pitch ∈ [0°,15°]):
-  │     Trasforma target_odom[idx] → link00 simulando body_pose (h, p)
-  │     Score = -‖target_in_link00 - sweet_spot(0.35, 0, 0.30)‖
-  │     Salva (h*, p*) ottimale per ogni idx
-  ├─ Applica body_pose per punto 0: _set_body_pose(h*[0], p*[0])
-  ├─ Aspetta body_settle_time (1.5s)
-  ├─ Trasforma target_odom[0] → link00 corrente via TF live
-  ├─ Pubblica /z1/approach_target [frame: world, posizione in link00]
-  └─ Pubblica /z1/fast_ready = True
-  │
-  ▼
-Punto 0 (Hub):
-  FSM: Riceve /z1/approach_target → CHECKING_WORKSPACE → APPROACHING
-       IK done → WAIT (nessun impedance) → fine punto 0
-       Pubblica /z1/next_point_idx = 1
-  │
-  ▼
-Punto 1 (Subxiphoid):
-  Coordinator: _set_body_pose(h*[1], p*[1]) → settle 1.5s
-              Trasforma target_odom[1] → link00 via TF
-              Pubblica /z1/approach_target
-              Pubblica /wbc/body_ready = True
-  FSM:        Riceve /z1/approach_target → CHECKING_WORKSPACE → APPROACHING
-              IK done → WAIT → /z1/next_point_idx = 2
-  ...
-  │
-  ▼
-Punto 4 (Suprapubic) — ultimo punto:
-  Uguale ai precedenti
-  Dopo IK done → FSM pubblica /z1/next_point_idx = -1 (fine)
-  Coordinator: _set_body_pose(-0.15, 0°) → torna in handoff
-```
-
-### Ottimizzazione postura (grid search nel coordinator)
-
-```python
-def _optimize_body_poses(self, fast_targets_odom):
-    """Grid search: per ogni punto FAST, trova (h, p) che minimizza distanza dal sweet spot."""
-    sweet_spot = np.array([0.35, 0.0, 0.30])  # centro workspace Z1 in link00
-    heights = self._body_grid_heights    # [-0.20, -0.18, -0.15]
-    pitches = self._body_grid_pitches    # [0.0, 0.087, 0.17, 0.26]
-    
-    for idx, target_odom in enumerate(fast_targets_odom):
-        best_score = float('-inf')
-        best_h, best_p = heights[0], pitches[0]
-        
-        for h in heights:
-            for p in pitches:
-                # Simula dove sarebbe link00 con questa postura
-                link00_in_odom = self._simulate_link00_pose(h, p)
-                # Trasforma target da odom a link00 simulato
-                target_link00 = self._transform_odom_to_link00(target_odom, link00_in_odom)
-                # Score: vicinanza al sweet spot (negativo = meglio)
-                dist = np.linalg.norm(target_link00 - sweet_spot)
-                score = -dist
-                if score > best_score:
-                    best_score = score
-                    best_h, best_p = h, p
-        
-        self._optimal_height[idx] = best_h
-        self._optimal_pitch[idx] = best_p
-```
-
-### Modifiche FSM — path APPROACHING unificato
-
-**Prima (due rami):**
-```python
-if idx == 0:
-    target = self._make_approach_pose()     # live surface + torso
-else:
-    c = self._scan_mgr._center_approach_pose  # salvata al punto 0 (stale se body cambia)
-    target = c + offset_relative
-```
-
-**Dopo (ramo unico):**
-```python
-# Target pre-calcolato dal coordinator, già nel giusto frame link00
-target = self._latest_approach_target  # da /z1/approach_target
-```
-
-La surface frame non serve più per i punti successivi: il target è già completo (posizione + orientamento) quando arriva dal coordinator.
-
-Il FSM deve acquisire un TF buffer (`tf2_ros.Buffer` + `TransformListener`) per:
-- Durante BODY_SCANNING: trasformare i target da world/link00 → odom
-- Non serve per APPROACHING (il target arriva già in link00 dal coordinator)
-
-### Casi edge
-
-| Scenario | Comportamento |
-|----------|---------------|
-| **Standalone Z1 (no WBC/coordinator)** | `/z1/fast_ready` mai ricevuto → timeout `fast_ready_timeout` (10s) → procede senza body optimization |
-| **Coordinator non disponibile a metà scan** | `/wbc/body_ready` timeout (3s) per punto → procede con target salvato in link00 originale |
-| **Grid search non trova miglioramento** | Usa handoff_height (-0.15m) e pitch 0° come fallback |
-| **idx = -1 (fine scan)** | Coordinator riporta Spot a handoff_height (-0.15m, 0°) |
-
-## File da creare
-
-Nessuno. La grid search è un metodo privato del coordinator (~40 righe).
-
-## File da modificare
-
-| File | Modifica |
 |------|----------|
-| **`z1_FSM.py`** | Aggiungere `tf2_ros` Buffer + TransformListener; publisher `/z1/fast_points` (PoseArray), `/z1/next_point_idx` (Int32); subscriber `/z1/fast_ready` (Bool), `/z1/approach_target` (PoseStamped), `/wbc/body_ready` (Bool); in `_finish_body_scan()`: trasformare target in odom e pubblicare `/z1/fast_points`; in WAITING: attendere `/z1/fast_ready`; in APPROACHING: usare `_latest_approach_target` (path unico); tra punti: pubblicare `/z1/next_point_idx` e attendere `/wbc/body_ready` |
-| **`wbc_coordinator.py`** | Subscriber `/z1/fast_points` (PoseArray), `/z1/next_point_idx` (Int32); publisher `/z1/fast_ready` (Bool), `/z1/approach_target` (PoseStamped), `/wbc/body_ready` (Bool); metodo `_optimize_body_poses()` grid search; metodo `_simulate_link00_pose(h, p)`; logica per body_settle timer; lookup TF odom→link00 per pubblicare target corrente |
-| **`wbc_params.yaml`** | `body_grid_heights: [-0.20, -0.18, -0.15]`, `body_grid_pitches: [0.0, 0.087, 0.17, 0.26]`, `body_sweet_spot: [0.35, 0.0, 0.30]`, `body_settle_time: 1.5` |
-| **`z1_fsm_params.yaml`** | `fast_ready_timeout: 10.0`, `body_ready_timeout: 3.0` |
-| **`setup.py` (spot_control)** | Verificare che eventuali nuovi entry point siano coperti (nessuno previsto) |
-
-## File invariati
-
-`wbc_math.py`, `wbc_qp_controller.py`, `z1_scan_manager.py`, `z1_ik_to_jtc.py`, `ik_goal_mux.py`.
+| `src/spot_perception/launch/spot_perception.launch.py` | Arg `use_orbbec_driver`; quando false, salta driver e TF, riduce TimerAction |
+| `src/spot_control/setup.py` | Entry point `core_ready` |
+| `INIT.md` | Aggiornare sezione running con i 3 terminali |
 
 ---
 
-## Nota (24 May 2026) — Paper reframing
+# Paper
 
-### Da WBC a Whole-Body Active Perception
-
-Il paper è stato rifocalizzato. Il contributo centrale è l'**active perception-driven whole-body reconfiguration**.
-
-**Titolo**: *TERESA: Whole-Body Active Perception for Legged Robot-Assisted Emergency Assessment*
-
-**Dominio**: emergency assessment (ABCDE + FAST), non solo ultrasound.
-
-**Acronimo TERESA**: Trustworthy Emergency Robot for Efficient Support and Assistance.
-
-**Narrativa**: Il WBC è usato come tool (arm look-at), non come fine. I 4 pilastri sono:
-1. Confidence-gated active search
-2. Anticipatory body scanning con WBC
-3. Perception-quality-aware velocity control
-4. Pre-planned body reconfiguration per scanning
-
-**Sezioni completate**: Introduction, Related Work (34 ref in 4 aree), Problem Formulation, Active Perception, Method, System Architecture.
-
-**Sezioni mancanti**:
-- Experiments
-- Results
-- Conclusion
-- Aggiornamento figure (FSM, system_block)
-- Compilazione e verifica LaTeX
-
----
-
-### Paper — Sezioni mancanti
+## Sezioni mancanti
 
 | Sezione | Stato | Cosa fare |
 |---------|:-----:|-----------|
-| `experiments.tex` | 📝 | Descrivere setup sperimentale: griglia posizioni paziente, baseline stop-and-manipulate, metriche |
-| `results.tex` | 📝 | Risultati: idle time reduction, positioning error, confidence vs velocity, tabella comparativa |
-| `conclusion.tex` | 📝 | Summary contributi, limitazioni (solo terreno piatto, singolo paziente), future work (ABC, n patients) |
-| `figures/fsm.tex` | 🔧 | Aggiornare da 5 a 7 stati (WAITING_TF, IDLE, SEARCHING, PRE_APPROACH, APPROACHING, SCANNING, WS_EXTENSION) |
-| `figures/system_block.tex` | 🔧 | Aggiornare con nuovi nodi (spot_navigator, approach_scanner, tf_monitor) e flusso active perception |
-| Compilazione LaTeX | 🔧 | Verificare che non ci siano undefined references o label mancanti |
+| `experiments.tex` | 📝 | Setup sperimentale, griglia posizioni paziente, baseline, metriche |
+| `results.tex` | 📝 | Idle time reduction, positioning error, confidence vs velocity, tabella comparativa |
+| `conclusion.tex` | 📝 | Summary contributi, limitazioni, future work |
+| `figures/fsm.tex` | 🔧 | Aggiornare con 8 stati (nuovo EXPOSURE_SCANNING) |
+| `figures/system_block.tex` | 🔧 | Aggiornare con injury_detector, human_approach_detector |
+| Compilazione LaTeX | 🔧 | Verificare undefined references |
