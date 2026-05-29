@@ -3,7 +3,7 @@
 WBC QP Controller — arm-only look-at + active-perception Cartesian scanning.
 
 Modes (selected automatically from /wbc/state):
-  ACTIVE_SEARCH  — SEARCHING:    9 Cartesian poses + wrist sweep (loop infinito)
+  ACTIVE_SEARCH  — SEARCHING:    5 Cartesian poses attorno a HOME_POS (loop infinito)
   LOOKAT         — PRE_APPROACH: ω_des orientamento + null-space joint centering
   PERCEPTUAL_SCAN — APPROACHING:  6 Cartesian poses verso target, multi-angolo
 
@@ -429,11 +429,10 @@ class WBCQPControllerNode(Node):
 
     # ── ACTIVE_SEARCH mode (SEARCHING) ───────────────────────────────────
 
-    def _gen_cartesian_search_grid(self, p_ee: np.ndarray) -> list[PoseStamped]:
+    def _gen_cartesian_search_grid(self) -> list[PoseStamped]:
         """
-        9 pose Cartesiane attorno a p_ee — orientamento fisso X_ee in avanti.
-        Enfasi su Y (wide sweep ±0.20m) per compensare la rotazione di Spot.
-        Z mai sotto HOME_POS[2] = 0.44m.
+        5 pose Cartesiane attorno a HOME_POS — orientamento fisso X_ee in avanti.
+        Sweep Y ±0.20m, Z +0.12m, X +0.12m. Il braccio resta sempre vicino alla home.
         """
         s = self._cartesian_step          # 0.12m
         w = self._cartesian_step_wide     # 0.20m
@@ -443,20 +442,15 @@ class WBCQPControllerNode(Node):
 
         offsets = [
             np.array([0,  0,  0]),      # HOME
-            np.array([0,  0,  +s]),     # +Z
             np.array([0,  +w, 0]),      # +Y wide DX
             np.array([0,  -w, 0]),      # -Y wide SX
-            np.array([0,  +w, +s]),     # +Y+Z
-            np.array([0,  -w, +s]),     # -Y+Z
-            np.array([+s, +w, 0]),      # +X+Y avanti DX
-            np.array([+s, -w, 0]),      # +X-Y avanti SX
-            np.array([+s, 0,  +s]),     # +X+Z avanti SU
+            np.array([0,  0,  +s]),     # +Z
+            np.array([+s, 0,  0]),      # +X avanti
         ]
 
         poses = []
         for offset in offsets:
-            pos = p_ee + offset
-            pos[2] = max(pos[2], HOME_POS[2])
+            pos = HOME_POS + offset
             clipped, _, _ = self._ws_checker.clip_target(pos)
             poses.append(_make_pose_stamped(clipped, forward_quat))
         return poses
@@ -466,14 +460,7 @@ class WBCQPControllerNode(Node):
             self.get_logger().warn('_start_active_search: no joint state')
             return
 
-        n_arm = self._q_meas.shape[0]
-        q = self._q_neutral.copy()
-        q[:n_arm] = self._q_meas
-        pin.forwardKinematics(self._model, self._data, q)
-        pin.updateFramePlacements(self._model, self._data)
-        p_ee = self._data.oMf[self._ee_id].translation
-
-        poses = self._gen_cartesian_search_grid(p_ee)
+        poses = self._gen_cartesian_search_grid()
         if not poses:
             self.get_logger().warn('_start_active_search: no poses generated')
             return
@@ -493,7 +480,7 @@ class WBCQPControllerNode(Node):
         self.get_logger().info(
             f'ACTIVE_SEARCH: {len(poses)} Cartesian poses '
             f'(step={self._cartesian_step:.2f}m, wide={self._cartesian_step_wide:.2f}m, '
-            f'orientation fixed forward)')
+            f'centered on HOME_POS, fixed forward)')
 
     def _tick_active_search(self) -> None:
         if self._scan_scanner is None:
