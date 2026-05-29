@@ -242,7 +242,7 @@ class TeresaController{
     this.odomFrame='my_spot/odom';this.bodyFrame='my_spot/body';this.updateRate=10;
     // control state
     this.hasStartPose=false;this.startPose=null;this.goalPose=null;
-    this.isReturning=false;this.kcState='IDLE';this.tfSystemReady=false;this.bodyInOdom=null;
+    this.isReturning=false;this.kcState='IDLE';this.tfSystemReady=false;this._tfWasReady=false;this.bodyInOdom=null;
     // camera state
     this.camerasOpen=false;this.paused=false;
     this.orbbecHidden=false;this.rsHidden=false;this.orbbecReady=false;this.rsReady=false;
@@ -302,7 +302,7 @@ class TeresaController{
     this.ros.on('close',()=>{
       $('ros-dot').className='dot offline';$('ros-status').textContent='disconnected';
       $('tf-dot').className='dot';$('tf-status').textContent='---';$('wbc-state').textContent='---';
-      this.tfSystemReady=false;this.bodyInOdom=null;
+      this.tfSystemReady=false;this._tfWasReady=false;this.bodyInOdom=null;
       this.log('Rosbridge disconnected','error');this.disableAll();
     });
     this.ros.on('error',()=>{});
@@ -327,9 +327,15 @@ class TeresaController{
     });
     this.tfReadySub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/tf_ready',messageType:'std_msgs/Bool'});
     this.tfReadySub.subscribe(msg=>{
-      const p=this.tfSystemReady;this.tfSystemReady=msg.data;
-      if(msg.data&&!p){$('tf-dot').className='dot online';$('tf-status').textContent='ready';this.log('TF READY','info');$('state-detail').textContent='SpotCore connected. Press START or "s" to begin.';this.enableMissionButtons();}
-      else if(!msg.data&&p){$('tf-dot').className='dot offline';$('tf-status').textContent='LOST';this.log('TF LOST','error');}
+      this.tfSystemReady=msg.data;
+      if(msg.data){
+        $('tf-dot').className='dot online';$('tf-status').textContent='ready';
+        this.enableMissionButtons();
+        if(!this._tfWasReady){this._tfWasReady=true;this.log('TF READY','info');$('state-detail').textContent='SpotCore connected. Press START or "s" to begin.';}
+      }else{
+        $('tf-dot').className='dot offline';$('tf-status').textContent='LOST';
+        if(this._tfWasReady){this._tfWasReady=false;this.log('TF LOST','error');}
+      }
     });
 
     /* services */
@@ -341,6 +347,20 @@ class TeresaController{
     /* TF for navigation */
     this.tfClient=new ROSLIB.TFClient({ros:this.ros,fixedFrame:this.odomFrame,angularThres:.01,transThres:.01,rate:this.updateRate});
     this.tfClient.subscribe(this.bodyFrame,tf=>{this.bodyInOdom=tf;});
+
+    /* Direct /tf subscriber — bypasses TFClient for odom→body when rosbridge TFClient fails */
+    this.tfSub=new ROSLIB.Topic({ros:this.ros,name:'/tf',messageType:'tf2_msgs/TFMessage'});
+    this.tfSub.subscribe(msg=>{
+      const tfm=msg.transforms||[];
+      for(let i=0;i<tfm.length;i++){
+        const t=tfm[i];
+        if(t.header.frame_id===this.odomFrame&&t.child_frame_id===this.bodyFrame){this.bodyInOdom=t.transform;break;}
+      }
+    });
+
+    /* /wbc/tf_status — detailed diagnostics from tf_monitor */
+    this.tfStatusSub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/tf_status',messageType:'std_msgs/String'});
+    this.tfStatusSub.subscribe(msg=>{$('tf-status').textContent=msg.data;});
 
     this.enableAlways();
   }
@@ -577,8 +597,11 @@ class TeresaController{
   toggleRsLabel(){this.showRsLabel=!this.showRsLabel;$('rs-label-btn').classList.toggle('active',this.showRsLabel);this.drawRealSenseOverlay();}
 
   /* ── Control actions ──────────────────────── */
-  saveStartPose(){
-    if(!this.bodyInOdom){this.log('Cannot save start pose: TF not available','error');return false;}
+  async saveStartPose(){
+    if(!this.bodyInOdom){
+      for(let i=0;i<20;i++){await new Promise(r=>setTimeout(r,100));if(this.bodyInOdom)break;}
+    }
+    if(!this.bodyInOdom){this.log('Cannot save start pose: TF not available — check /tf topic','error');return false;}
     const t=this.bodyInOdom.translation,r=this.bodyInOdom.rotation;
     const yaw=Math.atan2(2*(r.w*r.z+r.x*r.y),1-2*(r.y*r.y+r.z*r.z));
     this.startPose={x:t.x,y:t.y,yaw:yaw};this.hasStartPose=true;
@@ -592,9 +615,9 @@ class TeresaController{
   enableAlways(){$('btn-stop').disabled=false;$('btn-stand').disabled=false;$('btn-sit').disabled=false;$('btn-pon').disabled=false;$('btn-poff').disabled=false;$('pause-btn').disabled=false;}
   enableMissionButtons(){['btn-start','btn-return','btn-update','btn-step','btn-stop','btn-stand','btn-sit','btn-pon','btn-poff','pause-btn'].forEach(id=>$(id).disabled=false);}
 
-  onStart(){
+  async onStart(){
     if(!this.tfSystemReady){this.log('TF not ready — waiting for SpotCore','error');return;}
-    if(!this.hasStartPose&&!this.saveStartPose())return;
+    if(!this.hasStartPose&&!(await this.saveStartPose()))return;
     this.log('Start → WBC SEARCHING','info');this.restartPub.publish({data:true});$('step-banner').classList.remove('visible');
   }
   onReturn(){
@@ -603,7 +626,7 @@ class TeresaController{
     const pose=this.startPose;const req=new ROSLIB.ServiceRequest();
     this.standSrv.callService(req,()=>{this.startReturnNav(pose);});
   }
-  onUpdate(){if(this.saveStartPose())this.log('Start pose updated','info');}
+  async onUpdate(){if(await this.saveStartPose())this.log('Start pose updated','info');}
   onStep(){this.stepConfirmPub.publish({data:true});this.log('Step confirmed','info');$('step-banner').classList.remove('visible');}
   onStand(){this.standSrv.callService(new ROSLIB.ServiceRequest(),r=>{this.log('Stand: '+(r&&r.success?'OK':'FAILED'),r&&r.success?'info':'error');});}
   onSit(){this.sitSrv.callService(new ROSLIB.ServiceRequest(),r=>{this.log('Sit: '+(r&&r.success?'OK':'FAILED'),r&&r.success?'info':'error');});}

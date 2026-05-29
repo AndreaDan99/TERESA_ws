@@ -511,6 +511,20 @@
         this.rsCamPose = { pos: tf.translation, rot: tf.rotation };
         this.drawRealSenseOverlay();
       });
+
+      /* Direct /tf subscriber — fallback when TFClient over rosbridge fails */
+      this.tfSub = new ROSLIB.Topic({ros: this.ros, name: '/tf', messageType: 'tf2_msgs/TFMessage'});
+      this.tfSub.subscribe((msg) => {
+        const tfm = msg.transforms || [];
+        for (let i = 0; i < tfm.length; i++) {
+          const t = tfm[i];
+          if (t.header.frame_id === 'world' && t.child_frame_id === 'camera_color_optical_frame') {
+            this.rsCamPose = { pos: t.transform.translation, rot: t.transform.rotation };
+            this.drawRealSenseOverlay();
+            break;
+          }
+        }
+      });
     }
 
     /* ── Image rendering ───────────────────── */
