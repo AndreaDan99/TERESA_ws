@@ -431,27 +431,24 @@ class WBCQPControllerNode(Node):
 
     def _gen_cartesian_search_grid(self) -> list[PoseStamped]:
         """
-        6 pose ad arco attorno a HOME_POS — orientamento fisso X_ee in avanti.
-        Sweep diagonale X+Y combinato, Z cresce al centro, mai X indietro.
+        3 pose wide: HOME centrale, LEFT-REACH e RIGHT-REACH, tutte con tilt -15°.
+        Sweep Y ±0.28m, X avanza +0.20m, Z scende verso il paziente a terra.
         """
-        forward_quat = compute_ee_orientation_minrot(
-            np.array([1.0, 0.0, 0.0]), HOME_ORI.tolist())
+        tilt_rad = -0.2618   # -15° pitch down
+        x_tilted = np.array([np.cos(tilt_rad), 0.0, np.sin(tilt_rad)])
+        tilted_quat = compute_ee_orientation_minrot(x_tilted, HOME_ORI.tolist())
 
-        # Arco 3D: base Z=0.50, arco da sx a dx passando dal centro alto
         offsets = [
-            np.array([0.0,   0.0,   0.06]),   # HOME  — centro retratto
-            np.array([+0.06, -0.12, 0.08]),   # sx-soft
-            np.array([+0.10, -0.18, 0.12]),   # sx-up
-            np.array([+0.08,  0.0,  0.14]),   # center-peak
-            np.array([+0.10, +0.18, 0.12]),   # dx-up
-            np.array([+0.06, +0.12, 0.08]),   # dx-soft
+            (np.array([-0.09,  0.00,  0.55]), tilted_quat),    # HOME:  tilt -15°
+            (np.array([+0.20, -0.28,  0.42]), tilted_quat),    # LEFT:  tilt -15°
+            (np.array([+0.20, +0.28,  0.42]), tilted_quat),    # RIGHT: tilt -15°
         ]
 
         poses = []
-        for offset in offsets:
+        for offset, quat in offsets:
             pos = HOME_POS + offset
             clipped, _, _ = self._ws_checker.clip_target(pos)
-            poses.append(_make_pose_stamped(clipped, forward_quat))
+            poses.append(_make_pose_stamped(clipped, quat))
         return poses
 
     def _start_active_search(self) -> None:
@@ -477,8 +474,8 @@ class WBCQPControllerNode(Node):
         )
         self._scan_scanner.reset()
         self.get_logger().info(
-            f'ACTIVE_SEARCH: {len(poses)} arc poses '
-            f'(Z 0.50→0.58, Y ±0.18, X +0.0→+0.1, fixed forward)')
+            f'ACTIVE_SEARCH: {len(poses)} wide poses '
+            f'(HOME [0.50m], LEFT/RIGHT [±0.28m Y, +0.20m X, Z=0.42m], tilt -15°)')
 
     def _tick_active_search(self) -> None:
         if self._scan_scanner is None:

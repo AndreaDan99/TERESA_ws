@@ -171,7 +171,8 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('search_yaw_increment',         1.05)  # [rad] ≈60° passo Spot
         self.declare_parameter('search_yaw_steps',             6)     # posizioni = 360°
         self.declare_parameter('search_pitch_angles',       [0.0, 0.087, 0.17])  # 0°,5°,10°
-        self.declare_parameter('search_dwell',                  15.0)  # [s] attesa per posizione
+        self.declare_parameter('search_coarse_dwell',           5.0)   # [s] dwell per posizione coarse
+        self.declare_parameter('search_refine_dwell',           4.0)   # [s] dwell per pitch in refinement
         self.declare_parameter('search_yaw_kp',                    0.8)   # P-gain per rotazione yaw
         self.declare_parameter('search_yaw_tolerance',             0.08)  # [rad] ~4.6° tolleranza yaw raggiunto
         self.declare_parameter('search_max_angular_vel',          0.5)   # [rad/s] max velocità angolare search
@@ -179,8 +180,9 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('search_semi_lock_settle_timeout', 5.0)   # [s] timeout settle Spot
         self.declare_parameter('search_semi_lock_yaw_tol',        0.05)  # [rad] ≈3° tolleranza yaw
         self.declare_parameter('search_semi_lock_pitch_tol',      0.03)  # [rad] ≈2° tolleranza pitch
-        self.declare_parameter('search_lock_confidence',          0.85)
+        self.declare_parameter('search_lock_confidence',          0.70)  # [0-1] soglia LYING per lock
         self.declare_parameter('search_lock_samples',           5)
+        self.declare_parameter('search_refine_trigger_orb_conf', 0.30)  # soglia Orbbec per trigger refinement
 
         # FAST body pose optimization
         self.declare_parameter('body_grid_heights',       [-0.20, -0.18, -0.15])
@@ -214,7 +216,8 @@ class WBCCoordinatorNode(Node):
         self._search_yaw_increment  = float(p('search_yaw_increment'))
         self._search_yaw_steps      = int(p('search_yaw_steps'))
         self._search_pitch_angles   = self._read_float_array('search_pitch_angles')
-        self._search_dwell          = float(p('search_dwell'))
+        self._search_coarse_dwell      = float(p('search_coarse_dwell'))
+        self._search_refine_dwell      = float(p('search_refine_dwell'))
         self._search_yaw_kp         = float(p('search_yaw_kp'))
         self._search_yaw_tolerance  = float(p('search_yaw_tolerance'))
         self._search_max_angular_vel = float(p('search_max_angular_vel'))
@@ -224,6 +227,7 @@ class WBCCoordinatorNode(Node):
         self._search_semi_lock_pitch_tol      = float(p('search_semi_lock_pitch_tol'))
         self._search_lock_confidence = float(p('search_lock_confidence'))
         self._search_lock_samples   = int(p('search_lock_samples'))
+        self._search_refine_trigger_orb_conf = float(p('search_refine_trigger_orb_conf'))
         self._pre_approach_duration = float(p('pre_approach_duration'))
         self._step_mode          = bool(p('step_mode'))
 
@@ -265,6 +269,7 @@ class WBCCoordinatorNode(Node):
         self._search_initial_yaw: float = 0.0         # yaw Spot all'ingresso in SEARCHING [rad, odom]
         self._search_rotating: bool = False           # True mentre ruota verso il target yaw
         self._search_target_yaw: float = 0.0          # yaw assoluto desiderato [rad, odom]
+        self._last_yaw_error: float = 0.0             # ultimo errore yaw per fallback TF
         self._lock_lost_ticks: int = 0                # tick consecutivi senza Orbbec in LOCKING
         self._torso_tracker_state: str = ''           # LOCKED / TRACKING / IDLE
         self._torso_detected_ticks: int = 0           # consecutive LOCKED ticks
@@ -277,6 +282,15 @@ class WBCCoordinatorNode(Node):
         self._semi_lock_target_pitch: float = 0.0
         self._semi_lock_settle_done: bool = False
         self._semi_lock_dwell_start: rclpy.time.Time | None = None
+        self._semi_lock_entry_time: float = 0.0      # timestamp ingresso per timeout assoluto
+
+        # Refinement mode — sweep pitch adattivo durante SEARCHING
+        self._refining: bool = False
+        self._refine_pitch_idx: int = 0
+        self._refine_best_conf: float = 0.0
+        self._refine_best_pitch: float = 0.0
+        self._refine_best_approach: np.ndarray | None = None
+        self._refine_dwell_start: float = 0.0
 
         # FAST body pose optimization + WS_EXTENSION
         self._fast_points: PoseArray | None = None
@@ -564,8 +578,9 @@ class WBCCoordinatorNode(Node):
             self._set_state(CoordState.LOCKING)
             return
 
-        # FASE 3 — Check semi-lock da RealSense (GUIDING, ESTIMATING o LOCKED)
-        if self._torso_tracker_state in ('GUIDING', 'ESTIMATING', 'LOCKED') \
+        # FASE 3 — Check semi-lock da RealSense (solo fuori dal refinement)
+        if not self._refining \
+                and self._torso_tracker_state in ('GUIDING', 'ESTIMATING', 'LOCKED') \
                 and self._torso_pos is not None:
             if self._check_realsense_guidance():
                 return
@@ -612,8 +627,7 @@ class WBCCoordinatorNode(Node):
                         -self._search_max_angular_vel, self._search_max_angular_vel))
                     self._pub_cmd_vel.publish(t)
 
-            elapsed = now_ns - self._search_position_start.nanoseconds * 1e-9 \
-                if self._search_position_start is not None else 0.0
+            elapsed = now_ns - self._semi_lock_entry_time
             if elapsed >= self._search_semi_lock_settle_timeout:
                 self._pub_cmd_vel.publish(Twist())
                 self._semi_lock_settle_done = True
@@ -676,12 +690,15 @@ class WBCCoordinatorNode(Node):
     def _check_realsense_guidance(self) -> bool:
         """Ruota e inclina Spot verso il corpo rilevato dalla RealSense.
         Salva orientamento corrente e target per il TF-based settle in SEMI_LOCKING."""
-        if self._torso_tracker_state not in ('ESTIMATING', 'LOCKED') \
+        if self._torso_tracker_state not in ('GUIDING', 'ESTIMATING', 'LOCKED') \
                 or self._torso_pos is None:
             return False
 
         body_tf = self._tf_lookup(self._odom_frame, self._body_frame)
         if body_tf is None:
+            self.get_logger().warn(
+                'Semi-lock: TF odom→body non disponibile → skip',
+                throttle_duration_sec=5.0)
             return False
 
         from tf_transformations import euler_from_quaternion
@@ -690,6 +707,9 @@ class WBCCoordinatorNode(Node):
 
         torso_body = self._transform_to_body_frame(self._torso_pos)
         if torso_body is None:
+            self.get_logger().warn(
+                'Semi-lock: impossibile trasformare torso_pos in body frame → skip',
+                throttle_duration_sec=5.0)
             return False
 
         dir_vec = np.array([torso_body[0] - 0.30, torso_body[1], torso_body[2] - 0.15])
@@ -710,11 +730,18 @@ class WBCCoordinatorNode(Node):
         self._semi_lock_target_pitch = target_pitch
         self._semi_lock_settle_done = False
         self._semi_lock_dwell_start = None
+        self._semi_lock_entry_time = self.get_clock().now().nanoseconds * 1e-9
         self._set_body_pose(self._search_body_height, target_pitch)
         self._set_state(CoordState.SEMI_LOCKING)
         return True
 
     def _tick_search_positions(self) -> None:
+        # ── Refinement mode attivo ────────────────────────────────────
+        if self._refining:
+            self._tick_refinement()
+            return
+
+        # ── Griglia esaurita ─────────────────────────────────────────
         if self._search_position_idx >= len(self._search_positions):
             self.get_logger().warn('Search sequence complete → IDLE')
             self._set_wbc_enabled(False)
@@ -723,16 +750,28 @@ class WBCCoordinatorNode(Node):
 
         now_ns = self.get_clock().now().nanoseconds * 1e-9
 
+        # ── Durante il dwell: controlla se triggerare refinement ────
+        if self._search_position_start is not None and not self._search_rotating:
+            elapsed = now_ns - self._search_position_start.nanoseconds * 1e-9
+            if elapsed >= self._search_coarse_dwell:
+                self._search_position_idx += 1
+                self._search_position_start = None
+                return
+            if self._should_refine():
+                self._start_refinement()
+                return
+            return
+
         # ── New position: set height+pitch, begin yaw rotation via cmd_vel ──
         if self._search_position_start is None and not self._search_rotating:
             if self._search_initial_yaw is None:
-                return    # TF not ready yet, try next tick
+                return
             pos = self._search_positions[self._search_position_idx]
             self._set_body_pose(self._search_body_height, pos['pitch'])
             self._search_target_yaw = normalize_angle(
                 self._search_initial_yaw + pos['yaw'])
             self._search_rotating = True
-            self._last_yaw_error = None  # force TF lookup on first rotating tick
+            self._last_yaw_error = 0.0
             self.get_logger().info(
                 f'Search pos {self._search_position_idx+1}/{len(self._search_positions)}: '
                 f'yaw={math.degrees(pos["yaw"]):.0f}° '
@@ -744,6 +783,10 @@ class WBCCoordinatorNode(Node):
         if self._search_rotating:
             cur_yaw = self._get_current_yaw()
             if cur_yaw is None:
+                self.get_logger().warn(
+                    'cmd_vel rotation: TF odom→body non disponibile, '
+                    f'fallback _last_yaw_error={self._last_yaw_error:.3f}',
+                    throttle_duration_sec=5.0)
                 if self._last_yaw_error is not None:
                     t = Twist()
                     t.angular.z = float(np.clip(
@@ -759,21 +802,104 @@ class WBCCoordinatorNode(Node):
                 self._search_position_start = self.get_clock().now()
                 self.get_logger().info(
                     f'Search pos {self._search_position_idx+1}: yaw reached '
-                    f'(error={math.degrees(error):.1f}°) → dwell {self._search_dwell:.0f}s')
+                    f'(error={math.degrees(error):.1f}°) → dwell {self._search_coarse_dwell:.0f}s')
                 return
 
             t = Twist()
             t.angular.z = float(np.clip(
                 self._search_yaw_kp * error,
                 -self._search_max_angular_vel, self._search_max_angular_vel))
+            self.get_logger().info(
+                f'cmd_vel.angular.z={t.angular.z:.3f} rad/s  '
+                f'error={math.degrees(error):.1f}°  '
+                f'target={math.degrees(self._search_target_yaw):.1f}°  '
+                f'cur={math.degrees(cur_yaw):.1f}°',
+                throttle_duration_sec=3.0)
             self._pub_cmd_vel.publish(t)
             return
 
-        # ── Dwelling ──
-        elapsed = now_ns - self._search_position_start.nanoseconds * 1e-9
-        if elapsed >= self._search_dwell:
-            self._search_position_idx += 1
-            self._search_position_start = None
+    # ── Refinement mode (sweep pitch adattivo) ──────────────────────────
+
+    def _should_refine(self) -> bool:
+        """Trigger refinement se una camera vede qualcosa."""
+        if self._torso_tracker_state == 'GUIDING' and self._torso_pos is not None:
+            return True
+        return self._confidence >= self._search_refine_trigger_orb_conf
+
+    def _start_refinement(self) -> None:
+        self._refining = True
+        self._refine_pitch_idx = 0
+        self._refine_best_conf = 0.0
+        self._refine_best_pitch = 0.0
+        self._refine_best_approach = None
+        self._refine_dwell_start = 0.0
+        self._pub_cmd_vel.publish(Twist())
+        trigger_src = ('RealSense GUIDING'
+                       if self._torso_tracker_state == 'GUIDING'
+                       else f'Orbbec conf={self._confidence:.2f}')
+        self.get_logger().info(
+            f'Refinement: sweep pitch a yaw='
+            f'{math.degrees(self._search_target_yaw):.0f}° '
+            f'(trigger: {trigger_src})')
+
+    def _tick_refinement(self) -> None:
+        now_ns = self.get_clock().now().nanoseconds * 1e-9
+
+        pitches = self._search_pitch_angles
+        if self._refine_pitch_idx >= len(pitches):
+            if self._refine_best_conf >= self._search_lock_confidence:
+                self._finish_refinement_lock()
+            else:
+                self._finish_refinement_fail()
+            return
+
+        # Primo tick del pitch corrente: applica body_pose
+        if self._refine_dwell_start == 0.0:
+            pitch = pitches[self._refine_pitch_idx]
+            self._set_body_pose(self._search_body_height, pitch)
+            self._refine_dwell_start = now_ns
+            self.get_logger().info(
+                f'Refinement pitch {self._refine_pitch_idx+1}/{len(pitches)}: '
+                f'{math.degrees(pitch):.1f}°')
+            return
+
+        # Traccia la miglior confidence Orbbec
+        if self._confidence > self._refine_best_conf:
+            self._refine_best_conf = self._confidence
+            self._refine_best_pitch = pitches[self._refine_pitch_idx]
+            if self._approach_point_odom is not None:
+                self._refine_best_approach = self._approach_point_odom_pos()
+
+        # Dwell scaduto → prossimo pitch
+        elapsed = now_ns - self._refine_dwell_start
+        if elapsed >= self._search_refine_dwell:
+            self.get_logger().info(
+                f'Refinement pitch {self._refine_pitch_idx+1}/{len(pitches)} '
+                f'done (best_conf={self._refine_best_conf:.2f} '
+                f'at pitch={math.degrees(self._refine_best_pitch):.1f}°)')
+            self._refine_pitch_idx += 1
+            self._refine_dwell_start = 0.0
+
+    def _finish_refinement_lock(self) -> None:
+        self._refining = False
+        z = (self._refine_best_approach.copy()
+             if self._refine_best_approach is not None
+             else self._approach_point_odom_pos())
+        self._search_lock_buffer = [z]
+        self._set_body_pose(self._search_body_height, self._refine_best_pitch)
+        self.get_logger().info(
+            f'Refinement lock: best_conf={self._refine_best_conf:.2f} '
+            f'at pitch={math.degrees(self._refine_best_pitch):.1f}° → LOCKING')
+        self._set_wbc_enabled(False)
+        self._set_state(CoordState.LOCKING)
+
+    def _finish_refinement_fail(self) -> None:
+        self._refining = False
+        self.get_logger().info(
+            f'Refinement failed: best_conf={self._refine_best_conf:.2f} '
+            f'< {self._search_lock_confidence} → resume coarse from next yaw')
+        self._search_position_idx += 1
+        self._search_position_start = None
 
     def _get_current_yaw(self) -> float | None:
         """Return current Spot yaw in odom frame [rad], or None if TF unavailable."""
@@ -1235,7 +1361,13 @@ class WBCCoordinatorNode(Node):
                 # Fresh start: full reset, save initial yaw
                 self._search_start = self.get_clock().now()
                 yaw = self._get_current_yaw()
-                self._search_initial_yaw = yaw if yaw is not None else 0.0
+                if yaw is not None:
+                    self._search_initial_yaw = yaw
+                else:
+                    self.get_logger().warn(
+                        'TF odom→body non disponibile all\'ingresso SEARCHING '
+                        '→ _search_initial_yaw=0.0 (fallback)')
+                    self._search_initial_yaw = 0.0
                 self._search_positions = self._build_search_sequence()
                 self._search_position_idx = 0
                 self._search_position_start = None
@@ -1259,8 +1391,11 @@ class WBCCoordinatorNode(Node):
             self._torso_detected_ticks = 0
         self._state = new_state
 
-    def _set_body_pose(self, height: float, pitch: float = 0.0, yaw: float = 0.0) -> None:
+    def _set_body_pose(self, height: float, pitch: float = 0.0, yaw: float | None = None) -> None:
         from tf_transformations import quaternion_from_euler
+        if yaw is None:
+            cur_yaw = self._get_current_yaw()
+            yaw = cur_yaw if cur_yaw is not None else 0.0
         q = quaternion_from_euler(0.0, pitch, yaw)
         height_clamped = float(np.clip(height, self._min_body_height, self._max_body_height))
         pose = Pose()
@@ -1270,7 +1405,6 @@ class WBCCoordinatorNode(Node):
         pose.orientation.z = q[2]
         pose.orientation.w = q[3]
         self._pub_body_pose.publish(pose)
-        self._pub_cmd_vel.publish(Twist())
         self._current_body_height = height_clamped
         self.get_logger().info(
             f'body_pose → height={height_clamped:.2f}m  pitch={math.degrees(pitch):.1f}°  yaw={math.degrees(yaw):.1f}°')
@@ -1282,8 +1416,8 @@ class WBCCoordinatorNode(Node):
         return [float(val)]
 
     def _build_search_sequence(self) -> list:
-        """Build search sequence: [0°, +incr, -incr, +2*incr, ...] × [pitch].
-        Returns list of {yaw, pitch} dicts."""
+        """Build coarse search sequence: 6 yaw × 1 pitch (0°).
+        Pitch sweep is handled by refinement mode when a detection triggers."""
         incr = self._search_yaw_increment
         steps = self._search_yaw_steps
         yaw_list = [0.0]
@@ -1293,11 +1427,7 @@ class WBCCoordinatorNode(Node):
                 yaw_list.append(n * incr)
             else:
                 yaw_list.append(-n * incr)
-        seq = []
-        for yaw in yaw_list:
-            for pitch in self._search_pitch_angles:
-                seq.append({'yaw': yaw, 'pitch': pitch})
-        return seq
+        return [{'yaw': y, 'pitch': 0.0} for y in yaw_list]
 
     def _set_wbc_enabled(self, enabled: bool) -> None:
         msg = Bool(); msg.data = enabled

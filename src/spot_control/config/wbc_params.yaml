@@ -76,16 +76,17 @@ wbc_coordinator:
     min_body_height:     -0.20   # limite minimo di sicurezza
     max_body_height:      0.0    # altezza nominale
 
-    # SEARCHING — ricerca ibrida Spot+braccio 360°
-    # Spot ruota a step incrementali (yaw_increment × yaw_steps = 360°).
-    # A ogni posizione, il braccio esplora con pose generate dal QP (null-space).
-    # Semi-lock: se RealSense vede il torso, Spot ruota+inclina verso di esso,
-    # braccio si ferma, Orbbec ha una finestra pulita per rilevare LYING.
-    search_body_height: 0.0                       # [m] altezza nominale (non più abbassato)
+    # SEARCHING — ricerca adattiva coarse + refinement
+    # Coarse: Spot ruota 6 yaw × 1 pitch (0°) a step di 60°, dwell 5s.
+    # Se Orbbec conf ≥ trigger_orb_conf O RealSense GUIDING → refinement:
+    #   Spot fermo al yaw corrente, sweep dei 3 pitch per massimizzare conf Orbbec.
+    #   Se best_conf ≥ lock_confidence → LOCKING, altrimenti prossimo yaw coarse.
+    search_body_height: 0.0                       # [m] altezza nominale
     search_yaw_increment: 1.05                    # [rad] ≈60° passo Spot
     search_yaw_steps: 6                           # posizioni = 360° (6 × 60°)
-    search_pitch_angles: [0.0, 0.087, 0.17]       # [rad] 0°, 5°, 10°
-    search_dwell: 15.0                             # [s] Spot fermo a ogni posizione
+    search_pitch_angles: [0.0, 0.087, 0.17]       # [rad] 0°, 5°, 10° — usati nel refinement
+    search_coarse_dwell: 5.0                      # [s] Spot fermo per posizione coarse
+    search_refine_dwell: 4.0                      # [s] dwell per pitch durante refinement
     search_yaw_kp: 0.8                            # P-gain for yaw rotation via cmd_vel.angular.z
     search_yaw_tolerance: 0.08                    # [rad] ~4.6° tolleranza per yaw raggiunto
     search_max_angular_vel: 0.5                   # [rad/s] max angular velocity for search rotation
@@ -93,8 +94,9 @@ wbc_coordinator:
     search_semi_lock_settle_timeout: 5.0         # [s] timeout se Spot non raggiunge il target
     search_semi_lock_yaw_tol: 0.05               # [rad] tolleranza yaw per considerare settle OK
     search_semi_lock_pitch_tol: 0.03             # [rad] tolleranza pitch per considerare settle OK
-    search_lock_confidence: 0.85                   # [0-1] soglia LYING per lock
+    search_lock_confidence: 0.70                   # [0-1] soglia LYING per lock
     search_lock_samples: 5                         # campioni approach_point da mediare
+    search_refine_trigger_orb_conf: 0.30          # [0-1] soglia Orbbec per trigger refinement
 
     # PRE_APPROACH — arm pre-orientation before Spot starts walking
     pre_approach_duration: 5.0   # [s] pausa per orientare il braccio (WBC arm-only)
