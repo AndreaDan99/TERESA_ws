@@ -151,6 +151,8 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('body_frame',                   'my_spot/body')
         self.declare_parameter('posture_confidence_topic',     '/human_pose/posture_confidence')
         self.declare_parameter('approach_point_topic',         '/laying_human/approach_point')
+        self.declare_parameter('body_center_topic',            '/laying_human/body_center')
+        self.declare_parameter('ik_done_topic',                '/ik_done')
         self.declare_parameter('z1_fsm_state_topic',           '/z1_fsm/state')
         self.declare_parameter('wbc_goal_topic',               '/wbc/ee_goal')
         self.declare_parameter('wbc_enable_topic',             '/wbc/enable')
@@ -164,6 +166,7 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('z1_mount_y',                   0.0)
         self.declare_parameter('z1_mount_z',                   0.20)
         self.declare_parameter('handoff_body_height',         -0.15)  # [m] offset from nominal
+        self.declare_parameter('approach_timeout',              60.0)  # [s] max time to reach handoff
         self.declare_parameter('soft_handoff_distance',      0.20)   # [m] pause for scanner
         self.declare_parameter('min_body_height',             -0.20)
         self.declare_parameter('max_body_height',              0.0)
@@ -206,6 +209,7 @@ class WBCCoordinatorNode(Node):
         self._mount_y              = float(p('z1_mount_y'))
         self._mount_z              = float(p('z1_mount_z'))
         self._handoff_body_height = float(p('handoff_body_height'))
+        self._approach_timeout     = float(p('approach_timeout'))
         self._soft_handoff_dist   = float(p('soft_handoff_distance'))
         self._min_body_height     = float(p('min_body_height'))
         self._max_body_height     = float(p('max_body_height'))
@@ -256,11 +260,13 @@ class WBCCoordinatorNode(Node):
         self._posture                = 'UNKNOWN'
         self._confidence             = 0.0
         self._approach_point_odom: PoseStamped | None = None  # odom-frame (world-fixed)
+        self._body_center_odom: PoseStamped | None = None    # torso centroid in odom
         self._last_lying_time        = None
         self._desired_yaw: float | None = None   # target yaw Spot [rad, odom frame]
         self._current_body_height: float = 0.0   # last applied body_pose height
         self._search_start: rclpy.time.Time | None = None     # SEARCHING entry time
         self._pre_approach_start: rclpy.time.Time | None = None  # PRE_APPROACH entry time
+        self._approach_start: rclpy.time.Time | None = None      # APPROACHING entry time
         self._search_lock_buffer: list | None = None  # odom positions collected during lock
         self._search_positions: list = []              # [{yaw, pitch}, ...]
         self._search_position_idx: int = 0
@@ -271,6 +277,7 @@ class WBCCoordinatorNode(Node):
         self._search_target_yaw: float = 0.0          # yaw assoluto desiderato [rad, odom]
         self._last_yaw_error: float = 0.0             # ultimo errore yaw per fallback TF
         self._lock_lost_ticks: int = 0                # tick consecutivi senza Orbbec in LOCKING
+        self._ik_done: bool = False                    # IK trajectory completion status
         self._torso_tracker_state: str = ''           # LOCKED / TRACKING / IDLE
         self._torso_detected_ticks: int = 0           # consecutive LOCKED ticks
         self._torso_pos: PoseStamped | None = None    # ultima posa torso da RealSense
@@ -305,6 +312,8 @@ class WBCCoordinatorNode(Node):
         self.create_subscription(String,       '/human_pose/posture',        self._cb_posture,    10)
         self.create_subscription(Float32,      p('posture_confidence_topic'), self._cb_conf,       10)
         self.create_subscription(PoseStamped,  p('approach_point_topic'),    self._cb_approach,   10)
+        self.create_subscription(PoseStamped,  p('body_center_topic'),       self._cb_body_center, 10)
+        self.create_subscription(Bool,         p('ik_done_topic'),           self._cb_ik_done,    10)
         self.create_subscription(String,       p('z1_fsm_state_topic'),      self._cb_z1_state,   10)
         self.create_subscription(Bool,         '/z1/fast_ready',             self._cb_fast_ready, 10)
         self.create_subscription(String,      '/torso_tracker_state',      self._cb_torso_state, 10)
@@ -399,6 +408,14 @@ class WBCCoordinatorNode(Node):
                 goal_odom.pose.position.z,
             ])
             self._quality.try_init(z, self.get_clock().now())
+
+    def _cb_body_center(self, msg: PoseStamped) -> None:
+        center_odom = self._tf_transform(msg, self._odom_frame)
+        if center_odom is not None:
+            self._body_center_odom = center_odom
+
+    def _cb_ik_done(self, msg: Bool) -> None:
+        self._ik_done = msg.data
 
     def _cb_z1_state(self, msg: String) -> None:
         pass
@@ -519,6 +536,18 @@ class WBCCoordinatorNode(Node):
         if self._approach_point_odom is None:
             return
 
+        # Timeout check: abort to IDLE if Spot can't reach goal
+        if self._approach_start is not None:
+            elapsed = (self.get_clock().now() - self._approach_start).nanoseconds * 1e-9
+            if elapsed >= self._approach_timeout:
+                self.get_logger().error(
+                    f'APPROACHING timeout ({self._approach_timeout:.0f}s) '
+                    f'— goal unreachable → IDLE')
+                self._pub_spot_ctrl.publish(Bool(data=False))
+                self._pub_cmd_vel.publish(Twist())
+                self._set_state(CoordState.IDLE)
+                return
+
         # Publish goal for spot_goal_navigator (Spot) and look-at (arm)
         self._pub_goal.publish(self._filtered_goal())
 
@@ -617,14 +646,15 @@ class WBCCoordinatorNode(Node):
                         f'Semi-lock: Spot settled (Δyaw={math.degrees(dy):.1f}° '
                         f'Δpitch={math.degrees(dp):.1f}°) → Orbbec dwell {self._search_semi_lock_dwell:.1f}s')
                     return
-                elif not yaw_ok:
-                    error = normalize_angle(
-                        (self._semi_lock_start_yaw + self._semi_lock_target_yaw)
-                        - cur_yaw)
+                else:
                     t = Twist()
-                    t.angular.z = float(np.clip(
-                        self._search_yaw_kp * error,
-                        -self._search_max_angular_vel, self._search_max_angular_vel))
+                    if not yaw_ok:
+                        error = normalize_angle(
+                            (self._semi_lock_start_yaw + self._semi_lock_target_yaw)
+                            - cur_yaw)
+                        t.angular.z = float(np.clip(
+                            self._search_yaw_kp * error,
+                            -self._search_max_angular_vel, self._search_max_angular_vel))
                     self._pub_cmd_vel.publish(t)
 
             elapsed = now_ns - self._semi_lock_entry_time
@@ -666,7 +696,8 @@ class WBCCoordinatorNode(Node):
             z = self._approach_point_odom_pos()
             if len(self._search_lock_buffer) < self._search_lock_samples:
                 self._search_lock_buffer.append(z)
-            if len(self._search_lock_buffer) >= self._search_lock_samples:
+            if len(self._search_lock_buffer) >= self._search_lock_samples \
+                    and self._ik_done:
                 target = np.mean(self._search_lock_buffer, axis=0)
                 self._quality.set_target(target, self._search_lock_confidence)
                 self.get_logger().info(
@@ -931,13 +962,17 @@ class WBCCoordinatorNode(Node):
             return None
 
     def _tick_pre_approach(self) -> None:
-        self._pub_goal.publish(self._filtered_goal())
+        if self._body_center_odom is not None:
+            self._pub_goal.publish(self._body_center_odom)
+        else:
+            self._pub_goal.publish(self._filtered_goal())
 
-        # Wait for 5 consecutive RealSense LOCKED ticks
-        if self._torso_tracker_state == 'LOCKED':
+        # Wait for 3 consecutive RealSense ESTIMATING or LOCKED ticks
+        if self._torso_tracker_state in ('ESTIMATING', 'LOCKED'):
             self._torso_detected_ticks += 1
-            if self._torso_detected_ticks >= 5:
-                self.get_logger().info('RealSense LOCKED ×5 → APPROACHING')
+            if self._torso_detected_ticks >= 3:
+                self.get_logger().info(
+                    f'RealSense {self._torso_tracker_state} ×3 → APPROACHING')
                 self._pub_spot_ctrl.publish(Bool(data=False))
                 self._set_state(CoordState.APPROACHING)
                 return
@@ -949,7 +984,7 @@ class WBCCoordinatorNode(Node):
         if elapsed >= self._pre_approach_duration:
             self.get_logger().warn(
                 f'PRE_APPROACH timeout ({self._pre_approach_duration:.1f}s) '
-                f'— RealSense LOCKED {self._torso_detected_ticks}/5, proceeding anyway')
+                f'— RealSense {self._torso_tracker_state} {self._torso_detected_ticks}/3, proceeding anyway')
             self._pub_spot_ctrl.publish(Bool(data=False))
             self._set_state(CoordState.APPROACHING)
             return
@@ -1383,7 +1418,13 @@ class WBCCoordinatorNode(Node):
             self._pub_cmd_vel.publish(Twist())
             self._pub_guidance.publish(Bool(data=False))
             self._search_rotating = False
+            self._ik_done = False
             self._set_wbc_enabled(True)
+        if new_state == CoordState.APPROACHING:
+            self._pub_cmd_vel.publish(Twist())
+            self._pub_guidance.publish(Bool(data=False))
+            self._pub_spot_ctrl.publish(Bool(data=False))
+            self._approach_start = self.get_clock().now()
         if new_state == CoordState.PRE_APPROACH:
             self._pub_cmd_vel.publish(Twist())
             self._pub_guidance.publish(Bool(data=False))

@@ -67,6 +67,8 @@ class LayingHumanDetector(Node):
             Vector3Stamped, '/laying_human/body_axis', 10)
         self.approach_marker_pub = self.create_publisher(
             Marker, '/laying_human/approach_marker', 10)
+        self.body_center_pub = self.create_publisher(
+            PoseStamped, '/laying_human/body_center', 10)
 
         # ============================================================
         # STATE
@@ -239,6 +241,16 @@ class LayingHumanDetector(Node):
         goal.pose.orientation.z = float(qz)
         goal.pose.orientation.w = float(qw)
         self.goal_pub.publish(goal)
+
+        # --- Pubblica body center (torso centroid) per LOOKAT in PRE_APPROACH ---
+        body_ctr = PoseStamped()
+        body_ctr.header.stamp    = self.get_clock().now().to_msg()
+        body_ctr.header.frame_id = msg.header.frame_id
+        body_ctr.pose.position.x = float(torso_center[0])
+        body_ctr.pose.position.y = float(torso_center[1])
+        body_ctr.pose.position.z = float(torso_center[2])
+        body_ctr.pose.orientation.w = 1.0
+        self.body_center_pub.publish(body_ctr)
 
         # --- Marker RViz ---
         self._publish_approach_marker(approach_pos, msg.header)

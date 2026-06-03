@@ -92,7 +92,7 @@ class Z1YoloTorsoTracker(Node):
         self.declare_parameter('sync_queue_size',    10)
 
         # ── Parametri guidance (SEARCHING) ──────────────────────────
-        self.declare_parameter('guidance_min_conf',      0.3)    # conf minima in guidance mode
+        self.declare_parameter('guidance_min_conf',      0.5)    # conf minima in guidance mode
         self.declare_parameter('guidance_recovery_frames', 15)   # frame persi prima di tornare IDLE
 
         # ── Leggi parametri ────────────────────────────────────────
@@ -196,6 +196,8 @@ class Z1YoloTorsoTracker(Node):
         # score = (n_kp / 4) * conf  per frame validi; 0.0 per frame non validi.
         self.pub_scan_point = self.create_publisher(
             Float32MultiArray, '/torso_scan_point', 10)
+        self.pub_kp_conf = self.create_publisher(
+            Float32MultiArray, '/torso_keypoint_conf', 10)
 
         # ── Stato interno normale ──────────────────────────────────
         self.state            = 'IDLE'
@@ -550,7 +552,7 @@ class Z1YoloTorsoTracker(Node):
     def _update_guidance(self, torso_raw, n_valid, avg_conf, header):
         prev_state = self.state
 
-        if torso_raw is not None and n_valid >= 1:
+        if torso_raw is not None and n_valid >= 2:
             self.state = 'GUIDING'
             self._guidance_missed = 0
             self._guidance_counter += 1
@@ -714,6 +716,7 @@ class Z1YoloTorsoTracker(Node):
                 if target_world is not None:
                     interpolated = self._interpolate_to_target(target_world)
                     self._publish_target_world(interpolated)
+                    self._publish_kp_conf()
 
                 if len(self.position_history) >= self.lock_stable_frames:
                     variance = np.var(self.position_history, axis=0).sum()
@@ -756,6 +759,7 @@ class Z1YoloTorsoTracker(Node):
             interpolated = self._interpolate_to_target(self.locked_target)
             self._publish_target_world(interpolated)
             self._publish_target_world_locked(self.locked_target)
+            self._publish_kp_conf()
             # self._publish_visible(True)
 
             ok_det = (torso_raw is not None and n_valid >= self.min_keypoints and avg_conf >= self.min_det_conf)
@@ -814,6 +818,16 @@ class Z1YoloTorsoTracker(Node):
         pose.pose.position.z = float(point_world[2])
         pose.pose.orientation.w = 1.0
         self.pub_torso_ee_locked.publish(pose)
+
+    def _publish_kp_conf(self):
+        msg = Float32MultiArray()
+        msg.data = [
+            float(self._last_kp_conf.get(5, 0.0)),
+            float(self._last_kp_conf.get(6, 0.0)),
+            float(self._last_kp_conf.get(11, 0.0)),
+            float(self._last_kp_conf.get(12, 0.0)),
+        ]
+        self.pub_kp_conf.publish(msg)
 
     # def _publish_visible(self, visible: bool):
     #     self.pub_visible.publish(Bool(data=bool(visible)))

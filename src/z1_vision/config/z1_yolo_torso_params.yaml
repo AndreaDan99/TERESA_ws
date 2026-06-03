@@ -50,5 +50,5 @@ z1_yolo_torso_tracker:
     scan_min_frames:  8
 
     # ── Guidance mode (SEARCHING: any keypoint → GUIDING) ───────────
-    guidance_min_conf:       0.3      # conf minima per considerare un keypoint
+    guidance_min_conf:       0.5      # conf minima per considerare un keypoint
     guidance_recovery_frames: 15      # frame persi prima di tornare IDLE

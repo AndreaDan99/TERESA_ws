@@ -29,6 +29,8 @@ wbc_qp_controller:
     scan_timeout_per_point: 3.0   # [s] raccolta dati per posa in APPROACHING
     scan_adaptive_iters: 3        # max iterazioni adattive dopo griglia statica
     kp_confidence_ok: 0.4         # [0-1] soglia keypoint per considerarlo "sufficiente"
+    cartesian_x_advance: 0.10    # [m] forward advance for PERCEPTUAL_SCAN grid
+    pre_scan_conf_thr: 0.6       # [0-1] conf threshold for reduced grid (all 4 kp ok)
 
     # Goal update period — controls how often WBC recomputes IK goals.
     # IK solver processes goals sequentially (one trajectory at a time), so higher
@@ -43,6 +45,10 @@ wbc_qp_controller:
     #   "minrot"       → minimum rotation from home X to x_ee (preserves wrist config)
     #   "gram_schmidt" → Gram-Schmidt Y_ee ∥ home Y (prevents twist, may force wrist rotation)
     orientation_mode: "minrot"
+
+    # Home pose Z elevation during LOCKING [m].
+    # Raised above normal HOME_POS (0.44) to give RealSense a better vantage point.
+    home_lock_z: 0.60
 
     # Workspace safety margin [m] — keep in sync with z1_fsm_params.yaml
     # Uses the same WorkspaceChecker class (z1_vision.workspace_checker).
@@ -113,6 +119,7 @@ wbc_coordinator:
     ws_ext_dy_fwd_max: 0.20                    # [m] max forward displacement
     ws_ext_dy_bwd_max: 0.30                    # [m] max backward displacement
     navigator_timeout: 5.0                     # [s] max wait for Spot to reach WS_EXT goal
+    approach_timeout: 60.0                     # [s] max time for Spot to reach handoff in APPROACHING
 
     # Debug: step mode — gates automatic FSM transitions for debugging.
     # When true, each mission-state transition must be confirmed via /wbc/step_confirm.
@@ -121,6 +128,8 @@ wbc_coordinator:
     # Topics
     posture_confidence_topic: '/human_pose/posture_confidence'
     approach_point_topic:     '/laying_human/approach_point'
+    body_center_topic:        '/laying_human/body_center'
+    ik_done_topic:            '/ik_done'
     z1_fsm_state_topic:       '/z1_fsm/state'
     wbc_goal_topic:           '/wbc/ee_goal'
     wbc_enable_topic:         '/wbc/enable'

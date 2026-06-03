@@ -18,21 +18,24 @@ git status --short
 
 | Document | Contents |
 |----------|----------|
-| [`CHANGELOG.md`](CHANGELOG.md) | Changelog storico (6 May – 28 May 2026) |
+| [`CHANGELOG.md`](CHANGELOG.md) | Changelog storico (6 May – 2 June 2026) |
 | [`DESCRIPTION.md`](DESCRIPTION.md) | Architettura sistema, frame tree, FSM, build/run |
 | [`PLAN.md`](PLAN.md) | Piano futuro (refactoring launch, body pose optimization, paper) |
 | [`web/README.md`](web/README.md) | Web control panel + camera view con YOLO overlay |
 
 ---
 
-## Current State (29 May 2026)
+## Current State (2 June 2026)
 
-- **Active Perception Cartesian Scanning**: il QP controller genera waypoint **Cartesiani** (non più null-space SVD). `ACTIVE_SEARCH` (9 pose + sweep polso ±15° in SEARCHING) e `PERCEPTUAL_SCAN` (6 pose multi-angolo in APPROACHING). Movimenti prevedibili, Z ≥ home (0.44m). Rotazione polso combinata alla traslazione per amplificare la copertura (fino a ±26°/lato a 1m).
-- **Semi-lock rilassato**: il tracker accetta `ESTIMATING` oltre a `LOCKED` — basta vedere 3+ keypoint qualsiasi per guidare Spot verso il corpo. `/torso_target_ee` pubblicato anche durante `ESTIMATING`.
+- **Ricerca adattiva coarse + refinement**: SEARCHING riscritto. Spot ruota con `cmd_vel.angular.z` P-control (6 posizioni coarse ×60° = 360°, dwell 5s). Durante il dwell, se una camera vede qualcosa (RealSense tracker `GUIDING` o Orbbec conf ≥ 0.30) → **refinement**: sweep pitch [0°,5°,10°] (dwell 4s), traccia best Orbbec conf. `best_conf ≥ 0.70` → LOCKING, altrimenti prossimo yaw. Niente più griglia fissa 18 posizioni.
+- **Tracker state GUIDING**: nuovo stato del torso tracker (giallo) oltre a `IDLE/ESTIMATING/LOCKED`. In guidance mode (SEARCHING) qualsiasi keypoint → GUIDING. Triggera refinement e guida il SEMI_LOCKING.
+- **Braccio QP ACTIVE_SEARCH = 3 pose**: HOME/LEFT/RIGHT, tilt fisso -15°, sweep Y ±0.28m, X +0.20m, Z=0.42m. Loop infinito. No wrist sweep.
+- **Active Perception Cartesian Scanning**: `PERCEPTUAL_SCAN` (6 pose multi-angolo in APPROACHING, step 0.12m). Movimenti prevedibili, Z ≥ home (0.44m).
+- **Semi-lock rilassato**: il tracker accetta `GUIDING`/`ESTIMATING` oltre a `LOCKED` — basta vedere keypoint qualsiasi per guidare Spot verso il corpo.
 - **Web Control Panel**: interfaccia web (`web/teresa_control.html`) con pulsanti, stato WBC, navigazione RETURN via P-controller JS. Camera view (`web/camera_view.html`) con feed live Orbbec/RealSense + overlay scheletro YOLO.
 - **Step mode debugging**: `step_mode:=true` blocca le transizioni FSM automatiche. Conferma con tasto `n` o pulsante STEP.
-- **Ricerca ibrida 360°**: Spot + braccio coordinati in SEARCHING. 18 posizioni Spot (6 yaw × 3 pitch). Braccio esplora con 9 pose Cartesiane in loop (ACTIVE_SEARCH, sweep Y ±0.20m, rotazione polso ±15°). Semi-lock: RealSense triggera da `ESTIMATING` (basta vedere keypoint, anche solo gambe). WBC spento immediatamente all'ingresso in LOCKING. PRE_APPROACH con timeout 5s.
-- **QP Controller — 3 modalità**: ACTIVE_SEARCH, LOOKAT, PERCEPTUAL_SCAN. Arm-only.
+- **WBC spento** immediatamente all'ingresso in LOCKING. PRE_APPROACH con timeout 5s.
+- **QP Controller — 3 modalità**: ACTIVE_SEARCH (3 pose), LOOKAT, PERCEPTUAL_SCAN (6 pose). Arm-only.
 - **Spot P-controller rimosso dal QP**. Spot mosso solo da navigatore e coordinator.
 - **Paper reframing**: Whole-Body Active Perception for Emergency Assessment.
 

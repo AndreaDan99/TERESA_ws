@@ -92,6 +92,8 @@ class WBCQPControllerNode(Node):
         self.declare_parameter('scan_timeout_per_point',   3.0)
         self.declare_parameter('scan_adaptive_iters',      3)
         self.declare_parameter('kp_confidence_ok',         0.4)
+        self.declare_parameter('cartesian_x_advance',    0.10)
+        self.declare_parameter('pre_scan_conf_thr',      0.6)
         self.declare_parameter('update_period', 0.1)
         self.declare_parameter('workspace_safety_margin', 0.05)
         self.declare_parameter('ik_goal_topic',      '/wbc/ik_goal_pose')
@@ -99,6 +101,7 @@ class WBCQPControllerNode(Node):
         self.declare_parameter('joint_states_topic', '/joint_states')
         self.declare_parameter('home_orientation', [-0.0062, 0.4107, 0.0021, 0.9118])
         self.declare_parameter('orientation_mode', 'minrot')
+        self.declare_parameter('home_lock_z', 0.60)
 
         p = lambda n: self.get_parameter(n).value
         self._dry_run       = bool(p('dry_run'))
@@ -116,9 +119,13 @@ class WBCQPControllerNode(Node):
         self._scan_timeout_pp      = float(p('scan_timeout_per_point'))
         self._scan_adaptive_iters  = int(p('scan_adaptive_iters'))
         self._kp_confidence_ok     = float(p('kp_confidence_ok'))
+        self._cartesian_x_advance  = float(p('cartesian_x_advance'))
+        self._pre_scan_conf_thr    = float(p('pre_scan_conf_thr'))
+        self._pre_scan_kp_conf     = [0.0, 0.0, 0.0, 0.0]
         self._update_period        = float(p('update_period'))
         self._home_orientation = np.array([float(x) for x in p('home_orientation')])
         self._orientation_mode = p('orientation_mode')
+        self._home_lock_z      = float(p('home_lock_z'))
 
         # ── Pinocchio ─────────────────────────────────────────────────────
         urdf = p('urdf_path')
@@ -171,6 +178,8 @@ class WBCQPControllerNode(Node):
         self.create_subscription(Bool,        '/ik_done',             self._cb_ik_done,     10)
         self.create_subscription(Float32MultiArray, '/torso_scan_point',
                                   self._cb_scan_data, 10)
+        self.create_subscription(Float32MultiArray, '/torso_keypoint_conf',
+                                  self._cb_kp_conf, 10)
 
         # ── Publishers ────────────────────────────────────────────────────
         if self._dry_run:
@@ -220,7 +229,7 @@ class WBCQPControllerNode(Node):
             if prev != 'SEARCHING':
                 self._start_active_search()
         elif msg.data == 'SEMI_LOCKING' and self._mode == 'ACTIVE_SEARCH':
-            self._end_search()
+            self._end_search(re_enable=True)
         elif msg.data == 'LOCKING':
             self._end_search()
             self._send_home()
@@ -237,6 +246,10 @@ class WBCQPControllerNode(Node):
 
     def _cb_scan_data(self, msg: Float32MultiArray) -> None:
         self._scan_data_queue.append(list(msg.data))
+
+    def _cb_kp_conf(self, msg: Float32MultiArray) -> None:
+        if len(msg.data) >= 4:
+            self._pre_scan_kp_conf = list(msg.data[:4])
 
     # ── TF helpers ────────────────────────────────────────────────────────
 
@@ -498,46 +511,51 @@ class WBCQPControllerNode(Node):
             self._scan_scanner = None
             self._start_active_search()
 
-    def _end_search(self) -> None:
+    def _end_search(self, re_enable: bool = False) -> None:
         self._mode = 'LOOKAT'
         self._pub_tracker_scan.publish(Bool(data=False))
-        self._pub_en.publish(Bool(data=False))
         self._scan_scanner = None
         self._scan_data_queue.clear()
+        self._pub_en.publish(Bool(data=re_enable))
 
     def _send_home(self) -> None:
-        home_pose = _make_pose_stamped(HOME_POS, HOME_ORI)
+        home_pos = np.array([HOME_POS[0], HOME_POS[1], self._home_lock_z])
+        home_pose = _make_pose_stamped(home_pos, HOME_ORI)
         self._pub_ik.publish(home_pose)
         self._pub_en.publish(Bool(data=True))
-        self.get_logger().info('Home pose sent (LOCKING → home)')
+        self.get_logger().info(f'Lock home sent: Z={self._home_lock_z:.2f}m')
 
     # ── PERCEPTUAL_SCAN mode (APPROACHING) ───────────────────────────────
 
     def _gen_cartesian_scan_grid(self, p_ee: np.ndarray,
                                   target: np.ndarray) -> list[PoseStamped]:
-        """
-        6 pose Cartesiane attorno a p_ee. Look-at verso target.
-        Pattern: home, ±Y, +Z, +X, +X+Y. Copertura multi-angolo del torso.
-        """
-        s = self._cartesian_step
+        adv = self._cartesian_x_advance   # 0.10m forward
+        s   = self._cartesian_step        # 0.12m
         x_desired = target - p_ee
         x_desired /= max(float(np.linalg.norm(x_desired)), 1e-6)
 
-        waypoints = [
-            np.array([0,  0,  0]),      # HOME
-            np.array([0,  +s, 0]),      # +Y — spalla sx (kp5) + anca sx (kp11)
-            np.array([0,  -s, 0]),      # -Y — spalla dx (kp6) + anca dx (kp12)
-            np.array([0,  0,  +s]),     # +Z — vista dall'alto
-            np.array([+s, 0,  0]),      # +X — più vicino, depth migliore
-            np.array([+s, +s, 0]),      # +X+Y — diagonale
-        ]
+        all_ok = all(c >= self._pre_scan_conf_thr for c in self._pre_scan_kp_conf)
+        if all_ok:
+            waypoints = [
+                (adv,       0,  0),    # HOME (+X advance)
+                (adv + s,   0, +s),    # +X+Z
+            ]
+        else:
+            waypoints = [
+                (adv,       0,  0),    # HOME
+                (adv + s,  +s,  0),    # +X+Y
+                (adv,       0,  0),    # HOME transit
+                (adv + s,  -s,  0),    # +X-Y
+                (adv,       0,  0),    # HOME transit
+                (adv + s,   0, +s),    # +X+Z
+            ]
 
+        quat = compute_ee_orientation_minrot(x_desired, HOME_ORI.tolist())
         poses = []
-        for offset in waypoints:
-            pos = p_ee + offset
+        for dx, dy, dz in waypoints:
+            pos = p_ee + np.array([dx, dy, dz])
             pos[2] = max(pos[2], HOME_POS[2])
             clipped, _, _ = self._ws_checker.clip_target(pos)
-            quat = compute_ee_orientation_minrot(x_desired, HOME_ORI.tolist())
             poses.append(_make_pose_stamped(clipped, quat))
         return poses
 

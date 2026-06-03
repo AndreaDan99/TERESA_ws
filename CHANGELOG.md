@@ -1,9 +1,127 @@
 # TERESA — Changelog
 
-Storico completo delle modifiche dal 6 maggio 2026 al 29 maggio 2026.
+Storico completo delle modifiche dal 6 maggio 2026 al 3 giugno 2026.
 Per la descrizione del sistema corrente vedi [`DESCRIPTION.md`](DESCRIPTION.md).
 
 ---
+
+## 3 June 2026 — FSM phase-by-phase analysis & fixes (SEMI_LOCKING → APPROACHING)
+
+### SEMI_LOCKING fixes
+
+| Fix | File | Descrizione |
+|-----|------|-------------|
+| Pitch flush | `wbc_coordinator.py:620` | `elif not yaw_ok` → `else` + `Twist()` flush: se yaw ok ma pitch no, pubblica cmd_vel zero per applicare il body_pose pendente |
+| GUIDING strict | `z1_yolo_torso_tracker.py:95,553` + `z1_yolo_torso_params.yaml:53` | `guidance_min_conf` 0.3→0.5, minimo keypoint 1→2. Riduce falsi positivi. |
+| `_end_search(re_enable)` | `wbc_qp_controller.py:501,223` | IK riacceso subito nella transizione ACTIVE_SEARCH→LOOKAT, nessuna finestra di 100ms a braccio fermo. |
+
+### PRE_APPROACH fixes
+
+| Fix | File | Descrizione |
+|-----|------|-------------|
+| Body center LOOKAT | `laying_human_detector.py` + `wbc_coordinator.py` | Nuovo topic `/laying_human/body_center` (torso centroid 3D). In PRE_APPROACH il LOOKAT punta al corpo invece che a `approach_point` (punto a terra). |
+| Soglia conferma | `wbc_coordinator.py:938` | `ESTIMATING` o `LOCKED` ×3 tick invece di `LOCKED` ×5. Più rapido, tollera distanza. |
+| ik_done gate | `wbc_coordinator.py:1406` | La transizione LOCKING→PRE_APPROACH aspetta `/ik_done` (braccio in home prima di partire). |
+| Home elevata | `wbc_qp_controller.py:511` | `_send_home()` usa Z=0.60 invece di 0.44. Braccio più alto, RealSense ha vista migliore. |
+
+### APPROACHING fixes
+
+| Fix | File | Descrizione |
+|-----|------|-------------|
+| Griglia adattiva | `wbc_qp_controller.py:521` | `_gen_cartesian_scan_grid()`: 2 pose (HOME, +X+Z) se i 4 keypoint torso conf≥0.6, altrimenti 4 pose (HOME, +X+Y, +X-Y, +X+Z) con HOME transit tra i waypoint. Advance X=0.10m su tutta la griglia. |
+| `_do_set_state` pulizia | `wbc_coordinator.py:1408` | Case `CoordState.APPROACHING`: ferma cmd_vel, spegne guidance mode, disabilita navigator. |
+| Timeout navigator | `wbc_coordinator.py:538` | Dopo 60s senza raggiungere handoff → IDLE (goal irraggiungibile). |
+| Keypoint conf pre-scan | `z1_yolo_torso_tracker.py` + `wbc_qp_controller.py` | Nuovo topic `/torso_keypoint_conf` pubblicato in ESTIMATING/LOCKED. Usato per decidere griglia adattiva. |
+
+### Nuovi parametri
+
+```yaml
+# wbc_params.yaml
+body_center_topic: '/laying_human/body_center'
+ik_done_topic: '/ik_done'
+home_lock_z: 0.60
+cartesian_x_advance: 0.10
+pre_scan_conf_thr: 0.6
+approach_timeout: 60.0
+
+# z1_yolo_torso_params.yaml
+guidance_min_conf: 0.5  # was 0.3
+```
+
+### File modificati
+
+| File | +/− |
+|------|-----|
+| `laying_human_detector.py` | +12 |
+| `z1_yolo_torso_tracker.py` | +18 |
+| `wbc_qp_controller.py` | +62/−28 |
+| `wbc_coordinator.py` | +69/−17 |
+| `wbc_params.yaml` | +9 |
+| `z1_yolo_torso_params.yaml` | +1/−1 |
+| `PLAN.md` | +42 |
+
+## 2 June 2026 — Adaptive Coarse + Refinement Search + GUIDING tracker state
+
+Riscrittura completa della fase **SEARCHING**. Sostituisce la griglia fissa (18 posizioni Spot body_pose + 9 pose braccio + wrist sweep) con una ricerca adattiva a due livelli.
+
+### Spot: coarse rotation via cmd_vel (non più body_pose yaw)
+
+**Before:** Spot ruotava cambiando `body_pose(yaw)` su 18 posizioni fisse (6 yaw × 3 pitch).
+
+**After:** Spot ruota con `cmd_vel.angular.z` P-control (`search_yaw_kp=0.8`, max `0.5 rad/s`):
+- 6 posizioni coarse (yaw step ≈60°, 360° totali)
+- Ad ogni posizione: dwell `search_coarse_dwell=5s` fermo, Orbbec/RealSense osservano
+- Rotazione yaw assoluta in odom via TF `odom→body`, tolleranza `search_yaw_tolerance=0.08`
+- Fallback su `_last_yaw_error` se TF non disponibile durante la rotazione
+
+### Refinement: pitch sweep adattivo (trigger-based)
+
+Durante il dwell coarse, se una camera vede qualcosa → entra in **refinement** (`_tick_refinement`):
+- **Trigger** (`_should_refine`): RealSense tracker `== GUIDING` (qualsiasi keypoint) **oppure** Orbbec conf `≥ search_refine_trigger_orb_conf=0.30`
+- Sweep pitch `search_pitch_angles=[0°, 5°, 10°]`, dwell `search_refine_dwell=4s` per pitch
+- Traccia la migliore Orbbec conf + relativo `approach_point`
+- `best_conf ≥ search_lock_confidence=0.70` → **LOCKING** (`_finish_refinement_lock`, fornisce già 1 campione)
+- altrimenti → resume coarse dal prossimo yaw (`_finish_refinement_fail`)
+
+### Nuovo tracker state: GUIDING
+
+Il torso tracker (`z1_yolo_torso_tracker.py`) ha un nuovo stato **GUIDING** (giallo) oltre a `IDLE/ESTIMATING/LOCKED`. In guidance mode (attivo durante SEARCHING via `/tracker_guidance_mode`), qualsiasi keypoint valido → `GUIDING`. Usato per triggerare il refinement e per guidare il SEMI_LOCKING.
+
+### Braccio: QP ACTIVE_SEARCH ridotto a 3 pose
+
+**Before:** 9 pose Cartesiane + sweep polso ±15°.
+
+**After:** `_gen_cartesian_search_grid()` genera **3 pose wide** (HOME, LEFT, RIGHT) con tilt fisso -15°, sweep Y ±0.28m, X +0.20m, Z=0.42m. Nessun wrist sweep. Loop infinito via BodySearchScanner.
+
+### Fix
+
+- Rimosso `_set_body_pose` dalle fasi ROTATING/DWELLING — azzerava `cmd_vel.angular.z` (commit dbf02ae, 9cb84bf)
+- Guard contro `_search_initial_yaw=None` al primo TF lookup (a64f19f)
+- GUIDING accettato in semi-lock + TF retry + body_pose refresh periodico (b7cb956)
+
+### Nuovi parametri YAML (`wbc_params.yaml`)
+
+```yaml
+search_coarse_dwell: 5.0              # [s] dwell per posizione coarse
+search_refine_dwell: 4.0             # [s] dwell per pitch in refinement
+search_yaw_kp: 0.8                   # P-gain rotazione yaw via cmd_vel
+search_yaw_tolerance: 0.08           # [rad] tolleranza yaw raggiunto
+search_max_angular_vel: 0.5          # [rad/s] velocità angolare max
+search_refine_trigger_orb_conf: 0.30 # [0-1] soglia Orbbec trigger refinement
+search_pitch_angles: [0.0, 0.087, 0.17]  # [rad] 0°,5°,10° — usati nel refinement
+```
+
+### Files modificati
+
+| File | Modifica |
+|------|----------|
+| `wbc_coordinator.py` | SEARCHING coarse cmd_vel rotation + refinement pitch sweep. `_tick_search_positions`, `_should_refine`, `_start_refinement`, `_tick_refinement`, `_finish_refinement_lock/fail`. SEMI_LOCKING accetta GUIDING. |
+| `wbc_qp_controller.py` | `_gen_cartesian_search_grid` ridotto a 3 pose, tilt fisso -15°, no wrist sweep |
+| `z1_yolo_torso_tracker.py` | Nuovo stato GUIDING + guidance mode (`/tracker_guidance_mode`) |
+| `wbc_params.yaml` | Nuovi parametri coarse+refinement, rimossi parametri griglia fissa |
+
+---
+
 
 ## 29 May 2026 — Active Perception: Cartesian Scanning + Semi-lock Relaxed
 

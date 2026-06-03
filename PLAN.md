@@ -10,7 +10,7 @@ Estendere TERESA per gestire pazienti **non supini**. Oggi il sistema cerca solo
 Con questa estensione, se il paziente è seduto a terra (`SITTING`) o in piedi (`STANDING`), il robot esegue una
 **scansione corporea completa** per rilevare ferite, bruciature ed emorragie visibili (copre la **"E"** di ABCDE — Exposure).
 
-La fase SEARCHING (18 posizioni Spot, Orbbec cerca il corpo) **rimane invariata**. La differenza è dopo il lock.
+La fase SEARCHING (coarse rotation cmd_vel + refinement pitch, Orbbec/RealSense cercano il corpo) **rimane invariata**. La differenza è dopo il lock.
 
 ## Architettura generale
 
@@ -563,6 +563,45 @@ Con early-stop su regioni senza detection il tempo si riduce ulteriormente (non 
 
 ---
 
+# 🔧 FSM Analysis & Fixes (in corso — 3 Giugno 2026)
+
+Analisi fase-per-fase del FSM con fix mirati. Ogni fase viene analizzata, i problemi identificati, e i fix implementati.
+
+| Fase | Stato | Problemi risolti |
+|------|:-----:|------------------|
+| **SEARCHING** | ✅ | Coarse+refinement search, 6 yaw×1 pitch, 5s dwell (2 Giugno) |
+| **SEMI_LOCKING** | ✅ | Pitch flush, GUIDING conf≥0.5 + ≥2 kp, `_end_search(re_enable=True)` |
+| **LOCKING** | ✅ | `ik_done` gate prima di PRE_APPROACH, home_lock_z=0.60 |
+| **PRE_APPROACH** | ✅ | LOOKAT → `/laying_human/body_center`, soglia ESTIMATING/LOCKED ×3 |
+| **APPROACHING** | ✅ | Griglia adattiva 2/4 pose + advance X=0.10, `_do_set_state` pulizia, timeout 60s |
+| **SCANNING** | 📝 | Da analizzare: FAST points cycle, body pose optimization, WS_EXT |
+
+### Nuovi topic
+
+| Topic | Publisher | Subscriber | Fase |
+|-------|-----------|------------|------|
+| `/laying_human/body_center` | `laying_human_detector` | `wbc_coordinator` | PRE_APPROACH |
+| `/torso_keypoint_conf` | `yolo_torso_tracker` | `wbc_qp_controller` | APPROACHING |
+
+### Nuovi parametri YAML (wbc_params.yaml)
+
+| Parametro | Default | Fase |
+|-----------|---------|------|
+| `body_center_topic` | `/laying_human/body_center` | PRE_APPROACH |
+| `ik_done_topic` | `/ik_done` | PRE_APPROACH |
+| `home_lock_z` | 0.60 | LOCKING |
+| `cartesian_x_advance` | 0.10 | APPROACHING |
+| `pre_scan_conf_thr` | 0.6 | APPROACHING |
+| `approach_timeout` | 60.0 | APPROACHING |
+
+### Parametri modificati (z1_yolo_torso_params.yaml)
+
+| Parametro | Prima | Dopo |
+|-----------|-------|------|
+| `guidance_min_conf` | 0.3 | 0.5 |
+
+---
+
 # Launch Refactoring (Core + App)
 
 ## Obiettivo
@@ -602,6 +641,6 @@ T3: ros2 run spot_control wbc_keyboard_node
 | `experiments.tex` | 📝 | Setup sperimentale, griglia posizioni paziente, baseline, metriche |
 | `results.tex` | 📝 | Idle time reduction, positioning error, confidence vs velocity, tabella comparativa |
 | `conclusion.tex` | 📝 | Summary contributi, limitazioni, future work |
-| `figures/fsm.tex` | 🔧 | Aggiornare con 8 stati (nuovo EXPOSURE_SCANNING) |
+| `figures/fsm.tex` | 🔧 | Aggiornare con 9 stati (8 attuali + nuovo EXPOSURE_SCANNING) |
 | `figures/system_block.tex` | 🔧 | Aggiornare con injury_detector, human_approach_detector |
 | Compilazione LaTeX | 🔧 | Verificare undefined references |
