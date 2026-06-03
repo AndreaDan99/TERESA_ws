@@ -24,12 +24,19 @@ Spot's back. It is controlled at the torque level through a \ac{JTC}
 interface running on the Jetson. The \textbf{ultrasound probe} is attached
 to the Z1 flange ($\mathcal{F}_{EE}$).
 
-Two depth cameras provide complementary coverage. An \textbf{Orbbec Femto
-Bolt \ac{RGBD}} camera is mounted on Spot's body and provides a wide field
-of view for patient detection at distances up to \SI{3}{\metre}. An
-\textbf{Intel RealSense D435 \ac{RGBD}} camera is mounted at the Z1
-\ac{EE} and provides close-range depth and colour for surface estimation
-and torso tracking during scanning.
+Two depth cameras provide complementary coverage. A 360-degree camera
+would offer panoramic awareness but lacks depth sensing, which is essential
+for projecting skeleton keypoints to 3D world coordinates. Spot's five
+built-in stereo cameras are grayscale and positioned low on the body for
+ground-plane obstacle avoidance; they are not suitable for RGB-based
+\ac{YOLO} skeleton detection nor for viewing a patient's torso. Instead,
+\ac{TERESA} uses two \ac{RGBD} sensors in complementary roles. An
+\textbf{Orbbec Femto Bolt \ac{RGBD}} camera is mounted on Spot's body,
+providing wide-field colour and depth for patient detection at distances up
+to \SI{3}{\metre}. An \textbf{Intel RealSense D435 \ac{RGBD}} camera is
+mounted at the Z1 \ac{EE}; the arm's \ac{WBC} look-at controller positions it
+as an active pan-tilt unit, providing close-range depth and colour for
+surface estimation and torso tracking during approach and scanning.
 
 \subsection{Frame Tree}
 
