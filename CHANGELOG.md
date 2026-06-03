@@ -41,7 +41,7 @@ scan_timeout: 120.0
 | `abstract.tex` | Rewritten without explicit numbers. Coarse-to-fine search + hybrid dual-sensor lock + adaptive anticipatory scanner. |
 | `introduction.tex` | 4 principles updated: hybrid confidence-gated search, adaptive anticipatory body scanner. Contributions aligned with new terminology. |
 | `active_perception.tex` | IV.A: coarse rotation + refinement + dual-sensor lock (Orbbec + RealSense). IV.B: adaptive Cartesian scan grid replacing ARC_GRID + phase-three. IV.C unchanged. |
-| `system_architecture.tex` | FSM: 7→9 states (added SEMI\_LOCKING, LOCKING). Updated PRE\_APPROACH (ESTIMATING/LOCKED ×3, body\_center) and APPROACHING (adaptive grid, timeout 60s). `description` replaced with `itemize`. Frame tree extracted to `figures/frame_tree.tex`. |
+| `system_architecture.tex` | FSM: 7→9 states (added SEMI\_LOCKING, LOCKING). Updated PRE\_APPROACH (ESTIMATING/LOCKED ×3, body\_center) and APPROACHING (adaptive grid, timeout 60s). `description` replaced with `itemize`. Frame tree extracted to `figures/frame_tree.tex`. Added hardware camera justification (why two RGBD over 360° and Spot built-in). |
 
 ### Figures
 
