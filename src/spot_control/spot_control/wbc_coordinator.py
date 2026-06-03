@@ -196,6 +196,9 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('ws_ext_dx_max',            0.20)  # [m] max lateral displacement
         self.declare_parameter('ws_ext_dy_fwd_max',        0.20)  # [m] max forward displacement
         self.declare_parameter('ws_ext_dy_bwd_max',        0.30)  # [m] max backward displacement
+        self.declare_parameter('ws_ext_goal_tolerance',  0.15)   # [m] tolerance for WS_EXT drive arrival
+        self.declare_parameter('max_workspace_reach',     0.60)   # [m] Z1 arm reach from link00
+        self.declare_parameter('scan_timeout',           120.0)   # [s] max time in SCANNING phase
         self.declare_parameter('navigator_timeout',        5.0)   # [s] max wait for Spot to reach WS_EXT goal
         self.declare_parameter('pre_approach_duration',        5.0)   # [s] arm look-at before Spot walks
         self.declare_parameter('step_mode',                   False)  # gate automatic FSM transitions
@@ -234,6 +237,9 @@ class WBCCoordinatorNode(Node):
         self._search_refine_trigger_orb_conf = float(p('search_refine_trigger_orb_conf'))
         self._pre_approach_duration = float(p('pre_approach_duration'))
         self._step_mode          = bool(p('step_mode'))
+        self._ws_ext_goal_tolerance = float(p('ws_ext_goal_tolerance'))
+        self._max_reach_val          = float(p('max_workspace_reach'))
+        self._scan_timeout          = float(p('scan_timeout'))
 
         # ── Body pose publisher (height + pitch via /my_spot/body_pose) ──
         self._pub_body_pose = self.create_publisher(Pose, '/my_spot/body_pose', 10)
@@ -267,6 +273,7 @@ class WBCCoordinatorNode(Node):
         self._search_start: rclpy.time.Time | None = None     # SEARCHING entry time
         self._pre_approach_start: rclpy.time.Time | None = None  # PRE_APPROACH entry time
         self._approach_start: rclpy.time.Time | None = None      # APPROACHING entry time
+        self._scan_start: rclpy.time.Time | None = None          # SCANNING entry time
         self._search_lock_buffer: list | None = None  # odom positions collected during lock
         self._search_positions: list = []              # [{yaw, pitch}, ...]
         self._search_position_idx: int = 0
@@ -530,7 +537,13 @@ class WBCCoordinatorNode(Node):
         pass  # attesa passiva — _cb_tf_ready farà la transizione
 
     def _tick_scannning(self) -> None:
-        pass  # passive — FSM handles FAST, body pose via settle tick
+        if self._scan_start is None:
+            return
+        elapsed = (self.get_clock().now() - self._scan_start).nanoseconds * 1e-9
+        if elapsed >= self._scan_timeout:
+            self.get_logger().error(
+                f'SCANNING timeout ({self._scan_timeout:.0f}s) → IDLE')
+            self._set_state(CoordState.IDLE)
 
     def _tick_approaching(self) -> None:
         if self._approach_point_odom is None:
@@ -1114,9 +1127,8 @@ class WBCCoordinatorNode(Node):
                 self._needs_ws_ext.add(i)  # will trigger WS_EXT on apply
 
     def _max_workspace_reach(self) -> float:
-        """Estimate max reachable distance from link00 in meters.
-        Uses Z1 reach + safety margin derived from workspacesafety_margin."""
-        return 0.60  # Z1 arm reach ~0.65m, minus safety
+        """Estimate max reachable distance from link00 in meters."""
+        return self._max_reach_val
 
     # ── Simulation helpers ────────────────────────────────────────────
 
@@ -1319,7 +1331,7 @@ class WBCCoordinatorNode(Node):
         dy = body_tf.transform.translation.y - self._ws_ext_goal_pos[1]
         dist = math.hypot(dx, dy)
 
-        if dist < 0.15:  # goal_tolerance from spot_navigator
+        if dist < self._ws_ext_goal_tolerance:
             self.get_logger().info(
                 f'WS_EXT pt[{self._ws_ext_pending_idx}]: goal reached '
                 f'(dist={dist:.3f}m in {elapsed:.1f}s)')
@@ -1414,6 +1426,7 @@ class WBCCoordinatorNode(Node):
             # else: re-entry from LOCKING or SEMI_LOCKING — resume, don't rebuild
         if new_state == CoordState.SCANNING:
             self._set_body_pose(self._handoff_body_height)
+            self._scan_start = self.get_clock().now()
         if new_state == CoordState.LOCKING:
             self._pub_cmd_vel.publish(Twist())
             self._pub_guidance.publish(Bool(data=False))

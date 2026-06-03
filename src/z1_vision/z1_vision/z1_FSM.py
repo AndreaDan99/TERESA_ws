@@ -1670,9 +1670,17 @@ class Z1FSM(Node):
                     timeout = float(self.get_parameter('body_ready_timeout').value)
                     if elapsed > timeout:
                         self.get_logger().warn(
-                            f'⏰ body_ready timeout ({timeout:.1f}s) → procedo comunque'
+                            f'⏰ body_ready timeout ({timeout:.1f}s) → skip point '
+                            f'{self._scan_mgr.current_name}'
                         )
-                        self._body_ready = True  # force proceed
+                        self._body_ready = False
+                        self._scan_mgr.advance()
+                        nxt = Int32()
+                        nxt.data = (-1 if self._scan_mgr.is_complete
+                                    else self._scan_mgr.idx)
+                        self.pub_next_point.publish(nxt)
+                        self._scan_pause_start = None
+                        self.set_state(self.SCAN_PAUSE)
 
         # ── HOMING ────────────────────────────────────────────────────────
         elif self.state == self.HOMING:

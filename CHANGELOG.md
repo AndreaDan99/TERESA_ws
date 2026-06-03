@@ -5,6 +5,33 @@ Per la descrizione del sistema corrente vedi [`DESCRIPTION.md`](DESCRIPTION.md).
 
 ---
 
+## 3 June 2026 (cont.) — SCANNING robustness fixes
+
+### Fixes
+
+| Fix | File | Descrizione |
+|-----|------|-------------|
+| Global timeout | `wbc_coordinator.py:532` | `_tick_scannning()` ora controlla timeout `scan_timeout=120s` → IDLE. Protegge da FSM bloccato, IK infinito, CHECKING_WORKSPACE perenne. |
+| Param `max_workspace_reach` | `wbc_coordinator.py:1116` | Hardcoded `0.60` → parametro YAML `max_workspace_reach`. |
+| Param `ws_ext_goal_tolerance` | `wbc_coordinator.py:1322` | Hardcoded `0.15` → parametro YAML `ws_ext_goal_tolerance`. |
+| body_ready timeout safe | `z1_FSM.py:1671` | Invece di forzare `body_ready=True` (procedere con postura errata), **salta il punto** (`scan_mgr.advance()`) e pubblica `next_point_idx`. Se tutti i punti saltati, scan termina normalmente. |
+
+### Nuovi parametri YAML
+
+```yaml
+ws_ext_goal_tolerance: 0.15
+max_workspace_reach: 0.60
+scan_timeout: 120.0
+```
+
+### File modificati
+
+| File | +/− |
+|------|-----|
+| `wbc_coordinator.py` | +15/−6 |
+| `z1_FSM.py` | +8/−3 |
+| `wbc_params.yaml` | +3 |
+
 ## 3 June 2026 (cont.) — Paper update: FSM + adaptive perception sections
 
 ### Sections rewritten

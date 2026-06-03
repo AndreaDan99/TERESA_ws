@@ -574,7 +574,7 @@ Analisi fase-per-fase del FSM con fix mirati. Ogni fase viene analizzata, i prob
 | **LOCKING** | ✅ | `ik_done` gate prima di PRE_APPROACH, home_lock_z=0.60 |
 | **PRE_APPROACH** | ✅ | LOOKAT → `/laying_human/body_center`, soglia ESTIMATING/LOCKED ×3 |
 | **APPROACHING** | ✅ | Griglia adattiva 2/4 pose + advance X=0.10, `_do_set_state` pulizia, timeout 60s |
-| **SCANNING** | 📝 | Da analizzare: FAST points cycle, body pose optimization, WS_EXT |
+| **SCANNING** | ✅ | Global timeout 120s, parametrizzazione `max_workspace_reach`/`ws_ext_goal_tolerance`, body_ready safe skip |
 
 ### 📄 Paper aggiornato (3 Giugno 2026)
 

@@ -186,6 +186,8 @@ Il QP riceve il segnale di APPROACHING e passa in modalità PERCEPTUAL_SCAN:
 
 - WBC viene disabilitato (`/wbc/enable=False`), Spot si abbassa a handoff height (-0.15m)
 - Il QP Controller ha già pubblicato `/z1/fast_points` (5 Pose in frame link00) durante APPROACHING
+- Timeout globale `scan_timeout=120s`: se la scansione si blocca → IDLE
+- Parametri parametrizzati: `max_workspace_reach=0.60` (soglia WS_EXT), `ws_ext_goal_tolerance=0.15`
 
 ### Body Pose Optimization (per punto)
 Il coordinator riceve i 5 FAST points ed esegue un **grid search matematico** offline:
@@ -265,7 +267,7 @@ I target FSM sono in world frame — quando Spot cambia body_pose, il target si 
 | **LOCKING** | Fermo | Va in home Z=0.60 | Off → home |
 | **PRE_APPROACH** | Dritto, fermo | LOOKAT verso body_center (ω_des + joint centering) | Arm-only WBC |
 | **APPROACHING** | Navigatore → goal (timeout 60s) | PERCEPTUAL_SCAN (2-4 pose adattive + advance X) | Cartesian grid adattiva |
-| **SCANNING** | Body pose (h,p) + WS_EXT (h,p,dx,dy) | z1_FSM: FAST cycle 5 punti | Off |
+| **SCANNING** | Body pose (h,p) + WS_EXT (h,p,dx,dy), timeout 120s | z1_FSM: FAST cycle 5 punti, body_ready safe skip | Off |
 
 ---
 

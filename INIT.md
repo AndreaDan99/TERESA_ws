@@ -32,7 +32,7 @@ git status --short
 - **SEMI_LOCKING**: Pitch flush via `Twist()` quando solo pitch non OK. QP LOOKAT subito attivo (`_end_search(re_enable=True)`).
 - **PRE_APPROACH**: LOOKAT verso `/laying_human/body_center` (torso centroid). Soglia ESTIMATING/LOCKED ×3 tick. `ik_done` gate per transizione da LOCKING. Home lock Z=0.60.
 - **APPROACHING**: Griglia Cartesiana adattiva (2 pose se 4 keypoint conf≥0.6, 4 con HOME transit altrimenti). Advance X=0.10m. `_do_set_state(APPROACHING)` pulizia stato. Timeout 60s → IDLE.
-- **SCANNING**: 📝 Da analizzare.
+- **SCANNING**: ✅ Timeout globale 120s, parametri `max_workspace_reach`/`ws_ext_goal_tolerance`, body_ready skip sicuro (salta punto invece di forzare).
 - **9 stati FSM**: WAITING_TF → IDLE → SEARCHING → SEMI_LOCKING → LOCKING → PRE_APPROACH → APPROACHING → SCANNING ↔ WS_EXT.
 - **Paper aggiornato**: abstract/introduction senza numeri, active_perception (hybrid lock + adaptive grid), system_architecture (9 stati, frame tree colorato). Sezioni TODO: experiments, results, conclusion.
 - **Web Control Panel**: interfaccia web (`web/teresa_control.html`) con pulsanti, stato WBC, navigazione RETURN via P-controller JS.

@@ -119,6 +119,9 @@ wbc_coordinator:
     ws_ext_dy_fwd_max: 0.20                    # [m] max forward displacement
     ws_ext_dy_bwd_max: 0.30                    # [m] max backward displacement
     navigator_timeout: 5.0                     # [s] max wait for Spot to reach WS_EXT goal
+    ws_ext_goal_tolerance: 0.15               # [m] arrival tolerance for WS_EXT drive
+    max_workspace_reach: 0.60                 # [m] Z1 arm max reach from link00 (triggers WS_EXT)
+    scan_timeout: 120.0                       # [s] global timeout for SCANNING phase
     approach_timeout: 60.0                     # [s] max time for Spot to reach handoff in APPROACHING
 
     # Debug: step mode — gates automatic FSM transitions for debugging.
