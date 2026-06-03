@@ -27,17 +27,17 @@ git status --short
 
 ## Current State (2 June 2026)
 
-- **Ricerca adattiva coarse + refinement**: SEARCHING riscritto. Spot ruota con `cmd_vel.angular.z` P-control (6 posizioni coarse ×60° = 360°, dwell 5s). Durante il dwell, se una camera vede qualcosa (RealSense tracker `GUIDING` o Orbbec conf ≥ 0.30) → **refinement**: sweep pitch [0°,5°,10°] (dwell 4s), traccia best Orbbec conf. `best_conf ≥ 0.70` → LOCKING, altrimenti prossimo yaw. Niente più griglia fissa 18 posizioni.
-- **Tracker state GUIDING**: nuovo stato del torso tracker (giallo) oltre a `IDLE/ESTIMATING/LOCKED`. In guidance mode (SEARCHING) qualsiasi keypoint → GUIDING. Triggera refinement e guida il SEMI_LOCKING.
-- **Braccio QP ACTIVE_SEARCH = 3 pose**: HOME/LEFT/RIGHT, tilt fisso -15°, sweep Y ±0.28m, X +0.20m, Z=0.42m. Loop infinito. No wrist sweep.
-- **Active Perception Cartesian Scanning**: `PERCEPTUAL_SCAN` (6 pose multi-angolo in APPROACHING, step 0.12m). Movimenti prevedibili, Z ≥ home (0.44m).
-- **Semi-lock rilassato**: il tracker accetta `GUIDING`/`ESTIMATING` oltre a `LOCKED` — basta vedere keypoint qualsiasi per guidare Spot verso il corpo.
-- **Web Control Panel**: interfaccia web (`web/teresa_control.html`) con pulsanti, stato WBC, navigazione RETURN via P-controller JS. Camera view (`web/camera_view.html`) con feed live Orbbec/RealSense + overlay scheletro YOLO.
-- **Step mode debugging**: `step_mode:=true` blocca le transizioni FSM automatiche. Conferma con tasto `n` o pulsante STEP.
-- **WBC spento** immediatamente all'ingresso in LOCKING. PRE_APPROACH con timeout 5s.
-- **QP Controller — 3 modalità**: ACTIVE_SEARCH (3 pose), LOOKAT, PERCEPTUAL_SCAN (6 pose). Arm-only.
-- **Spot P-controller rimosso dal QP**. Spot mosso solo da navigatore e coordinator.
-- **Paper reframing**: Whole-Body Active Perception for Emergency Assessment.
+- **Ricerca adattiva coarse + refinement**: SEARCHING riscritto. Spot ruota con `cmd_vel.angular.z` P-control (6 posizioni coarse ×60° = 360°, dwell 5s). Durante il dwell, se una camera vede qualcosa (RealSense tracker `GUIDING` o Orbbec conf ≥ 0.30) → **refinement**: sweep pitch [0°,5°,10°] (dwell 4s), traccia best Orbbec conf. `best_conf ≥ 0.70` → LOCKING, altrimenti prossimo yaw.
+- **GUIDING strict**: `guidance_min_conf` 0.3→0.5, minimo keypoint 1→2. Riduce falsi positivi.
+- **SEMI_LOCKING**: Pitch flush via `Twist()` quando solo pitch non OK. QP LOOKAT subito attivo (`_end_search(re_enable=True)`).
+- **PRE_APPROACH**: LOOKAT verso `/laying_human/body_center` (torso centroid). Soglia ESTIMATING/LOCKED ×3 tick. `ik_done` gate per transizione da LOCKING. Home lock Z=0.60.
+- **APPROACHING**: Griglia Cartesiana adattiva (2 pose se 4 keypoint conf≥0.6, 4 con HOME transit altrimenti). Advance X=0.10m. `_do_set_state(APPROACHING)` pulizia stato. Timeout 60s → IDLE.
+- **SCANNING**: 📝 Da analizzare.
+- **9 stati FSM**: WAITING_TF → IDLE → SEARCHING → SEMI_LOCKING → LOCKING → PRE_APPROACH → APPROACHING → SCANNING ↔ WS_EXT.
+- **Paper aggiornato**: abstract/introduction senza numeri, active_perception (hybrid lock + adaptive grid), system_architecture (9 stati, frame tree colorato). Sezioni TODO: experiments, results, conclusion.
+- **Web Control Panel**: interfaccia web (`web/teresa_control.html`) con pulsanti, stato WBC, navigazione RETURN via P-controller JS.
+- **Step mode debugging**: `step_mode:=true` blocca le transizioni FSM automatiche.
+- **WBC spento** immediatamente all'ingresso in LOCKING.
 
 ---
 

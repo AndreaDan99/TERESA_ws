@@ -1,48 +1,60 @@
 % ============================================================
-%  FSM DIAGRAM — 5 states (CONFIRMING removed)
-%  Requires: tikz, automata library
+%  FSM DIAGRAM — 9 states, all straight / orthogonal transitions
+%  Requires: tikz
 % ============================================================
 \begin{tikzpicture}[
-    node distance  = 3.0cm,
+    node distance = 2.0cm and 2.4cm,
     auto,
     >=stealth,
-    state/.style   = {circle, draw, minimum size=1.6cm, font=\small\bfseries,
+    state/.style   = {rectangle, rounded corners=3pt, draw, minimum width=1.8cm,
+                      minimum height=0.65cm, font=\footnotesize,
                       fill=white, thick},
-    wbc/.style     = {state, draw=blue!70, fill=blue!8},
+    search/.style  = {state, draw=orange!70, fill=orange!8},
+    lock/.style    = {state, draw=red!60, fill=red!8},
+    approach/.style = {state, draw=blue!70, fill=blue!8},
     scan/.style    = {state, draw=green!60!black, fill=green!8},
     idle/.style    = {state, draw=gray!70, fill=gray!8},
-    trans/.style   = {->, thick, font=\scriptsize},
-    every label/.style = {font=\scriptsize}
+    trans/.style   = {->, thick, font=\tiny},
+    transd/.style  = {->, thick, dashed, font=\tiny},
+    every label/.style = {font=\tiny}
   ]
 
-  % ── Nodes ───────────────────────────────────────────────────
-  \node[idle]  (idle)                          {IDLE};
-  \node[wbc]   (app)  [right=of idle]          {APPR.};
-  \node[wbc]   (hand) [right=of app]           {HANDOFF};
-  \node[scan]  (scan) [right=of hand]          {SCANNING};
-  \node[wbc]   (wse)  [below=2.0cm of scan]    {WS\_EXT};
+  % ── Column 1: Init ─────────────────────────────────────────
+  \node[idle]  (wtf)                                  {Waiting TF};
+  \node[idle]  (idl)  [below=of wtf]                   {Idle};
+
+  % ── Column 2: Search / Lock ─────────────────────────────────
+  \node[search] (sr)  [right=2.8cm of idl]                    {Searching};
+  \node[lock]   (sl)  [above=of sr]                            {Semi-locking};
+  \node[lock]   (lk)  [right=of sl]                            {Locking};
+
+  % ── Column 3: Approach / Scan ──────────────────────────────
+  \node[approach] (pa) [right=of lk]                            {Pre-approach};
+  \node[approach] (ap) [below=of pa]                            {Approaching};
+  \node[scan]    (sc) [right=of ap]                            {Scanning};
+  \node[approach] (ws) [below=of sc]                            {WS ext};
 
   % ── Transitions ─────────────────────────────────────────────
-  \draw[trans] (idle) -- node[above]{\scriptsize patient det.} (app);
+  \draw[trans] (wtf) -- node[right]{\tiny TF ready} (idl);
+  \draw[trans] (idl) -- node[above]{\tiny start} (sr);
 
-  \draw[trans] (app) -- node[above]{\scriptsize patient lost} (hand);
+  \draw[trans] (sr)  -- node[left]{\tiny RS guided} (sl);
+  \draw[trans] (sl)  -- node[above]{\tiny Orbbec} (lk);
+  \draw[transd] (sl.west) -- ++(-0.5,0) |- node[pos=0.4,left]{\tiny timeout} (sr.west);
 
-  \draw[trans] (hand) -- node[above]{\scriptsize RS locked} (scan);
+  \draw[trans] (sr)  -| node[above left,pos=0.7]{\tiny Orbbec LYING} (lk);
+  \draw[trans] (lk)  -- node[above]{\tiny samples+ik} (pa);
+  \draw[transd] (lk.south west) -- node[above left,pos=0.4,yshift=2pt]{\tiny timeout} (sr.north east);
 
-  \draw[trans] (scan) to[bend left=20]
-               node[right]{\scriptsize unreachable} (wse);
-  \draw[trans] (wse) to[bend left=20]
-               node[left]{\scriptsize ik\_done} (scan);
+  \draw[trans] (pa)  -- node[left]{\tiny RS EST/LOCKED$\times$3} (ap);
+  \draw[transd] (pa) to[loop right] node[right]{\tiny timeout 5s} (pa);
 
-  \draw[trans] (scan) to[out=200,in=340]
-               node[below]{\scriptsize scan done} (idle);
+  \draw[trans] (ap)  -- node[above]{\tiny handoff+FAST} (sc);
+  %\draw[transd] (ap)  |- node[below left,pos=0.7]{\tiny timeout 60s} (idl);
 
-  % ── Legend ──────────────────────────────────────────────────
-  \node[wbc,  minimum size=0.55cm, font=\scriptsize] at (0.0,-2.6) {};
-  \node[right, font=\scriptsize] at (0.4,-2.6) {WBC active};
-  \node[scan, minimum size=0.55cm, font=\scriptsize] at (2.4,-2.6) {};
-  \node[right, font=\scriptsize] at (2.8,-2.6) {Impedance active};
-  \node[idle, minimum size=0.55cm, font=\scriptsize] at (5.2,-2.6) {};
-  \node[right, font=\scriptsize] at (5.6,-2.6) {Idle};
+  \draw[trans] (sc)  -- node[left]{\tiny unreachable} (ws);
+  \draw[trans] (ws)  -- node[right]{\tiny ik\_done} (sc);
+
+  \draw[transd] (sc.south) -- ++(0,-0.6) -| node[pos=0.3,below]{\tiny complete} (idl.south);
 
 \end{tikzpicture}

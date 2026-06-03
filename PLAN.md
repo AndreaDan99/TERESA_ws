@@ -576,6 +576,10 @@ Analisi fase-per-fase del FSM con fix mirati. Ogni fase viene analizzata, i prob
 | **APPROACHING** | ✅ | Griglia adattiva 2/4 pose + advance X=0.10, `_do_set_state` pulizia, timeout 60s |
 | **SCANNING** | 📝 | Da analizzare: FAST points cycle, body pose optimization, WS_EXT |
 
+### 📄 Paper aggiornato (3 Giugno 2026)
+
+Sezioni riscritte per riflettere l'implementazione corrente: abstract (no numeri, hybrid lock), introduction (4 principi aggiornati), active\_perception (coarse+refinement, dual-sensor lock, adaptive Cartesian grid), system\_architecture (9 stati FSM). Nuove figure: `fsm.tex` (9 stati), `frame_tree.tex` (albero TF con colori hardware). Sezioni TODO: experiments, results, conclusion.
+
 ### Nuovi topic
 
 | Topic | Publisher | Subscriber | Fase |

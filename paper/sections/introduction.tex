@@ -47,18 +47,23 @@ robot continuously adapts its posture---body height, pitch, and yaw---not
 merely to minimise kinematic error, but to maximise the quality of its
 perceptual input.
 
-The system is built around four principles. First, a \textbf{confidence-gated
-active search} phase explores body configurations that improve detection
-reliability, committing to the approach only once the patient has been
-localised with high confidence. Second, an \textbf{anticipatory body scanner}
-acquires multi-view anatomical data during navigation, eliminating the idle
-time of traditional stop-then-scan pipelines. Third, a
-\textbf{perception-quality-aware velocity controller} scales the approach
-speed in proportion to detection confidence, avoiding both premature
-commitment to uncertain targets and unnecessary stops. Fourth, a
-\textbf{pre-planned body reconfiguration} step optimises the robot's posture
-for each anatomical scanning target through an offline search, maximising arm
-manipulability without requiring real-time whole-body optimisation.
+The system is built around four principles. First, a \textbf{hybrid
+confidence-gated active search} phase combines coarse body rotation with
+targeted refinement: the robot sweeps through orientations and, upon
+detecting a potential body with either of its two cameras, performs a focused
+sweep to maximise perceptual confidence before committing to a dual-sensor
+lock that confirms patient localisation. Second, an \textbf{adaptive
+anticipatory body scanner} acquires multi-view anatomical data during base
+navigation, dynamically selecting the number of scanning poses based on how
+well the torso keypoints have already been resolved---sparse confidence
+triggers a more comprehensive sweep, while already-certain detections proceed
+with minimal scanning overhead. Third, a \textbf{perception-quality-aware
+velocity controller} scales the approach speed in proportion to detection
+confidence, avoiding both premature commitment to uncertain targets and
+unnecessary stops. Fourth, a \textbf{pre-planned body reconfiguration} step
+optimises the robot's posture for each anatomical scanning target through an
+offline search, maximising arm manipulability without requiring real-time
+whole-body optimisation.
 
 The main contributions of this paper are:
 \begin{enumerate}
@@ -66,12 +71,14 @@ The main contributions of this paper are:
         manipulation, in which body posture is optimised to improve
         perceptual quality rather than solely to minimise kinematic error
         (Section~\ref{sec:active_perception}).
-  \item A \textbf{confidence-gated search strategy} that decouples patient
-        localisation from approach, ensuring robust detection before the
-        robot commits to navigation (Section~\ref{sec:active_perception}).
-  \item An \textbf{anticipatory multi-view scanning pipeline} that acquires
-        patient anatomy concurrently with base motion, removing the idle
-        periods inherent to sequential stop-and-scan architectures
+  \item A \textbf{hybrid confidence-gated search strategy} that combines
+        coarse rotation with targeted refinement and dual-sensor locking,
+        ensuring robust patient localisation before the robot commits to
+        navigation (Section~\ref{sec:active_perception}).
+  \item An \textbf{adaptive multi-view scanning pipeline} that acquires
+        patient anatomy concurrently with base motion and dynamically reduces
+        scanning poses when keypoints are already well resolved, removing the
+        idle periods inherent in sequential stop-and-scan architectures
         (Section~\ref{sec:system_architecture}).
   \item \textbf{Experimental validation} on a physical Spot+Z1 platform,
         demonstrating fully autonomous emergency assessment with a
@@ -89,7 +96,7 @@ legged whole-body control, and active perception for mobile manipulation.
 Section~\ref{sec:problem_formulation} formally defines the system and the
 autonomous emergency assessment problem.
 Section~\ref{sec:active_perception} presents the active perception framework,
-including confidence-gated search and anticipatory scanning.
+including hybrid confidence-gated search and adaptive anticipatory scanning.
 Section~\ref{sec:method} describes the decoupled whole-body reconfiguration
 approach. Section~\ref{sec:system_architecture} details the complete system
 architecture and mission \ac{FSM}. Section~\ref{sec:experiments} describes the

@@ -34,28 +34,22 @@ and torso tracking during scanning.
 \subsection{Frame Tree}
 
 The \ac{TF} tree defines the spatial relationships between all system
-components. Fig.~\ref{fig:system_block} illustrates the frame hierarchy:
-\begin{center}
-\begin{tikzpicture}[
-  level distance=12mm,
-  sibling distance=28mm,
-  every node/.style={draw, rounded corners=2pt, font=\footnotesize,
-                     inner sep=2pt, minimum height=6mm},
-  edge from parent/.style={draw, -latex}
-]
-\node {my\_spot/odom}
-  child { node {my\_spot/body}
-    child { node {orbbec\_link}
-      child { node {orbbec\_color\_optical\_frame} }
-    }
-    child { node {world}
-      child { node {link00}
-        child[level distance=10mm] { node {$\cdots$} }
-      }
-    }
-  };
-\end{tikzpicture}
-\end{center}
+components. Fig.~\ref{fig:frame_tree} illustrates the frame hierarchy:
+
+\begin{figure}[t]
+  \centering
+  \input{figures/frame_tree}
+  \caption{\ac{TF} frame tree. \texttt{my\_spot/odom}
+           $\to$ \texttt{my\_spot/body} branches into the Orbbec chain
+           (\texttt{orbbec\_link} $\to$ \texttt{orbbec\_color\_optical\_frame},
+           shown as \texttt{orbbec\_color}) and the Z1 arm chain
+           (\texttt{world} $\to$ \texttt{link00} $\to$ $\cdots$
+           $\to$ \texttt{link06} $\to$ \texttt{camera\_link}
+           $\to$ \texttt{camera\_color\_optical\_frame},
+           shown as \texttt{camera\_color}).}
+  \label{fig:frame_tree}
+\end{figure}
+
 The key properties of this tree are:
 \begin{itemize}
   \item \texttt{my\_spot/odom} is world-fixed, published by SpotCore
@@ -78,52 +72,62 @@ automatically propagates to the arm base frame $\mathcal{F}_0$.
 \subsection{Perception Pipeline}
 
 \subsubsection{Wide-field patient detection (Orbbec)}
+
 During the SEARCHING and approach phases, \ac{YOLO}11-pose~\cite{maji2022}
 runs on the Orbbec \ac{RGBD} stream and detects the patient's skeleton. A
 posture classifier labels the patient's pose (standing, sitting, lying) and
 outputs a confidence score $c \in [0, 1]$. A laying-human detector
 computes the approach point as the torso centroid of the four \ac{COCO}
 keypoints (shoulders and hips), back-projected to 3D via the calibrated
-depth map, and publishes the body axis direction (head-to-feet) for robot
-alignment. The approach point is initially expressed in the camera optical
-frame; the \ac{TF} tree transforms it to $\mathcal{F}_W$ for target locking
+depth map. It also publishes the torso centroid position---the
+body\_center---as a separate \texttt{PoseStamped} message, used by the
+\ac{WBC} look-at controller to orient the \ac{EE} camera toward the
+patient's body during the pre-approach phase. The approach point is
+expressed in the camera optical frame; the \ac{TF} tree transforms it to
+$\mathcal{F}_W$ for target locking
 (Section~\ref{sec:confidence_search}).
 
 \subsubsection{Close-range torso tracking (RealSense)}
-Once the mission transitions to PRE\_APPROACH, the \ac{EE}-mounted
+
+Once the mission transitions to the approach sequence, the \ac{EE}-mounted
 RealSense camera becomes active. A \ac{YOLO}-based torso tracker with a
 six-state \ac{KF} (position and velocity) publishes a filtered torso
-estimate $\hat{\mathbf{p}}(t)$ and a tracker state (LOCKED, TRACKING,
-LOST). A surface estimation node fits a plane to the depth point cloud in
-a region of interest around the detected torso, publishing the surface
-centroid $\mathbf{p}_s$ and outward normal $\mathbf{n}_s$ as a
-\texttt{PoseStamped} message.
+estimate $\hat{\mathbf{p}}(t)$ and a tracker state. Three tracking states
+are relevant during the approach: ESTIMATING (the Kalman filter is
+converging on at least three torso keypoints with sufficient confidence),
+LOCKED (the estimate has stabilised with low spatial variance), and GUIDING
+(a lenient mode used during active search where any partial skeleton
+detection may trigger the semi-locking phase). A surface estimation node
+fits a plane to the depth point cloud in a region of interest around the
+detected torso, publishing the surface centroid $\mathbf{p}_s$ and outward
+normal $\mathbf{n}_s$ as a \texttt{PoseStamped} message.
 
 \subsubsection{Sensor handoff strategy}
+
 The transition from Orbbec to RealSense is not a hard switch but a
 confidence-driven handoff. During PRE\_APPROACH the coordinator requires
-several consecutive LOCKED readings from the RealSense tracker before
-advancing to the approach phase. This ensures that the close-range sensor
-has reliably acquired the patient before the Orbbec loses the target at
-short range. If the RealSense fails to lock within a timeout, the system
-still proceeds, falling back to the odometry target acquired during
-SEARCHING.
+several consecutive readings from the RealSense tracker in either the
+ESTIMATING or LOCKED state before advancing to the approach phase. This
+ensures that the close-range sensor has reliably acquired the patient
+before the Orbbec loses the target at short range. If the RealSense fails
+to confirm within a timeout, the system still proceeds, falling back to
+the odometry target acquired during the locking phase.
 
 \subsection{Mission Finite State Machine}
 
-The mission is orchestrated by a seven-state \ac{FSM} implemented in the
+The mission is orchestrated by a nine-state \ac{FSM} implemented in the
 \texttt{wbc\_coordinator} node. Fig.~\ref{fig:fsm} shows the state
 transitions; Table~\ref{tab:fsm_roles} summarises which components are
 active in each state.
 
-\begin{figure}[t]
+\begin{figure*}[t]
   \centering
-  \resizebox{\columnwidth}{!}{\input{figures/fsm}}
+  \resizebox{\textwidth}{!}{\input{figures/fsm}}
   \caption{Mission \ac{FSM}. Transitions are triggered by perception
-           confidence (dashed arcs) or geometric conditions (solid arcs).
-           WS\_EXT = workspace extension.}
+           confidence (dashed) or geometric conditions (solid).
+           \texttt{WS\_EXT} = workspace extension.}
   \label{fig:fsm}
-\end{figure}
+\end{figure*}
 
 \begin{table}[t]
   \centering
@@ -137,7 +141,9 @@ active in each state.
     \midrule
     WAITING\_TF  & $\circ$ & $\circ$ & $\circ$ & $\circ$ & $-$ \\
     IDLE         & $\circ$ & $\circ$ & $\circ$ & $\circ$ & $-$ \\
-    SEARCHING    & $\bullet$ & $\circ$ & $\bullet$ & $\circ$ & $-$ \\
+    SEARCHING    & $\bullet$ & $\bullet$ & $\bullet$ & $\bullet$ & $-$ \\
+    SEMI\_LOCKING & $\bullet$ & $\bullet$ & $\bullet$ & $\bullet$ & $-$ \\
+    LOCKING       & $\circ$ & $\bullet$ & $\bullet$ & $\circ$ & $-$ \\
     PRE\_APPROACH & $\bullet$ & $\bullet$ & $\circ$ & $\bullet$ & $\circ$ \\
     APPROACHING  & $\bullet$ & $\bullet$ & $\circ$ & $\bullet$ & $\bullet$ \\
     SCANNING     & $\bullet$ & $\bullet$ & $-$ & $\bullet$ & $\bullet$ \\
@@ -146,38 +152,56 @@ active in each state.
   \end{tabular}}
 \end{table}
 
-\begin{description}
-  \item[WAITING\_TF]The system waits for the \texttt{tf\_monitor} node
-        to confirm that all \ac{TF} chains and hardware topics are
+\begin{itemize}
+  \item \textbf{Waiting TF}. The system waits for the \texttt{tf\_monitor}
+        node to confirm that all \ac{TF} chains and hardware topics are
         available. This gate prevents premature activation when SpotCore
         \ac{DDS} discovery is still in progress.
-  \item[IDLE] All \ac{TF} ready. The system waits for a start command
-        from the keyboard operator.
-  \item[SEARCHING] Spot lowers its body and executes the confidence-gated
-        posture grid search (Section~\ref{sec:confidence_search}). The
-        arm remains in a nominal home pose.
-  \item[PRE\_APPROACH] The patient has been locked with high confidence.
-        Spot straightens. The RealSense tracker is activated and the
-        coordinator waits for consecutive LOCKED states. The \ac{WBC}
-        arm look-at (Section~\ref{sec:method}) begins.
-  \item[APPROACHING] The Spot navigator drives toward the target while
-        the anticipatory body scanner (Section~\ref{sec:anticipatory_scan})
-        executes the ARC\_GRID scan. The arm maintains look-at via
-        \ac{WBC}. Quality-aware velocity scaling modulates the approach
-        speed.
-  \item[SCANNING] Handoff distance reached. Spot assumes a lowered body
-        posture. The body scanner completes phase three if necessary and
-        publishes the FAST target set. The coordinator executes the
-        pre-planned body reconfiguration between targets
-        (Section~\ref{sec:method}), while the Z1 \ac{FSM} drives the arm
-        through each scanning target.
-  \item[WS\_EXTENSION] If a target is reported unreachable, Spot executes
-        a micro-step to bring the target back into the workspace. Once
-        confirmed, the \ac{FSM} returns to SCANNING.
-\end{description}
+  \item \textbf{Idle}. All \ac{TF} ready. The system waits for a start
+        command from the keyboard operator.
+  \item \textbf{Searching}. Spot sweeps through a sequence of body yaw
+        orientations in a coarse search, while the arm executes an
+        ACTIVE\_SEARCH mode with wide Cartesian poses. Two detection
+        mechanisms run in parallel: Orbbec direct detection of a lying
+        patient and RealSense guidance mode for partial body detection
+        (Section~\ref{sec:confidence_search}).
+  \item \textbf{Semi-locking}. The RealSense has detected a potential
+        body but Orbbec confirmation is pending. Spot rotates toward the
+        detected torso direction while the arm maintains a \ac{WBC} look-at
+        orientation. The Orbbec receives a clean observation window to
+        confirm the detection. Upon confirmation, the system transitions to
+        locking; on timeout, it resumes searching from the current
+        orientation.
+  \item \textbf{Locking}. The Orbbec has confirmed a lying patient. The arm
+        returns to an elevated home pose, while the coordinator collects
+        a sequence of approach point samples. The transition to
+        pre-approach is gated by both the \ac{IK} trajectory completion
+        and the collection of the required number of samples.
+  \item \textbf{Pre-approach}. Spot straightens to an upright posture.
+        The \ac{WBC} arm look-at controller orients the RealSense toward
+        the patient's torso centroid (body\_center, computed from the Orbbec
+        skeleton during locking). The coordinator waits for consecutive
+        ESTIMATING or LOCKED tracker readings before authorising the
+        approach. A global timeout ensures the mission progresses even if
+        the tracker cannot achieve full lock.
+  \item \textbf{Approaching}. The Spot navigator drives toward the approach
+        target while the adaptive anticipatory body scanner
+        (Section~\ref{sec:anticipatory_scan}) executes the Cartesian scan
+        grid concurrently with base motion. A global timeout guards against
+        unreachable targets, aborting to idle if Spot fails to reach the
+        handoff distance.
+  \item \textbf{Scanning}. Handoff distance reached. Spot assumes a lowered
+        body posture. The body scanner publishes the FAST target set. The
+        coordinator executes the pre-planned body reconfiguration between
+        targets (Section~\ref{sec:method}), while the Z1 \ac{FSM} drives
+        the arm through each scanning target.
+  \item \textbf{WS ext}. If a target is reported unreachable, Spot
+        executes a micro-step to bring the target back into the workspace.
+        Once confirmed, the \ac{FSM} returns to scanning.
+\end{itemize}
 
 At any time, a stop command from the keyboard immediately transitions the
-\ac{FSM} to IDLE, bringing the base to a halt and returning the arm to a
+\ac{FSM} to idle, bringing the base to a halt and returning the arm to a
 safe configuration.
 
 \subsection{WBC and Mission Components}
@@ -194,15 +218,17 @@ The \ac{WBC} layer comprises the nodes launched by
     \toprule
     Node & Role \\
     \midrule
-    \texttt{wbc\_coordinator} & Seven-state mission \ac{FSM},
-      QualityMonitor, body pose grid search optimisation. \\
+    \texttt{wbc\_coordinator} & Nine-state mission \ac{FSM},
+      QualityMonitor, body pose grid search optimisation, dual-sensor
+      lock management. \\
     \texttt{wbc\_qp\_controller} & Arm \ac{WBC} look-at via damped
-      pseudo-inverse, base velocity scaling, \texttt{cmd\_vel} caching. \\
+      pseudo-inverse, adaptive Cartesian scan grid generation,
+      keypoint confidence fusion, FAST target publishing. \\
     \texttt{wbc\_spot\_navigator} & Simplified approach navigator:
       rotate $\to$ drive $\to$ stop toward the odometry goal. \\
-    \texttt{wbc\_approach\_scanner} & Anticipatory ARC\_GRID body scan,
-      multi-view keypoint fusion, conditional phase-three refinement,
-      FAST target generation. \\
+    \texttt{laying\_human\_detector} & Orbbec skeleton-based approach
+      point and torso centroid (body\_center) computation for navigation
+      and \ac{WBC} look-at targeting. \\
     \texttt{tf\_monitor} & Continuous monitoring of eight \ac{TF} chains
       and three hardware topics; publishes
       \texttt{/wbc/tf\_ready}. \\
@@ -237,8 +263,9 @@ for fixed-base scanning.
     \texttt{impedance\_controller\_realsense} & Cartesian impedance at
       \SI{500}{\hertz}, adaptive gains, RNEA gravity and Coriolis
       compensation. \\
-    \texttt{body\_search\_scanner} & Multi-phase body search: wrist
-      sweep $\to$ arc $\to$ adaptive refinement. \\
+    \texttt{z1\_yolo\_torso\_tracker} & RealSense \ac{YOLO}-based torso
+      tracker with Kalman filter, keypoint confidence reporting, and
+      multi-state tracking (GUIDING, ESTIMATING, LOCKED). \\
     \texttt{z1\_scan\_manager} & Computation of five FAST target poses
       from fused torso keypoints. \\
     \bottomrule
@@ -278,7 +305,7 @@ The full mission is launched from five terminal sessions:
   \item \texttt{z1\_control.launch.py} --- Z1 arm control stack
         (\ac{IK}, \ac{FSM}, controller switching, impedance).
   \item \texttt{wbc.launch.py} --- WBC coordinator, \ac{QP} controller,
-        spot navigator, approach scanner, \ac{IK} goal multiplexer.
+        spot navigator, \ac{IK} goal multiplexer.
   \item \texttt{wbc\_keyboard\_node} --- Operator keyboard interface
         (start, stop, emergency return).
 \end{enumerate}

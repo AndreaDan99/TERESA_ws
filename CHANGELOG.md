@@ -5,6 +5,25 @@ Per la descrizione del sistema corrente vedi [`DESCRIPTION.md`](DESCRIPTION.md).
 
 ---
 
+## 3 June 2026 (cont.) — Paper update: FSM + adaptive perception sections
+
+### Sections rewritten
+
+| File | Changes |
+|------|---------|
+| `abstract.tex` | Rewritten without explicit numbers. Coarse-to-fine search + hybrid dual-sensor lock + adaptive anticipatory scanner. |
+| `introduction.tex` | 4 principles updated: hybrid confidence-gated search, adaptive anticipatory body scanner. Contributions aligned with new terminology. |
+| `active_perception.tex` | IV.A: coarse rotation + refinement + dual-sensor lock (Orbbec + RealSense). IV.B: adaptive Cartesian scan grid replacing ARC_GRID + phase-three. IV.C unchanged. |
+| `system_architecture.tex` | FSM: 7→9 states (added SEMI\_LOCKING, LOCKING). Updated PRE\_APPROACH (ESTIMATING/LOCKED ×3, body\_center) and APPROACHING (adaptive grid, timeout 60s). `description` replaced with `itemize`. Frame tree extracted to `figures/frame_tree.tex`. |
+
+### Figures
+
+| File | Changes |
+|------|---------|
+| `figures/fsm.tex` | Redrawn from 5 to 9 states. Clean 3-column layout, orthogonal transitions, dashed return paths, diagonal timeout arc. |
+| `figures/frame_tree.tex` | **New**. Colored TF tree: yellow (Spot), gray (Z1), red (Orbbec), teal (RealSense). Full chain `link00 → ... → link06 → camera_link → camera_color`. |
+| `figures/system_block.tex` | "(5 states)" → "(9 states)". |
+
 ## 3 June 2026 — FSM phase-by-phase analysis & fixes (SEMI_LOCKING → APPROACHING)
 
 ### SEMI_LOCKING fixes
