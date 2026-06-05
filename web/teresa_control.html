@@ -64,6 +64,10 @@ body{
 #camera-view{display:none;flex:1;flex-direction:column;overflow:hidden}
 #camera-view.open{display:flex}
 #camera-grid{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:8px;overflow:hidden;min-height:0}
+
+/* body map view */
+#body-map-view{display:none;flex:1;flex-direction:column;overflow:hidden;padding:8px}
+#body-map-view.open{display:flex}
 @media(max-width:900px){#camera-grid{grid-template-columns:1fr}}
 .cam-panel{
   display:flex;flex-direction:column;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;overflow:hidden;
@@ -109,6 +113,17 @@ body{
 #yolo-bar .val.posture-lying{color:var(--accent)}
 #yolo-bar .val.posture-other{color:var(--text-dim)}
 
+/* exposure legend */
+#exposure-legend{
+  display:none;align-items:center;gap:10px;flex-shrink:0;
+  padding:5px 16px;background:var(--bg-light);border-top:1px solid var(--border);
+  font-size:10px;flex-wrap:wrap;
+}
+#camera-view.open #exposure-legend.visible{display:flex}
+#exposure-legend .legend-label{color:var(--text-dim);font-weight:600;margin-right:2px}
+#exposure-legend .legend-item{color:var(--text-dim);white-space:nowrap}
+.legend-swatch{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:2px;vertical-align:middle}
+
 /* button bar */
 #btn-bar{
   display:flex;align-items:center;justify-content:space-between;gap:8px;flex-shrink:0;
@@ -144,6 +159,7 @@ body{
   <span class="label">Start:</span><span class="value" id="start-indicator">---</span>
   <span class="sep">|</span>
   <button id="cam-toggle-btn" onclick="ctrl.toggleCameras()" title="Camera view">📷</button>
+  <button id="bodymap-toggle-btn" onclick="ctrl.toggleBodyMap()" title="Body Map">🗺</button>
   <div id="ros-input">
     <span class="label" style="margin:0">ws://</span>
     <input type="text" id="ros-url" value="localhost:9090" placeholder="host:9090">
@@ -198,6 +214,7 @@ body{
           <button id="rs-center-btn" onclick="ctrl.toggleRsCenter()">Center</button>
           <button id="rs-edges-btn" onclick="ctrl.toggleRsEdges()">Edges</button>
           <button id="rs-label-btn" onclick="ctrl.toggleRsLabel()">Label</button>
+          <button id="rs-grid-btn" onclick="ctrl.toggleRsExposureGrid()">Grid</button>
           <button id="hide-rs-btn" onclick="ctrl.toggleRealSense()">👁 Hide</button>
         </div>
       </div>
@@ -207,6 +224,34 @@ body{
       <span class="label">Conf:</span><span class="val" id="conf-val">---</span>
       <span class="label">Torso:</span><span class="val" id="tracker-val">---</span>
       <span class="label">Joints:</span><span class="val" id="joints-val">0/17</span>
+    </div>
+    <div id="exposure-legend" style="display:none">
+      <span class="legend-label">EXPOSURE:</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#ffdc00"></span>HEAD</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#3366ff"></span>TORSO</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#ff3333"></span>L-ARM</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#ff8000"></span>R-ARM</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#33cc33"></span>L-LEG</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#66ff66"></span>R-LEG</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#b333ff"></span>FEET</span>
+    </div>
+  </div>
+
+  <div id="body-map-view">
+    <div class="cam-panel" style="flex:1;min-height:400px">
+      <div class="cam-header">
+        <span class="title">BODY MAP — top-down view</span>
+        <span class="tag" id="bm-kp-count">0/17</span>
+      </div>
+      <div class="cam-body" style="background:var(--bg)">
+        <canvas id="body-map-canvas"></canvas>
+        <div class="cam-placeholder" id="bm-placeholder">No skeleton data<br><span style="font-size:10px;color:var(--text-dim)">waiting for /exposure/refined_skeleton...</span></div>
+      </div>
+      <div class="cam-overlay-bar">
+        <span class="ov-label">Overlays:</span>
+        <button id="bm-skel-btn" onclick="ctrl.toggleBodyMapSkel()" class="active">Skeleton</button>
+        <button id="bm-grid-btn" onclick="ctrl.toggleBodyMapGrid()" class="active">Grid</button>
+      </div>
     </div>
   </div>
 </div>
@@ -254,11 +299,15 @@ class TeresaController{
     this._orbbecOpenTs=0;this._rsOpenTs=0;
     // overlay toggles
     this.showOrbbecSkel=true;this.showOrbbecBbox=false;this.showOrbbecTorsoBbox=false;this.showOrbbecApproach=false;
-    this.showRsCenter=false;this.showRsEdges=false;this.showRsLabel=false;
+    this.showRsCenter=false;this.showRsEdges=false;this.showRsLabel=false;this.showRsExposureGrid=false;
     // camera data
     this.orbbecK=null;this.rsCamInfo=null;this.rsCamPose=null;
-    this.skeleton=null;this.bodyBbox=null;this.torsoBbox=null;this.approachMk=null;this.torsoMarkers=null;
+    this.skeleton=null;this.bodyBbox=null;this.torsoBbox=null;this.approachMk=null;this.torsoMarkers=null;this.exposureGridMarkers=[];
     this.posture='---';this.confidence=0;this.trackerState='---';
+    this._rsOverlayClickBound=null;
+    // body map state
+    this.bodyMapOpen=false;
+    this.bodyMapSkeleton=null;this.bodyMapSkelVisible=true;this.bodyMapGridVisible=true;
     // fps
     this.orbbecFrames=0;this.rsFrames=0;this.orbbecFpsTs=0;this.rsFpsTs=0;
     // pings
@@ -278,6 +327,7 @@ class TeresaController{
         case'a':e.preventDefault();this.onStand();break;
         case'c':e.preventDefault();this.onSit();break;
         case'v':e.preventDefault();this.toggleCameras();break;
+        case'm':e.preventDefault();this.toggleBodyMap();break;
         case'p':case' ':e.preventDefault();this.togglePause();break;
         case'escape':e.preventDefault();this.onStop();break;
       }
@@ -319,6 +369,7 @@ class TeresaController{
     this.stepConfirmPub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/step_confirm',messageType:'std_msgs/Bool'});
     this.manualGatePub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/set_manual_scan_gate',messageType:'std_msgs/Bool'});
     this.cmdVelPub=new ROSLIB.Topic({ros:this.ros,name:'/my_spot/cmd_vel',messageType:'geometry_msgs/Twist'});
+    this.gotoPointPub=new ROSLIB.Topic({ros:this.ros,name:'/exposure/goto_point',messageType:'std_msgs/Int32'});
 
     /* control subscribers */
     this.wbcStateSub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/state',messageType:'std_msgs/String'});
@@ -400,7 +451,114 @@ class TeresaController{
     this._teardownCameraTopics();
     $('orbbec-tag').textContent='no signal';$('rs-tag').textContent='no signal';
     this.orbbecReady=false;this.rsReady=false;
+    this.showRsExposureGrid=false;
+    $('rs-grid-btn').classList.remove('active');
+    $('exposure-legend').classList.remove('visible');
     this.log('Camera panel closed');
+  }
+
+  /* ── Body Map panel ───────────────────────── */
+  toggleBodyMap(){
+    this.bodyMapOpen=!this.bodyMapOpen;
+    $('body-map-view').classList.toggle('open',this.bodyMapOpen);
+    $('state-view').style.display=(this.bodyMapOpen||this.camerasOpen)?'none':'';
+    $('bodymap-toggle-btn').classList.toggle('active',this.bodyMapOpen);
+    if(this.bodyMapOpen)this._openBodyMap();else this._closeBodyMap();
+  }
+
+  _openBodyMap(){
+    this.bodyMapSkelVisible=true;this.bodyMapGridVisible=true;
+    $('bm-skel-btn').classList.add('active');
+    $('bm-grid-btn').classList.add('active');
+    if(!this._bodyMapSkelSub){
+      this._bodyMapSkelSub=new ROSLIB.Topic({ros:this.ros,name:'/exposure/refined_skeleton',messageType:'geometry_msgs/PoseArray'});
+      this._bodyMapSkelSub.subscribe(msg=>{
+        this.bodyMapSkeleton=msg.poses||[];
+        const c=this.bodyMapSkeleton.filter(p=>p.position&&!isNaN(p.position.x)).length;
+        $('bm-kp-count').textContent=c+'/17';
+        if(c>0){$('bm-placeholder').style.display='none';}
+        this.drawBodyMap();
+      });
+    }
+    if(!this._bodyMapGridSub){
+      this._bodyMapGridSub=new ROSLIB.Topic({ros:this.ros,name:'/exposure/grid_markers',messageType:'visualization_msgs/MarkerArray'});
+      this._bodyMapGridSub.subscribe(msg=>{
+        this.exposureGridMarkers=msg.markers||[];
+        this.drawBodyMap();
+      });
+    }
+    this._resizeBodyMap();
+    window.addEventListener('resize',this._resizeBodyMap);
+    this.log('Body Map opened','info');
+  }
+
+  _closeBodyMap(){
+    this.bodyMapSkelVisible=false;this.bodyMapGridVisible=false;
+    $('bm-placeholder').style.display='flex';
+    $('bm-kp-count').textContent='0/17';
+    const c=$('body-map-canvas');c.getContext('2d').clearRect(0,0,c.width,c.height);
+    this.log('Body Map closed');
+  }
+
+  _resizeBodyMap(){
+    const c=$('body-map-canvas'),p=c.parentElement;
+    if(!p)return;
+    c.width=p.clientWidth||600;c.height=p.clientHeight||400;
+    this.drawBodyMap();
+  }
+
+  drawBodyMap(){
+    const c=$('body-map-canvas');if(!c||c.width===0)return;
+    const ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);
+    const W=c.width,H=c.height,margin=40;
+    const skel=this.bodyMapSkeleton;
+    const grid=this.exposureGridMarkers;
+
+    const allPts=[];
+    if(skel){for(const p of skel){if(p.position&&!isNaN(p.position.x))allPts.push({x:p.position.x,y:p.position.y});}}
+    if(grid){for(const m of grid){allPts.push({x:m.pose.position.x,y:m.pose.position.y});}}
+    if(!allPts.length)return;
+
+    let xMin=Infinity,xMax=-Infinity,yMin=Infinity,yMax=-Infinity;
+    for(const pt of allPts){xMin=Math.min(xMin,pt.x);xMax=Math.max(xMax,pt.x);yMin=Math.min(yMin,pt.y);yMax=Math.max(yMax,pt.y);}
+    const dx=xMax-xMin||1,dy=yMax-yMin||1;
+    const scale=Math.min((W-2*margin)/dx,(H-2*margin)/dy);
+    const ox=(W-dx*scale)/2,oy=(H-dy*scale)/2;
+    const proj=(wx,wy)=>({x:ox+(wx-xMin)*scale,y:oy+(wy-yMin)*scale});
+
+    const BODY_KP_COLORS=['#ffdc00','#00ccff','#00ccff','#00ddff','#00ddff','#3366ff','#3366ff','#ff3333','#ff8000','#ff3333','#ff8000','#33cc33','#66ff66','#33cc33','#66ff66','#33cc33','#66ff66'];
+
+    if(this.bodyMapSkelVisible&&skel&&skel.length>=17){
+      const pts=skel.map(p=>(p.position&&!isNaN(p.position.x))?proj(p.position.x,p.position.y):null);
+      ctx.strokeStyle='rgba(200,200,220,.5)';ctx.lineWidth=1.5;
+      for(const[i,j]of SKELETON_EDGES){const a=pts[i],b=pts[j];if(a&&b){ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}}
+      for(let i=0;i<pts.length;i++){
+        const p=pts[i];if(!p)continue;
+        const r=Math.max(4,scale*0.06);
+        ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fillStyle=BODY_KP_COLORS[i]||'#888';ctx.fill();
+      }
+    }
+
+    if(this.bodyMapGridVisible&&grid&&grid.length){
+      for(const m of grid){
+        const p=proj(m.pose.position.x,m.pose.position.y);
+        const r=m.scale.x*scale*0.4||4;
+        const cr=m.color.r||1.0,cg=m.color.g||1.0,cb=m.color.b||1.0,ca=m.color.a!=null?m.color.a:0.8;
+        ctx.beginPath();ctx.arc(p.x,p.y,Math.max(3,r),0,Math.PI*2);
+        ctx.fillStyle=`rgba(${Math.round(cr*255)},${Math.round(cg*255)},${Math.round(cb*255)},${ca})`;ctx.fill();
+      }
+    }
+  }
+
+  toggleBodyMapSkel(){
+    this.bodyMapSkelVisible=!this.bodyMapSkelVisible;
+    $('bm-skel-btn').classList.toggle('active',this.bodyMapSkelVisible);
+    this.drawBodyMap();
+  }
+  toggleBodyMapGrid(){
+    this.bodyMapGridVisible=!this.bodyMapGridVisible;
+    $('bm-grid-btn').classList.toggle('active',this.bodyMapGridVisible);
+    this.drawBodyMap();
   }
 
   _initCameraTopics(){
@@ -478,6 +636,40 @@ class TeresaController{
     this.torsoMkSub=new ROSLIB.Topic({ros:this.ros,name:'/torso_markers',messageType:'visualization_msgs/MarkerArray'});
     this.torsoMkSub.subscribe(msg=>{this.torsoMarkers=msg.markers||[];this.drawRealSenseOverlay();});
 
+    /* Exposure grid markers */
+    this.exposureGridSub=new ROSLIB.Topic({ros:this.ros,name:'/exposure/grid_markers',messageType:'visualization_msgs/MarkerArray'});
+    this.exposureGridSub.subscribe(msg=>{this.exposureGridMarkers=msg.markers||[];this.drawRealSenseOverlay();});
+
+    /* RS click handler for exposure grid */
+    if (!this._rsOverlayClickBound) {
+      this._rsOverlayClickBound = e => {
+        if (!this.showRsExposureGrid || !this.exposureGridMarkers.length) return;
+        if (!this.rsCamInfo || !this.rsCamPose) return;
+        const rect = e.target.getBoundingClientRect();
+        const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
+        let bestId = -1, bestDist = 20;
+        const {fx,fy,cx:cix,cy:ciy,w,h}=this.rsCamInfo,sX=($('rs-overlay').width||w)/w,sY=($('rs-overlay').height||h)/h;
+        const cp=this.rsCamPose.pos,cq=this.rsCamPose.rot,qx=cq.x,qy=cq.y,qz=cq.z,qw=cq.w;
+        const w2c=(wx,wy,wz)=>{
+          const dx=wx-cp.x,dy=wy-cp.y,dz=wz-cp.z,iqx=-qx,iqy=-qy,iqz=-qz;
+          const aw=-iqx*dx-iqy*dy-iqz*dz,ax=qw*dx+iqz*dy-iqy*dz,ay=-iqz*dx+qw*dy+iqx*dz,az=iqy*dx-iqx*dy+qw*dz;
+          return{x:aw*(-qx)+ax*qw+ay*(-qz)-az*(-qy),y:aw*(-qy)-ax*(-qz)+ay*qw+az*(-qx),z:aw*(-qz)+ax*(-qy)-ay*(-qx)+az*qw};
+        };
+        for (const m of this.exposureGridMarkers) {
+          const wp=m.pose.position;const cc=w2c(wp.x,wp.y,wp.z);
+          if (cc.z<=.01) continue;
+          const px=(fx*(cc.x/cc.z)+cix)*sX,py=(fy*(cc.y/cc.z)+ciy)*sY;
+          const d=Math.hypot(px-cx,py-cy);
+          if (d<bestDist){bestDist=d;bestId=m.id;}
+        }
+        if (bestId>=0){
+          this.gotoPointPub.publish({data:bestId});
+          this.log('Goto exposure point '+bestId,'info');
+        }
+      };
+      $('rs-overlay').addEventListener('click', this._rsOverlayClickBound);
+    }
+
     /* RS camera info */
     this.rsInfoSub=new ROSLIB.Topic({ros:this.ros,name:'/camera/camera/color/camera_info',messageType:'sensor_msgs/CameraInfo'});
     this.rsInfoSub.subscribe(msg=>{
@@ -493,7 +685,12 @@ class TeresaController{
     const unsub=t=>{if(t)try{t.unsubscribe()}catch(e){}};
     [this.orbbecSub,this.orbbecInfoSub,this.rsSub,this.rsInfoSub,this.skelSub,this.bboxSub,
      this.torsoBboxSub,this.approachSub,this.postureSub,this.confSub,this.trackerSub,
-     this.torsoMkSub].forEach(unsub);
+     this.torsoMkSub,this.exposureGridSub].forEach(unsub);
+    if(this._rsOverlayClickBound){
+      $('rs-overlay').removeEventListener('click',this._rsOverlayClickBound);
+      this._rsOverlayClickBound=null;
+    }
+    this.exposureGridMarkers=[];
   }
 
   /* ── Image rendering ──────────────────────── */
@@ -549,7 +746,9 @@ class TeresaController{
   /* ── RealSense overlay ────────────────────── */
   drawRealSenseOverlay(){
     const c=$('rs-overlay');if(!c||c.width===0)return;const ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);
-    if(!this.rsCamInfo||!this.rsCamPose||!this.torsoMarkers)return;
+    if(!this.rsCamInfo||!this.rsCamPose)return;
+    const hasMarkers=(this.torsoMarkers&&this.torsoMarkers.length)||(this.showRsExposureGrid&&this.exposureGridMarkers.length);
+    if(!hasMarkers)return;
     const{fx,fy,cx,cy,w,h}=this.rsCamInfo,sX=c.width/w,sY=c.height/h;
     const cp=this.rsCamPose.pos,cq=this.rsCamPose.rot,qx=cq.x,qy=cq.y,qz=cq.z,qw=cq.w;
     const w2c=(wx,wy,wz)=>{
@@ -560,9 +759,10 @@ class TeresaController{
     const proj=(wx,wy,wz)=>{const cc=w2c(wx,wy,wz);if(cc.z<=.01)return null;return{x:(fx*(cc.x/cc.z)+cx)*sX,y:(fy*(cc.y/cc.z)+cy)*sY};};
     const crc=(x,y,r,cl)=>{ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fillStyle=cl;ctx.fill();};
 
-    for(const m of this.torsoMarkers){
-      const ns=m.ns||'';
-      if((ns==='torso_center'&&this.showRsCenter)||((ns==='torso_keypoints'||ns==='face_keypoints')&&this.showRsCenter)){
+    if(this.torsoMarkers&&this.torsoMarkers.length){
+      for(const m of this.torsoMarkers){
+        const ns=m.ns||'';
+        if((ns==='torso_center'&&this.showRsCenter)||((ns==='torso_keypoints'||ns==='face_keypoints')&&this.showRsCenter)){
         const p=proj(m.pose.position.x,m.pose.position.y,m.pose.position.z);
         if(p)crc(p.x,p.y,ns==='torso_center'?10:5,ns==='torso_center'?'#50c878':'#4488ff');
       }
@@ -576,6 +776,19 @@ class TeresaController{
       if(ns==='torso_state'&&this.showRsLabel){
         const p=proj(m.pose.position.x,m.pose.position.y,m.pose.position.z);
         if(p){ctx.fillStyle='#50c878';ctx.font=`${Math.max(10,c.width/40)}px monospace`;ctx.fillText(m.text||'',p.x,p.y);}
+      }
+    }
+    }
+
+    if(this.showRsExposureGrid&&this.exposureGridMarkers.length){
+      for(const m of this.exposureGridMarkers){
+        const p=proj(m.pose.position.x,m.pose.position.y,m.pose.position.z);
+        if(!p)continue;
+        const r=Math.max(4,m.scale.x*80);
+        const cr=m.color.r||1.0,cg=m.color.g||1.0,cb=m.color.b||1.0,ca=m.color.a!=null?m.color.a:0.8;
+        ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);
+        ctx.fillStyle=`rgba(${Math.round(cr*255)},${Math.round(cg*255)},${Math.round(cb*255)},${ca})`;ctx.fill();
+        if(ca>=0.9){ctx.beginPath();ctx.arc(p.x,p.y,r*1.8,0,Math.PI*2);ctx.fillStyle='rgba(255,255,255,.15)';ctx.fill();}
       }
     }
   }
@@ -612,6 +825,13 @@ class TeresaController{
   toggleRsCenter(){this.showRsCenter=!this.showRsCenter;$('rs-center-btn').classList.toggle('active',this.showRsCenter);this.drawRealSenseOverlay();}
   toggleRsEdges(){this.showRsEdges=!this.showRsEdges;$('rs-edges-btn').classList.toggle('active',this.showRsEdges);this.drawRealSenseOverlay();}
   toggleRsLabel(){this.showRsLabel=!this.showRsLabel;$('rs-label-btn').classList.toggle('active',this.showRsLabel);this.drawRealSenseOverlay();}
+  toggleRsExposureGrid(){
+    this.showRsExposureGrid=!this.showRsExposureGrid;
+    $('rs-grid-btn').classList.toggle('active',this.showRsExposureGrid);
+    this.drawRealSenseOverlay();
+    if(this.showRsExposureGrid){$('exposure-legend').classList.add('visible');}
+    else{$('exposure-legend').classList.remove('visible');}
+  }
 
   /* ── Control actions ──────────────────────── */
   async saveStartPose(){

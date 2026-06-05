@@ -10,7 +10,7 @@ from rclpy.node import Node
 from message_filters import Subscriber, ApproximateTimeSynchronizer
 
 from sensor_msgs.msg import Image, CameraInfo
-from geometry_msgs.msg import PointStamped, PoseStamped, Point
+from geometry_msgs.msg import PointStamped, PoseStamped, Point, Pose, PoseArray
 from std_msgs.msg import Bool, ColorRGBA, Float32MultiArray, String
 from visualization_msgs.msg import Marker, MarkerArray
 from cv_bridge import CvBridge
@@ -198,6 +198,10 @@ class Z1YoloTorsoTracker(Node):
             Float32MultiArray, '/torso_scan_point', 10)
         self.pub_kp_conf = self.create_publisher(
             Float32MultiArray, '/torso_keypoint_conf', 10)
+
+        # ── Publisher body keypoints (exposure scan) ────────────────
+        self.pub_body_kp = self.create_publisher(
+            PoseArray, '/exposure/body_keypoints', 10)
 
         # ── Stato interno normale ──────────────────────────────────
         self.state            = 'IDLE'
@@ -422,6 +426,8 @@ class Z1YoloTorsoTracker(Node):
         # ── Macchina a stati: normale o scan mode ──────────────────
         if self._scan_mode:
             self._update_scan(torso_raw, n_valid, avg_conf)
+            all_kp = self._extract_all_body_keypoints(results, depth)
+            self._publish_body_keypoints(all_kp)
         else:
             self._update_state(torso_raw, n_valid, avg_conf, rgb_msg.header)
 
@@ -673,6 +679,60 @@ class Z1YoloTorsoTracker(Node):
         if self._scan_state != prev_scan:
             self.get_logger().info(f'🔄 Scan state: {prev_scan} → {self._scan_state}')
         self.pub_tracker_state.publish(String(data=scan_label))
+
+    # ──────────────────────────────────────────────────────────────
+    def _extract_all_body_keypoints(self, results, depth):
+        """Extract all 17 COCO keypoints in camera frame for exposure scan."""
+        if len(results) == 0 or results[0].keypoints is None:
+            return {}
+        kp_data = results[0].keypoints
+        if kp_data.xy is None or kp_data.xy.shape[0] == 0:
+            return {}
+
+        kp_xy   = kp_data.xy.cpu().numpy()[0]
+        kp_conf = kp_data.conf.cpu().numpy()[0]
+
+        K      = np.array(self.cam_info.k).reshape(3, 3)
+        fx, fy = K[0, 0], K[1, 1]
+        cx, cy = K[0, 2], K[1, 2]
+
+        kp_3d = {}
+        for idx in range(min(17, len(kp_conf))):
+            if kp_conf[idx] < self.conf_thr:
+                continue
+            u, v = int(kp_xy[idx, 0]), int(kp_xy[idx, 1])
+            if not (0 <= v < depth.shape[0] and 0 <= u < depth.shape[1]):
+                continue
+            d = self._get_depth_robust(depth, u, v, window=5)
+            if d is None:
+                continue
+            kp_3d[idx] = [float((u - cx) * d / fx), float((v - cy) * d / fy), float(d)]
+        return kp_3d
+
+    def _publish_body_keypoints(self, kp_3d_cam: dict):
+        """Publish all 17 keypoints as PoseArray in world frame."""
+        pa = PoseArray()
+        pa.header.frame_id = 'world'
+        pa.header.stamp = self.get_clock().now().to_msg()
+        for idx in range(17):
+            pose = Pose()
+            if idx in kp_3d_cam:
+                w = self._camera_to_world(np.array(kp_3d_cam[idx]))
+                if w is not None:
+                    pose.position.x = float(w[0])
+                    pose.position.y = float(w[1])
+                    pose.position.z = float(w[2])
+                    pose.orientation.w = 1.0
+                else:
+                    pose.position.x = float('nan')
+                    pose.position.y = float('nan')
+                    pose.position.z = float('nan')
+            else:
+                pose.position.x = float('nan')
+                pose.position.y = float('nan')
+                pose.position.z = float('nan')
+            pa.poses.append(pose)
+        self.pub_body_kp.publish(pa)
 
     # ──────────────────────────────────────────────────────────────
     def _update_state(self, torso_raw, n_valid, avg_conf, header):

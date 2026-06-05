@@ -1140,15 +1140,18 @@ class WBCCoordinatorNode(Node):
             self._apply_fast_body_pose(0)
 
     def _cb_next_point(self, msg: Int32) -> None:
-        """FSM signals next FAST point index."""
+        """FSM signals next point index (FAST or EXPOSURE)."""
         idx = msg.data
         if idx < 0:
-            self.get_logger().info('FAST done — restoring handoff height')
+            kind = 'EXPOSURE' if self._state == CoordState.EXPOSURE_SCANNING else 'FAST'
+            self.get_logger().info(f'{kind} done — restoring handoff height')
             self._set_body_pose(self._handoff_body_height, 0.0)
             self._pub_body_ready.publish(Bool(data=True))
             return
         if self._state == CoordState.SCANNING:
             self._apply_fast_body_pose(idx)
+        elif self._state == CoordState.EXPOSURE_SCANNING:
+            self._apply_exposure_body_pose(idx)
 
     def _optimize_body_poses(self) -> None:
         """Grid search: for each FAST point, find optimal (h, p)."""
@@ -1329,6 +1332,17 @@ class WBCCoordinatorNode(Node):
 
         # Normal body pose (h, p only) or WS_EXT gave up
         self._set_body_pose(h, p)
+        self._body_settle_start = self.get_clock().now().nanoseconds * 1e-9
+        self._ws_ext_driving = False
+
+    def _apply_exposure_body_pose(self, idx: int) -> None:
+        """Apply body pose for exposure point idx.
+
+        Uses the same grid-search optimisation as FAST when exposure
+        points have been received and optimised. Falls back to handoff
+        body height until full exposure pose optimisation is plumbed in.
+        """
+        self._set_body_pose(self._handoff_body_height, 0.0)
         self._body_settle_start = self.get_clock().now().nanoseconds * 1e-9
         self._ws_ext_driving = False
 
