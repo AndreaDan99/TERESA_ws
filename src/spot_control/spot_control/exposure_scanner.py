@@ -26,6 +26,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Bool, String, Int32
 from geometry_msgs.msg import PoseStamped
+from visualization_msgs.msg import Marker, MarkerArray
 
 
 def lerp(a: np.ndarray, b: np.ndarray, t: float) -> np.ndarray:
@@ -89,9 +90,13 @@ class ExposureScanner(Node):
         self._pub_ready = self.create_publisher(
             Bool, '/exposure/ready', 10
         )
+        self._pub_grid = self.create_publisher(
+            MarkerArray, '/exposure/grid_markers', 10
+        )
 
         # ── timer ────────────────────────────────────────────
         self._timer = self.create_timer(0.1, self._tick)
+        self._grid_timer = self.create_timer(0.2, self._publish_grid_markers)
 
         self.get_logger().info('Exposure scanner ready')
 
@@ -225,6 +230,37 @@ class ExposureScanner(Node):
         self.get_logger().info(
             f'Point {self._idx}/{len(self._points)}: IK goal sent'
         )
+
+    def _publish_grid_markers(self):
+        """Publish exposure grid points as MarkerArray for web overlay."""
+        if not self._points:
+            return
+        markers = MarkerArray()
+        for i, pt in enumerate(self._points):
+            m = Marker()
+            m.header.frame_id = 'world'
+            m.header.stamp = self.get_clock().now().to_msg()
+            m.ns = 'exposure_grid'
+            m.id = i
+            m.type = Marker.SPHERE
+            m.action = Marker.ADD
+            m.pose.position.x = float(pt[0])
+            m.pose.position.y = float(pt[1])
+            m.pose.position.z = float(pt[2])
+            if i == self._idx and self._active:
+                m.scale.x = 0.04; m.scale.y = 0.04; m.scale.z = 0.04
+                m.color.r = 0.2; m.color.g = 0.4; m.color.b = 1.0
+                m.color.a = 0.9
+            elif i < self._idx:
+                m.scale.x = 0.02; m.scale.y = 0.02; m.scale.z = 0.02
+                m.color.r = 0.3; m.color.g = 0.5; m.color.b = 0.8
+                m.color.a = 0.4
+            else:
+                m.scale.x = 0.02; m.scale.y = 0.02; m.scale.z = 0.02
+                m.color.r = 0.3; m.color.g = 0.5; m.color.b = 0.8
+                m.color.a = 0.6
+            markers.markers.append(m)
+        self._pub_grid.publish(markers)
 
     def _finish(self):
         self._active = False

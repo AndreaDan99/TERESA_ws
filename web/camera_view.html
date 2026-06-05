@@ -213,6 +213,7 @@
       <button id="rs-center-btn" onclick="ctrl.toggleRsCenter()">Center</button>
       <button id="rs-edges-btn" onclick="ctrl.toggleRsEdges()">Edges</button>
       <button id="rs-label-btn" onclick="ctrl.toggleRsLabel()">Label</button>
+      <button id="rs-exposure-btn" onclick="ctrl.toggleRsExposure()" class="active">Exposure</button>
     </div>
   </div>
 </div>
@@ -287,6 +288,7 @@
       this.showRsCenter      = false;
       this.showRsEdges       = false;
       this.showRsLabel       = false;
+      this.showExposureGrid  = true;
 
       /* latest marker data */
       this.bodyBbox     = null;  // Marker: /human_pose/bounding_box
@@ -484,6 +486,17 @@
       });
       this.torsoMkSub.subscribe((msg) => {
         this.torsoMarkers = msg.markers || [];
+        this.drawRealSenseOverlay();
+      });
+
+      /* ── Exposure grid markers ───────────── */
+      this.exposureMarkers = [];
+      this.exposureMkSub = new ROSLIB.Topic({
+        ros: this.ros, name: '/exposure/grid_markers',
+        messageType: 'visualization_msgs/MarkerArray'
+      });
+      this.exposureMkSub.subscribe((msg) => {
+        this.exposureMarkers = msg.markers || [];
         this.drawRealSenseOverlay();
       });
 
@@ -761,87 +774,30 @@
           }
         }
       }
-    }
 
-    /* ── FPS counter ───────────────────────── */
-    tickFps(cam) {
-      const now = performance.now();
-      const keyFrames = cam + 'Frames';
-      const keyTs     = cam + 'FpsTs';
-      this[keyFrames]++;
-      if (now - this[keyTs] >= 2000) {
-        const fps = (this[keyFrames] / ((now - this[keyTs]) / 1000)).toFixed(1);
-        $id(cam + '-fps').textContent = fps + ' fps';
-        this[keyFrames] = 0;
-        this[keyTs] = now;
+      /* ── Exposure grid (blue dots) ───────── */
+      if (this.showExposureGrid && this.exposureMarkers.length > 0) {
+        for (const m of this.exposureMarkers) {
+          if (m.type !== 2) continue;
+          const p = proj(m.pose.position.x, m.pose.position.y, m.pose.position.z);
+          if (!p) continue;
+          const r = Math.max(4, canvas.width / 200);
+          const a = m.color.a;
+          const rr = Math.floor(m.color.r * 255);
+          const gg = Math.floor(m.color.g * 255);
+          const bb = Math.floor(m.color.b * 255);
+          circle(p.x, p.y, r, `rgba(${rr},${gg},${bb},${a})`);
+          if (a > 0.8 && m.scale.x > 0.03) {
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, r * 2.2, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(80,140,255,0.8)';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+          }
+        }
       }
-    }
 
-    /* ── Pause / resume ────────────────────── */
-    togglePause() {
-      this.paused = !this.paused;
-      const btn = $id('pause-btn');
-      btn.textContent = this.paused ? '▶ Resume' : '⏸ Pause';
-      btn.classList.toggle('active', this.paused);
-    }
-
-    /* ── Hide / show individual cameras ────── */
-    toggleOrbbec() {
-      this.orbbecHidden = !this.orbbecHidden;
-      const btn = $id('hide-orbbec-btn');
-      if (this.orbbecHidden) {
-        this.orbbecSub.unsubscribe();
-        this.orbbecReady = false;
-        this._clearCanvas('orbbec-img');
-        $id('orbbec-dot').className = 'dot';
-        $id('orbbec-tag').textContent = 'hidden';
-        $id('orbbec-tag').classList.remove('active');
-        $id('orbbec-placeholder').style.display = 'flex';
-        $id('orbbec-placeholder').innerHTML = 'Image hidden<br><span style="font-size:10px;color:var(--accent)">skeleton active</span>';
-        btn.textContent = '👁 Show Orbbec';
-        btn.classList.add('active');
-      } else {
-        this.orbbecSub.subscribe(this._orbbecCb);
-        $id('orbbec-placeholder').style.display = 'flex';
-        $id('orbbec-placeholder').innerHTML = 'Waiting for<br>/orbbec/color/image_raw...';
-        $id('orbbec-tag').textContent = 'connecting...';
-        btn.textContent = '👁 Hide Orbbec';
-        btn.classList.remove('active');
-      }
-    }
-
-    toggleRealSense() {
-      this.rsHidden = !this.rsHidden;
-      const btn = $id('hide-rs-btn');
-      if (this.rsHidden) {
-        this.rsSub.unsubscribe();
-        this.rsReady = false;
-        this._clearCanvas('rs-img');
-        this._clearCanvas('rs-overlay');
-        $id('rs-dot').className = 'dot';
-        $id('rs-tag').textContent = 'hidden';
-        $id('rs-tag').classList.remove('active');
-        $id('rs-placeholder').style.display = 'flex';
-        $id('rs-placeholder').innerHTML = 'Image hidden';
-        btn.textContent = '👁 Show RS';
-        btn.classList.add('active');
-      } else {
-        this.rsSub.subscribe(this._rsCb);
-        $id('rs-placeholder').style.display = 'flex';
-        $id('rs-placeholder').innerHTML = 'Waiting for<br>/camera/camera/color/image_raw...';
-        $id('rs-tag').textContent = 'connecting...';
-        btn.textContent = '👁 Hide RS';
-        btn.classList.remove('active');
-      }
-    }
-
-    _clearCanvas(id) {
-      const canvas = $id(id);
-      const ctx = canvas.getContext('2d');
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-    }
-
-    /* ── Orbbec overlay toggles ────────────── */
+      /* ── Orbbec overlay toggles ────────────── */
     toggleOrbbecSkel() {
       this.showOrbbecSkel = !this.showOrbbecSkel;
       $id('ob-skel-btn').classList.toggle('active', this.showOrbbecSkel);
@@ -877,6 +833,11 @@
     toggleRsLabel() {
       this.showRsLabel = !this.showRsLabel;
       $id('rs-label-btn').classList.toggle('active', this.showRsLabel);
+      this.drawRealSenseOverlay();
+    }
+    toggleRsExposure() {
+      this.showExposureGrid = !this.showExposureGrid;
+      $id('rs-exposure-btn').classList.toggle('active', this.showExposureGrid);
       this.drawRealSenseOverlay();
     }
 
