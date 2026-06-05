@@ -138,6 +138,7 @@ class CoordState:
     IDLE          = 'IDLE'
     APPROACHING   = 'APPROACHING'
     SCANNING      = 'SCANNING'
+    EXPOSURE_SCANNING = 'EXPOSURE_SCANNING'
 
 
 class WBCCoordinatorNode(Node):
@@ -274,6 +275,7 @@ class WBCCoordinatorNode(Node):
         self._pre_approach_start: rclpy.time.Time | None = None  # PRE_APPROACH entry time
         self._approach_start: rclpy.time.Time | None = None      # APPROACHING entry time
         self._scan_start: rclpy.time.Time | None = None          # SCANNING entry time
+        self._exposure_scan_start: rclpy.time.Time | None = None  # EXPOSURE_SCANNING entry time
         self._search_lock_buffer: list | None = None  # odom positions collected during lock
         self._search_positions: list = []              # [{yaw, pitch}, ...]
         self._search_position_idx: int = 0
@@ -330,6 +332,7 @@ class WBCCoordinatorNode(Node):
         self.create_subscription(Bool,           '/wbc/tf_ready',            self._cb_tf_ready,    10)
         self.create_subscription(PoseArray,      '/z1/fast_points',          self._cb_fast_points, 10)
         self.create_subscription(Int32,          '/z1/next_point_idx',       self._cb_next_point,  10)
+        self.create_subscription(Bool,           '/exposure/ready',          self._cb_exposure_ready, 10)
 
         self._pub_goal     = self.create_publisher(PoseStamped, p('wbc_goal_topic'),        10)
         self._pub_enable   = self.create_publisher(Bool,        p('wbc_enable_topic'),     10)
@@ -508,6 +511,8 @@ class WBCCoordinatorNode(Node):
             self._tick_approaching()
         elif self._state == CoordState.SCANNING:
             self._tick_scannning()
+        elif self._state == CoordState.EXPOSURE_SCANNING:
+            self._tick_exposure()
 
         s = String(); s.data = self._state
         self._pub_state.publish(s)
@@ -546,6 +551,28 @@ class WBCCoordinatorNode(Node):
                 f'SCANNING timeout ({self._scan_timeout:.0f}s) → IDLE')
             self._set_state(CoordState.IDLE)
 
+    def _tick_exposure(self) -> None:
+        """Passive tick — wait for exposure_scanner to finish.
+
+        The exposure_scanner node handles all arm movement and
+        per-point sequencing via /z1/next_point_idx and /wbc/body_ready.
+        The coordinator only monitors for timeout and the /exposure/ready
+        signal to transition to SCANNING (FAST).
+        """
+        if self._exposure_scan_start is None:
+            return
+        elapsed = (self.get_clock().now() - self._exposure_scan_start
+                   ).nanoseconds * 1e-9
+        if elapsed >= self._scan_timeout:
+            self.get_logger().error(
+                f'EXPOSURE_SCANNING timeout ({self._scan_timeout:.0f}s) → IDLE')
+            self._set_state(CoordState.IDLE)
+
+    def _cb_exposure_ready(self, msg: Bool) -> None:
+        if msg.data and self._state == CoordState.EXPOSURE_SCANNING:
+            self.get_logger().info('Exposure scan complete → SCANNING')
+            self._set_state(CoordState.SCANNING)
+
     def _tick_approaching(self) -> None:
         if self._approach_point_odom is None:
             return
@@ -576,15 +603,11 @@ class WBCCoordinatorNode(Node):
             else:
                 self._pub_spot_ctrl.publish(Bool(data=True))   # scanner done, resume
         elif dist < self._handoff_dist:
-            if self._fast_points is None:
-                self._pub_spot_ctrl.publish(Bool(data=False))  # wait for scanner
-            else:
-                # Hard handoff (5cm)
-                self.get_logger().info(
-                    f'Handoff: dist={dist:.2f}m < {self._handoff_dist:.2f}m → SCANNING')
-                self._pub_spot_ctrl.publish(Bool(data=False))
-                self._pub_handoff.publish(Bool(data=True))
-                self._set_state(CoordState.SCANNING)
+            self.get_logger().info(
+                f'Handoff: dist={dist:.2f}m < {self._handoff_dist:.2f}m → EXPOSURE_SCANNING')
+            self._pub_spot_ctrl.publish(Bool(data=False))
+            self._pub_handoff.publish(Bool(data=True))
+            self._set_state(CoordState.EXPOSURE_SCANNING)
         else:
             self._pub_spot_ctrl.publish(Bool(data=True))  # navigator active
 
@@ -1429,6 +1452,10 @@ class WBCCoordinatorNode(Node):
         if new_state == CoordState.SCANNING:
             self._set_body_pose(self._handoff_body_height)
             self._scan_start = self.get_clock().now()
+        if new_state == CoordState.EXPOSURE_SCANNING:
+            self._set_body_pose(self._handoff_body_height)
+            self._exposure_scan_start = self.get_clock().now()
+            self.get_logger().info('Entering exposure body scan')
         if new_state == CoordState.LOCKING:
             self._pub_cmd_vel.publish(Twist())
             self._pub_guidance.publish(Bool(data=False))

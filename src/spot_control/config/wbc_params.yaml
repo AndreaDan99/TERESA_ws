@@ -124,6 +124,14 @@ wbc_coordinator:
     scan_timeout: 120.0                       # [s] global timeout for SCANNING phase
     approach_timeout: 60.0                     # [s] max time for Spot to reach handoff in APPROACHING
 
+    # ── Exposure body scanning ──────────────────────────────────────
+    # /exposure_scanner node parameters
+    exposure_standoff: 0.50                   # [m] camera distance from body surface
+    exposure_dwell: 2.0                        # [s] observation time per body point
+    exposure_grid_rows: 3                      # torso grid rows
+    exposure_grid_cols: 5                      # torso grid columns
+    exposure_sweet_spot: [0.45, 0.0, 0.45]    # [m] camera sweet spot in link00 frame
+
     # Debug: step mode — gates automatic FSM transitions for debugging.
     # When true, each mission-state transition must be confirmed via /wbc/step_confirm.
     step_mode: false

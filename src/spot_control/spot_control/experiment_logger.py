@@ -81,6 +81,7 @@ class ExperimentLogger(Node):
                     'scan_overlap_pct', 'lock_time_s',
                     'probe_error_mean_mm', 'probe_error_max_mm',
                     'scan_grid_type', 'dual_sensor_lock',
+                    'exposure_duration_s',
                     'completion', 'patient_distance_m', 'patient_angle_deg'
                 ])
 
@@ -98,6 +99,7 @@ class ExperimentLogger(Node):
             't_handoff': None,
             't_scan_done': None,
             't_fast_ready_ts': None,
+            't_exposure_start': None,
             't_mission_end': None,
             'fast_point_count': 0,
             'probe_errors_mm': [],
@@ -125,6 +127,16 @@ class ExperimentLogger(Node):
         lock_time = None
         if t['t_lock_start'] and t['t_lock_end']:
             lock_time = t['t_lock_end'] - t['t_lock_start']
+
+        exposure_time = None
+        if t['t_exposure_start']:
+            # find next SCANNING or IDLE after EXPOSURE_SCANNING
+            for i, s in enumerate(t['state_timeline']):
+                if s['state'] == 'EXPOSURE_SCANNING':
+                    if i + 1 < len(t['state_timeline']):
+                        next_s = t['state_timeline'][i + 1]
+                        exposure_time = next_s['t'] - s['t']
+                    break
 
         scan_overlap = 0.0
         if t['t_handoff'] and t['t_fast_ready_ts']:
@@ -165,6 +177,9 @@ class ExperimentLogger(Node):
                 'completion': completed,
                 'scan_grid_type': t['scan_grid_type'],
                 'dual_sensor_lock': t['dual_sensor_lock'],
+                'exposure_duration_s': (
+                    round(exposure_time, 1) if exposure_time else None
+                ),
             },
             'state_timeline': t['state_timeline'],
         }
@@ -184,6 +199,7 @@ class ExperimentLogger(Node):
                 round(probe_mean, 1) if probe_mean else '',
                 round(probe_max, 1) if probe_max else '',
                 t['scan_grid_type'], t['dual_sensor_lock'],
+                round(exposure_time, 1) if exposure_time else '',
                 completed,
                 t['patient_distance_m'] or '',
                 t['patient_angle_deg'] or '',
@@ -229,6 +245,8 @@ class ExperimentLogger(Node):
                 elif state == 'SCANNING':
                     self._end_idle()
                     self._start_idle('scan_settle')
+                elif state == 'EXPOSURE_SCANNING':
+                    self._trial['t_exposure_start'] = time.time()
                 elif state == 'IDLE':
                     self._end_idle()
                     self._finish_trial(

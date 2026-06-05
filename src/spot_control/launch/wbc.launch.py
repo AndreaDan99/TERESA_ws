@@ -57,11 +57,20 @@ def generate_launch_description():
         parameters=[params_file],
     )
 
+    exposure_node = Node(
+        package='spot_control',
+        executable='exposure_scanner',
+        name='exposure_scanner',
+        output='screen',
+        parameters=[params_file],
+    )
+
     return LaunchDescription([
         dry_run_arg,
         step_mode_arg,
-        LogInfo(msg=['WBC — arm-only QP + coordinator + spot navigator']),
+        LogInfo(msg=['WBC — arm-only QP + coordinator + spot navigator + exposure scanner']),
         qp_node,
         coord_node,
         navigator_node,
+        exposure_node,
     ])
