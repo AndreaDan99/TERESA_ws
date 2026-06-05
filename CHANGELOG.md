@@ -5,6 +5,83 @@ Per la descrizione del sistema corrente vedi [`DESCRIPTION.md`](DESCRIPTION.md).
 
 ---
 
+## 5 June 2026 — Exposure Body Scanning + Interactive Review
+
+### New node: exposure_scanner.py
+- Posture-adaptive body scan with camera grid over patient body
+- 5-phase state machine: request_body_pose → wait_ik → dwell → advance
+- Per-point Spot body reconfiguration via same protocol as FAST scanning
+- Saved IK goals for click-to-revisit replay during review phase
+- Publishes `/exposure/grid_markers` (MarkerArray) for web overlay
+- Publishes `/exposure/ready` on scan completion
+- Subscriber `/exposure/goto_point` for interactive re-inspection
+
+### New FSM states in wbc_coordinator.py
+- `EXPOSURE_SCANNING`: automated body scan with RealSense camera
+- `EXPOSURE_REVIEW`: interactive phase, click grid points to re-inspect
+- `WAITING_EXPOSURE`: manual gate before exposure scan (step_confirm)
+- `WAITING_FAST`: manual gate before FAST ultrasound (step_confirm)
+
+### Manual scan gate (wbc_coordinator.py + web UI)
+- New parameter `manual_scan_gate` (default true)
+- Subscriber `/wbc/set_manual_scan_gate` (Bool) — from web UI
+- Publisher `/wbc/manual_scan_gate` (Bool) — feedback to web UI
+- When true: mission pauses at WAITING_EXPOSURE and WAITING_FAST
+- When false: mission advances automatically
+- Keyboard 'n' key publishes `/wbc/step_confirm` (same as web button)
+
+### Web interface updates
+- `camera_view.html`: exposure grid overlay (blue dots) on RealSense
+  - Current point highlighted with blue ring
+  - Visited points dimmed, pending points medium opacity
+  - Click on any grid marker → publishes `/exposure/goto_point`
+  - Terminate button during EXPOSURE_REVIEW phase
+  - Toggle button 'Exposure' in RealSense overlay bar
+- `teresa_control.html`: MANUAL/AUTO scan gate toggle
+  - Buttons appear when TF is ready
+  - Contextual STEP button labels: "▶ Expose" / "▶ FAST"
+  - Step pending banner shows contextual messages
+
+### Experiment logger
+- Tracks EXPOSURE_SCANNING, EXPOSURE_REVIEW states in timeline
+- New CSV column: `exposure_duration_s`
+- New trial field: `t_exposure_start`, `t_review_start`
+
+### New topics
+| Topic | Publisher | Subscriber | Purpose |
+|-------|-----------|------------|---------|
+| `/exposure/grid_markers` | exposure_scanner | camera_view.html | Grid points overlay |
+| `/exposure/goto_point` | camera_view.html | exposure_scanner | Re-inspect point |
+| `/exposure/terminate` | camera_view.html / keyboard | wbc_coordinator | End review |
+| `/exposure/ready` | exposure_scanner | wbc_coordinator | Scan complete |
+| `/wbc/set_manual_scan_gate` | teresa_control.html | wbc_coordinator | Toggle gate |
+| `/wbc/manual_scan_gate` | wbc_coordinator | teresa_control.html | Gate status |
+
+### Paper (TERESA_RAL/)
+- Merged Introduction + Related Work into single I. Introduction
+- Added IV.D: Exposure Body Scanning and Injury Detection
+- Posture-adaptive grid (supine 15 pts, sitting 29, standing 49)
+- Pre-trained YOLOv8 wound + YOLOv7 burn models (footnoted)
+- Web-based interactive review with click-to-revisit
+- Updated FSM diagram: 13 states, 4 columns, new colour codes
+- Updated system block diagram: +Injury Detection, +Web UI, +Exp. Scanner
+- Placeholder figure for web interface screenshot
+- 8 pages, 42 references, 0 compilation errors
+
+### Files
+| File | Action |
+|------|--------|
+| `exposure_scanner.py` | New (~290 lines) |
+| `wbc_coordinator.py` | +95/−15 (4 states, manual gate, review) |
+| `experiment_logger.py` | +25 (exposure tracking) |
+| `camera_view.html` | +100 (grid overlay, click, terminate) |
+| `teresa_control.html` | +55 (gate toggle, step buttons) |
+| `wbc_params.yaml` | +12 (exposure + manual gate params) |
+| `wbc.launch.py` | +8 (exposure_scanner node) |
+| `setup.py` | +2 (entry points) |
+
+---
+
 ## 3 June 2026 (cont.) — SCANNING robustness fixes
 
 ### Fixes

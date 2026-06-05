@@ -176,13 +176,75 @@ Il QP riceve il segnale di APPROACHING e passa in modalità PERCEPTUAL_SCAN:
 
 ### Handoff
 - Soft handoff a 0.50m: se il QP non ha ancora finito la scansione → Spot aspetta
-- Hard handoff a 0.05m e FAST points pubblicati → `APPROACHING → SCANNING`
+- Hard handoff a 0.05m → `APPROACHING → WAITING_EXPOSURE` (se manual gate) o `APPROACHING → EXPOSURE_SCANNING` (se auto)
+
+---
+
+## Fase 3b — EXPOSURE_SCANNING (body scan + camera)
+
+`WAITING_EXPOSURE → EXPOSURE_SCANNING` (conferma manuale o auto)
+
+### exposure_scanner node
+- Nodo dedicato (`exposure_scanner.py`), stesso pattern per-punto del FAST
+- Genera griglia punti 3D sul corpo del paziente dai keypoint COCO
+- Per ogni punto: body_pose(h,p) → settle 1.5s → body_ready → IK goal → ik_done → dwell 2s
+- Pubblica `/exposure/grid_markers` (MarkerArray) per overlay web
+- Salva gli IK goals per replay durante la review
+- Al completamento pubblica `/exposure/ready`
+
+### Spot
+- **NON cammina** — solo body_pose (height + pitch) per spostare il workspace del braccio lungo il corpo
+- Pattern identico al FAST: `_optimize_body_poses()` + `_set_body_pose()` + settle
+
+### Braccio
+- Posiziona la RealSense sui punti della griglia (nessun contatto, nessuna sonda)
+- Look-at verso il corpo, standoff ~0.50m
+- Nessun impedance controller (solo posizionamento camera)
+
+### Web UI
+- Overlay blu sulla RealSense: marker per ogni punto griglia
+- Punto corrente: anello blu brillante. Visitati: blu trasparente. Da visitare: blu medio.
+- Toggle `Exposure` nella barra overlay RealSense
+
+---
+
+## Fase 3c — EXPOSURE_REVIEW (interattiva)
+
+`EXPOSURE_SCANNING → EXPOSURE_REVIEW` (dopo `/exposure/ready`)
+
+### Interazione
+- L'operatore clicca su qualsiasi punto blu della griglia nella web UI
+- Click → `/exposure/goto_point` (Int32: indice punto)
+- Spot torna alla body_pose ottimizzata per quel punto
+- Braccio riproduce il tracciato IK salvato
+- Camera inquadra la regione finché l'operatore non clicca altro
+
+### Terminazione
+- Pulsante `Terminate` nella web UI o tasto `n` sulla tastiera
+- `/exposure/terminate` (Bool) → `WAITING_FAST` (se manual gate) o `SCANNING` (se auto)
+
+### Manual scan gate
+- Parametro `manual_scan_gate` (default true) in `wbc_params.yaml`
+- Quando true: il FSM si ferma a WAITING_EXPOSURE e WAITING_FAST
+- Conferma via tasto `n` (keyboard) o pulsante STEP (web UI)
+- Toggle MANUAL/AUTO nella web UI (`teresa_control.html`)
+- Quando false: avanzamento automatico
+
+### Topic nuovi per exposure
+| Topic | Tipo | Publisher | Subscriber |
+|-------|------|-----------|------------|
+| `/exposure/grid_markers` | MarkerArray | exposure_scanner | camera_view.html |
+| `/exposure/goto_point` | Int32 | camera_view.html | exposure_scanner |
+| `/exposure/terminate` | Bool | camera_view.html / keyboard | wbc_coordinator |
+| `/exposure/ready` | Bool | exposure_scanner | wbc_coordinator |
+| `/wbc/set_manual_scan_gate` | Bool | teresa_control.html | wbc_coordinator |
+| `/wbc/manual_scan_gate` | Bool | wbc_coordinator | teresa_control.html |
 
 ---
 
 ## Fase 4 — SCANNING (FAST points + ottimizzazione body pose)
 
-`APPROACHING → SCANNING`
+`WAITING_FAST → SCANNING` (conferma manuale o auto)
 
 - WBC viene disabilitato (`/wbc/enable=False`), Spot si abbassa a handoff height (-0.15m)
 - Il QP Controller ha già pubblicato `/z1/fast_points` (5 Pose in frame link00) durante APPROACHING

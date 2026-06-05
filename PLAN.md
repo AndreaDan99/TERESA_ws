@@ -2,7 +2,45 @@
 
 ---
 
-# ⭐ Exposure Body Scanning (Sitting + Standing) — NUOVO
+## ✅ Exposure Body Scanning — IMPLEMENTED (5 June 2026)
+
+L'exposure body scanning è stato implementato con differenze rispetto al piano originale:
+
+### Fatto
+- ✅ `exposure_scanner.py`: nodo dedicato, 5-phase FSM, protocollo per-punto
+- ✅ `EXPOSURE_SCANNING` + `EXPOSURE_REVIEW` nel FSM coordinator (13 stati totali)
+- ✅ Griglia punti adattiva dai keypoint COCO
+- ✅ Salvataggio IK goals per click-to-revisit
+- ✅ Web UI overlay: marker blu sulla RealSense, click per re-inspect
+- ✅ Pulsante Terminate per fine review
+- ✅ Toggle MANUAL/AUTO scan gate con parametro `manual_scan_gate`
+- ✅ `experiment_logger` traccia stati exposure
+- ✅ `camera_view.html` + `teresa_control.html` aggiornati
+- ✅ Paper TERESA_RAL aggiornato (8 pagine, sezione IV.D)
+
+### NON ancora fatto (rispetto al PLAN.md sottostante)
+- ❌ `injury_detector.py` (nodo ROS per YOLO ferite/bruciature)
+- ❌ `human_approach_detector.py` (approccio frontale SITTING/STANDING)
+- ❌ `InjuryDetection.msg` + `InjuryDetectionArray.msg`
+- ❌ Download modelli YOLO (`best_yolov8n_roboV3.pt`, `skin_burn_2022_8_21.pt`)
+- ❌ Supporto reale keypoint 3D per SITTING/STANDING (usa placeholder)
+- ❌ Il paper usa footnote per i modelli invece di reference bibliografiche
+
+### File creati/modificati
+| File | +/− |
+|------|-----|
+| `exposure_scanner.py` | +290 (nuovo) |
+| `wbc_coordinator.py` | +95/−15 |
+| `experiment_logger.py` | +25 |
+| `camera_view.html` | +100 |
+| `teresa_control.html` | +55 |
+| `wbc_params.yaml` | +12 |
+| `wbc.launch.py` | +8 |
+| `setup.py` | +2 |
+
+---
+
+# ⭐ Exposure Body Scanning (Sitting + Standing) — PLAN ORIGINALE
 
 ## Obiettivo
 
