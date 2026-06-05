@@ -309,6 +309,8 @@ class Z1FSM(Node):
         self.pub_torso_scan_seed     = self.create_publisher(PointStamped, '/torso_scan_seed',    10)
         self.pub_torso_scan_keypoints = self.create_publisher(
             Float32MultiArray, '/torso_scan_keypoints', 10)
+        self.pub_fast_target = self.create_publisher(
+            PoseStamped, '/z1/fast_target_pose', 10)
 
         # ── Service clients: switch controller ──────────────────────────
         self.switch_to_torque_client = self.create_client(Trigger, '/safe_switch/to_torque')
@@ -1312,6 +1314,7 @@ class Z1FSM(Node):
                 )
                 self.pub_ik_enable.publish(Bool(data=True))
                 self.pub_ik_goal.publish(target)
+                self.pub_fast_target.publish(target)
                 self._approach_command_sent = True
 
                 # Marker blu una-tantum al momento dell'invio del goal

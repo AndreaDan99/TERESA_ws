@@ -341,6 +341,7 @@ class WBCCoordinatorNode(Node):
         self._pub_body_ready = self.create_publisher(Bool, '/wbc/body_ready', 10)
         self._pub_step_pending = self.create_publisher(String, '/wbc/step_pending', 10)
         self._pub_guidance = self.create_publisher(Bool, '/tracker_guidance_mode', 10)
+        self._pub_handoff  = self.create_publisher(Bool, '/wbc/handoff_reached', 10)
         self.create_subscription(Bool, '/wbc/step_confirm', self._cb_step_confirm, 10)
 
         self.create_timer(0.1, self._tick)   # 10 Hz FSM
@@ -582,6 +583,7 @@ class WBCCoordinatorNode(Node):
                 self.get_logger().info(
                     f'Handoff: dist={dist:.2f}m < {self._handoff_dist:.2f}m → SCANNING')
                 self._pub_spot_ctrl.publish(Bool(data=False))
+                self._pub_handoff.publish(Bool(data=True))
                 self._set_state(CoordState.SCANNING)
         else:
             self._pub_spot_ctrl.publish(Bool(data=True))  # navigator active

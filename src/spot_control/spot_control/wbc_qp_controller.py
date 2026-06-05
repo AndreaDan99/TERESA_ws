@@ -194,6 +194,7 @@ class WBCQPControllerNode(Node):
         self._pub_fast_ready = self.create_publisher(Bool,      '/z1/fast_ready',  10)
         self._pub_tracker_scan = self.create_publisher(Bool, '/tracker_scan_mode', 10)
         self._pub_tracker_reset = self.create_publisher(Bool, '/tracker_reset',    10)
+        self._pub_grid_type     = self.create_publisher(String, '/wbc/scan_grid_type', 10)
 
         # ── Timer ─────────────────────────────────────────────────────────
         self.create_timer(self._update_period, self._update)
@@ -536,11 +537,13 @@ class WBCQPControllerNode(Node):
 
         all_ok = all(c >= self._pre_scan_conf_thr for c in self._pre_scan_kp_conf)
         if all_ok:
+            self._pub_grid_type.publish(String(data='minimal'))
             waypoints = [
                 (adv,       0,  0),    # HOME (+X advance)
                 (adv + s,   0, +s),    # +X+Z
             ]
         else:
+            self._pub_grid_type.publish(String(data='full'))
             waypoints = [
                 (adv,       0,  0),    # HOME
                 (adv + s,  +s,  0),    # +X+Y

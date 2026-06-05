@@ -36,6 +36,7 @@ setup(
             'ik_goal_mux         = spot_control.ik_goal_mux:main',
             'tf_monitor          = spot_control.tf_monitor:main',
             'wbc_approach_scanner = spot_control.wbc_approach_scanner:main',
+            'experiment_logger    = spot_control.experiment_logger:main',
         ],
     },
 )
