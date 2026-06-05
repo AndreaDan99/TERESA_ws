@@ -123,6 +123,7 @@ wbc_coordinator:
     max_workspace_reach: 0.60                 # [m] Z1 arm max reach from link00 (triggers WS_EXT)
     scan_timeout: 120.0                       # [s] global timeout for SCANNING phase
     approach_timeout: 60.0                     # [s] max time for Spot to reach handoff in APPROACHING
+    manual_scan_gate: true                     # true = manual step confirm between exposure→FAST
 
     # ── Exposure body scanning ──────────────────────────────────────
     # /exposure_scanner node parameters

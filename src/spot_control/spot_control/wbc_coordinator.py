@@ -139,6 +139,8 @@ class CoordState:
     APPROACHING   = 'APPROACHING'
     SCANNING      = 'SCANNING'
     EXPOSURE_SCANNING = 'EXPOSURE_SCANNING'
+    WAITING_EXPOSURE  = 'WAITING_EXPOSURE'
+    WAITING_FAST      = 'WAITING_FAST'
 
 
 class WBCCoordinatorNode(Node):
@@ -200,6 +202,7 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('ws_ext_goal_tolerance',  0.15)   # [m] tolerance for WS_EXT drive arrival
         self.declare_parameter('max_workspace_reach',     0.60)   # [m] Z1 arm reach from link00
         self.declare_parameter('scan_timeout',           120.0)   # [s] max time in SCANNING phase
+        self.declare_parameter('manual_scan_gate',     True)    # True = manual advance exposure→FAST
         self.declare_parameter('navigator_timeout',        5.0)   # [s] max wait for Spot to reach WS_EXT goal
         self.declare_parameter('pre_approach_duration',        5.0)   # [s] arm look-at before Spot walks
         self.declare_parameter('step_mode',                   False)  # gate automatic FSM transitions
@@ -241,6 +244,7 @@ class WBCCoordinatorNode(Node):
         self._ws_ext_goal_tolerance = float(p('ws_ext_goal_tolerance'))
         self._max_reach_val          = float(p('max_workspace_reach'))
         self._scan_timeout          = float(p('scan_timeout'))
+        self._manual_scan_gate      = bool(p('manual_scan_gate'))
 
         # ── Body pose publisher (height + pitch via /my_spot/body_pose) ──
         self._pub_body_pose = self.create_publisher(Pose, '/my_spot/body_pose', 10)
@@ -333,6 +337,7 @@ class WBCCoordinatorNode(Node):
         self.create_subscription(PoseArray,      '/z1/fast_points',          self._cb_fast_points, 10)
         self.create_subscription(Int32,          '/z1/next_point_idx',       self._cb_next_point,  10)
         self.create_subscription(Bool,           '/exposure/ready',          self._cb_exposure_ready, 10)
+        self.create_subscription(Bool,           '/wbc/set_manual_scan_gate', self._cb_manual_gate, 10)
 
         self._pub_goal     = self.create_publisher(PoseStamped, p('wbc_goal_topic'),        10)
         self._pub_enable   = self.create_publisher(Bool,        p('wbc_enable_topic'),     10)
@@ -345,10 +350,12 @@ class WBCCoordinatorNode(Node):
         self._pub_step_pending = self.create_publisher(String, '/wbc/step_pending', 10)
         self._pub_guidance = self.create_publisher(Bool, '/tracker_guidance_mode', 10)
         self._pub_handoff  = self.create_publisher(Bool, '/wbc/handoff_reached', 10)
+        self._pub_manual_gate = self.create_publisher(Bool, '/wbc/manual_scan_gate', 10)
         self.create_subscription(Bool, '/wbc/step_confirm', self._cb_step_confirm, 10)
 
         self.create_timer(0.1, self._tick)   # 10 Hz FSM
         self._set_state(CoordState.WAITING_TF)
+        self._pub_manual_gate.publish(Bool(data=self._manual_scan_gate))
         self.get_logger().info(
             f'WBC Coordinator ready — in attesa TF da SpotCore.\n'
             f'  Attendo {self._odom_frame} → {self._body_frame} ...\n'
@@ -451,6 +458,13 @@ class WBCCoordinatorNode(Node):
         if msg.data and self._step_pending_state is not None:
             self._step_confirmed = True
             self.get_logger().info(f'[STEP] Confermato passaggio a {self._step_pending_state}')
+        # Handle manual scan gate
+        if msg.data and self._state == CoordState.WAITING_EXPOSURE:
+            self.get_logger().info('Step confirm → EXPOSURE_SCANNING')
+            self._set_state(CoordState.EXPOSURE_SCANNING)
+        elif msg.data and self._state == CoordState.WAITING_FAST:
+            self.get_logger().info('Step confirm → SCANNING')
+            self._set_state(CoordState.SCANNING)
 
     def _cb_torso_state(self, msg: String) -> None:
         self._torso_tracker_state = msg.data
@@ -513,6 +527,9 @@ class WBCCoordinatorNode(Node):
             self._tick_scannning()
         elif self._state == CoordState.EXPOSURE_SCANNING:
             self._tick_exposure()
+        elif self._state in (CoordState.WAITING_EXPOSURE,
+                             CoordState.WAITING_FAST):
+            pass  # passive wait for step_confirm
 
         s = String(); s.data = self._state
         self._pub_state.publish(s)
@@ -570,8 +587,18 @@ class WBCCoordinatorNode(Node):
 
     def _cb_exposure_ready(self, msg: Bool) -> None:
         if msg.data and self._state == CoordState.EXPOSURE_SCANNING:
-            self.get_logger().info('Exposure scan complete → SCANNING')
-            self._set_state(CoordState.SCANNING)
+            if self._manual_scan_gate:
+                self.get_logger().info('Exposure scan complete → WAITING_FAST')
+                self._set_state(CoordState.WAITING_FAST)
+            else:
+                self.get_logger().info('Exposure scan complete → SCANNING')
+                self._set_state(CoordState.SCANNING)
+
+    def _cb_manual_gate(self, msg: Bool) -> None:
+        self._manual_scan_gate = msg.data
+        self._pub_manual_gate.publish(msg)
+        mode = 'MANUAL' if msg.data else 'AUTO'
+        self.get_logger().info(f'Scan gate set to {mode}')
 
     def _tick_approaching(self) -> None:
         if self._approach_point_odom is None:
@@ -603,11 +630,18 @@ class WBCCoordinatorNode(Node):
             else:
                 self._pub_spot_ctrl.publish(Bool(data=True))   # scanner done, resume
         elif dist < self._handoff_dist:
-            self.get_logger().info(
-                f'Handoff: dist={dist:.2f}m < {self._handoff_dist:.2f}m → EXPOSURE_SCANNING')
-            self._pub_spot_ctrl.publish(Bool(data=False))
-            self._pub_handoff.publish(Bool(data=True))
-            self._set_state(CoordState.EXPOSURE_SCANNING)
+            if self._manual_scan_gate:
+                self.get_logger().info(
+                    f'Handoff: dist={dist:.2f}m → WAITING_EXPOSURE (manual gate)')
+                self._pub_spot_ctrl.publish(Bool(data=False))
+                self._pub_handoff.publish(Bool(data=True))
+                self._set_state(CoordState.WAITING_EXPOSURE)
+            else:
+                self.get_logger().info(
+                    f'Handoff: dist={dist:.2f}m < {self._handoff_dist:.2f}m → EXPOSURE_SCANNING')
+                self._pub_spot_ctrl.publish(Bool(data=False))
+                self._pub_handoff.publish(Bool(data=True))
+                self._set_state(CoordState.EXPOSURE_SCANNING)
         else:
             self._pub_spot_ctrl.publish(Bool(data=True))  # navigator active
 
@@ -1456,6 +1490,12 @@ class WBCCoordinatorNode(Node):
             self._set_body_pose(self._handoff_body_height)
             self._exposure_scan_start = self.get_clock().now()
             self.get_logger().info('Entering exposure body scan')
+        if new_state == CoordState.WAITING_EXPOSURE:
+            self._pub_step_pending.publish(String(data='EXPOSURE_SCANNING'))
+            self.get_logger().info('WAITING_EXPOSURE — press n or click Start Exposure')
+        if new_state == CoordState.WAITING_FAST:
+            self._pub_step_pending.publish(String(data='SCANNING'))
+            self.get_logger().info('WAITING_FAST — press n or click Start FAST')
         if new_state == CoordState.LOCKING:
             self._pub_cmd_vel.publish(Twist())
             self._pub_guidance.publish(Bool(data=False))

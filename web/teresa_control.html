@@ -226,6 +226,11 @@ body{
     <button id="btn-poff"  disabled onclick="ctrl.onPowerOff()"><span class="btn-icon">⏻</span>POWER OFF</button>
     <button id="btn-stop" class="danger" disabled onclick="ctrl.onStop()"><span class="btn-icon">⏹</span>STOP</button>
   </div>
+  <div class="btn-group" id="gate-toggle" style="display:none;">
+    <span style="color:var(--text-dim);font-size:11px;padding:5px 0;">Scan:</span>
+    <button id="btn-manual" onclick="ctrl.toggleManualGate()">MANUAL</button>
+    <button id="btn-auto" onclick="ctrl.toggleManualGate()">AUTO</button>
+  </div>
 </div>
 
 <script src="https://unpkg.com/roslib@1.4.0/build/roslib.min.js"></script>
@@ -242,7 +247,7 @@ class TeresaController{
     this.odomFrame='my_spot/odom';this.bodyFrame='my_spot/body';this.updateRate=10;
     // control state
     this.hasStartPose=false;this.startPose=null;this.goalPose=null;
-    this.isReturning=false;this.kcState='IDLE';this.tfSystemReady=false;this._tfWasReady=false;this.bodyInOdom=null;
+    this.isReturning=false;this.kcState='IDLE';this.tfSystemReady=false;this._tfWasReady=false;this.bodyInOdom=null;this.manualScanGate=true;
     // camera state
     this.camerasOpen=false;this.paused=false;
     this.orbbecHidden=false;this.rsHidden=false;this.orbbecReady=false;this.rsReady=false;
@@ -312,6 +317,7 @@ class TeresaController{
     /* publishers */
     this.restartPub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/restart',messageType:'std_msgs/Bool'});
     this.stepConfirmPub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/step_confirm',messageType:'std_msgs/Bool'});
+    this.manualGatePub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/set_manual_scan_gate',messageType:'std_msgs/Bool'});
     this.cmdVelPub=new ROSLIB.Topic({ros:this.ros,name:'/my_spot/cmd_vel',messageType:'geometry_msgs/Twist'});
 
     /* control subscribers */
@@ -322,15 +328,26 @@ class TeresaController{
     });
     this.stepPendingSub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/step_pending',messageType:'std_msgs/String'});
     this.stepPendingSub.subscribe(msg=>{
-      $('step-banner').classList.add('visible');$('step-text').textContent='Transizione in attesa: '+msg.data+' — premi STEP o "n" per confermare.';
+      const label = msg.data === 'EXPOSURE_SCANNING' ? 'Start Exposure Scan'
+                  : msg.data === 'SCANNING' ? 'Start FAST Ultrasound'
+                  : 'Transizione in attesa: '+msg.data+' — premi STEP o "n"';
+      $('step-banner').classList.add('visible');
+      $('step-text').textContent = label;
+      $('btn-step').textContent = msg.data === 'EXPOSURE_SCANNING' ? '▶ Expose'
+                                : msg.data === 'SCANNING' ? '▶ FAST' : '→ STEP';
       this.log('STEP pending: '+msg.data,'step');
+    });
+    this.manualGateSub = new ROSLIB.Topic({ros: this.ros, name: '/wbc/manual_scan_gate', messageType: 'std_msgs/Bool'});
+    this.manualGateSub.subscribe(msg => {
+      this.manualScanGate = msg.data;
+      this.renderGateToggle();
     });
     this.tfReadySub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/tf_ready',messageType:'std_msgs/Bool'});
     this.tfReadySub.subscribe(msg=>{
       this.tfSystemReady=msg.data;
       if(msg.data){
         $('tf-dot').className='dot online';$('tf-status').textContent='ready';
-        this.enableMissionButtons();
+        this.enableMissionButtons();this.renderGateToggle();
         if(!this._tfWasReady){this._tfWasReady=true;this.log('TF READY','info');$('state-detail').textContent='SpotCore connected. Press START or "s" to begin.';}
       }else{
         $('tf-dot').className='dot offline';$('tf-status').textContent='LOST';
@@ -628,6 +645,18 @@ class TeresaController{
   }
   async onUpdate(){if(await this.saveStartPose())this.log('Start pose updated','info');}
   onStep(){this.stepConfirmPub.publish({data:true});this.log('Step confirmed','info');$('step-banner').classList.remove('visible');}
+  toggleManualGate(){
+    this.manualScanGate = !this.manualScanGate;
+    this.manualGatePub.publish({data: this.manualScanGate});
+    this.renderGateToggle();
+    this.log('Scan gate → '+(this.manualScanGate?'MANUAL':'AUTO'),'info');
+  }
+  renderGateToggle(){
+    const g = $('gate-toggle');
+    g.style.display = this.tfSystemReady ? 'flex' : 'none';
+    $('btn-manual').classList.toggle('active', this.manualScanGate);
+    $('btn-auto').classList.toggle('active', !this.manualScanGate);
+  }
   onStand(){this.standSrv.callService(new ROSLIB.ServiceRequest(),r=>{this.log('Stand: '+(r&&r.success?'OK':'FAILED'),r&&r.success?'info':'error');});}
   onSit(){this.sitSrv.callService(new ROSLIB.ServiceRequest(),r=>{this.log('Sit: '+(r&&r.success?'OK':'FAILED'),r&&r.success?'info':'error');});}
   onPowerOn(){this.powerOnSrv.callService(new ROSLIB.ServiceRequest(),r=>{this.log('Power ON: '+(r&&r.success?'OK':'FAILED'),r&&r.success?'info':'error');});}
