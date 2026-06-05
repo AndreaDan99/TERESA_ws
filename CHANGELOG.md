@@ -1,7 +1,125 @@
 # TERESA — Changelog
 
-Storico completo delle modifiche dal 6 maggio 2026 al 3 giugno 2026.
+Storico completo delle modifiche dal 6 maggio 2026 al 6 giugno 2026.
 Per la descrizione del sistema corrente vedi [`DESCRIPTION.md`](DESCRIPTION.md).
+
+---
+
+## 6 June 2026 (cont.) — Exposure snapshot + PRE_APPROACH fixes
+
+### New node: exposure_snapshot.py
+
+- Dedicated node for capturing RealSense snapshots during EXPOSURE_REVIEW
+- Triggers on `/exposure/goto_point` + `/ik_done`, waits 1s settle, publishes `/exposure/snapshot`
+- Saves JPEG to disk: `/tmp/exposure_snapshot_{region}_{idx}_{timestamp}.jpg`
+- Uses `/exposure/grid_markers` to determine region label from marker namespace
+
+### Web UI: snapshot display
+
+- Subscription to `/exposure/snapshot` freezes the RealSense feed when received
+- Semi-transparent badge overlay: "📸 torso [3]" on the camera image
+- "📸 Close" button in RealSense overlay bar to return to live feed
+- Live feed blocked while snapshot is active
+
+### PRE_APPROACH fixes (wbc_coordinator.py)
+
+- **Goal target Z offset**: when `_body_center_odom` is None, fallback `_filtered_goal()` now adds +0.40m Z offset so the QP LOOKAT points at the torso instead of the ground
+- **Sliding window confirmation**: changed from "3 consecutive ESTIMATING/LOCKED ticks" to "≥1 in last 5 ticks". Tolerates tracker flickering, proceeds immediately on first detection.
+
+### Web UI: gate toggle always visible
+
+- MANUAL/AUTO buttons now visible by default (instead of hidden until TF ready)
+- Disabled state follows the same lifecycle as other buttons (disableAll / enableMissionButtons)
+- Visibility controlled by `_topicsReady` flag (set when rosbridge connects)
+
+### New topics
+
+| Topic | Publisher | Subscriber | Purpose |
+|-------|-----------|------------|---------|
+| `/exposure/snapshot` | exposure_snapshot | web UI | JPEG snapshot on goto_point |
+
+### Files
+
+| File | Action | +/− |
+|------|--------|-----|
+| `exposure_snapshot.py` | **New** | +128 |
+| `wbc_coordinator.py` | PRE_APPROACH fixes | +15/−10 |
+| `wbc.launch.py` | +snapshot node | +7 |
+| `setup.py` | +entry point | +1 |
+| `web/teresa_control.html` | Snapshot + gate toggle fixes | +40/−10 |
+
+---
+
+## 6 June 2026 — Full-body exposure scanner + simultaneous skeleton refinement
+
+### exposure_scanner.py — rewrite completo (310 → 650 righe)
+
+- **Full-body grid**: 14 punti su 7 regioni (HEAD=2, TORSO=4, ARM×2=2+2, LEG×2=2+2, FEET=2)
+- **Dynamic look-at orientation**: EE X-axis points toward body via `compute_ee_orientation`, not hardcoded. Same approach as FAST ultrasound.
+- **Horizontal standoff**: 0.50 m in X (toward Spot), not vertical +Z. Arm stays in natural configuration.
+- **Orbbec keypoints transformed to world frame** via TF (`orbbec_color_optical_frame → world`). Head position estimated from shoulders when nose occluded.
+- **Running-average refined skeleton**: accumulates `/exposure/body_keypoints` (17 COCO kp from RealSense) during dwell, running average (α=0.5), publishes on `/exposure/refined_skeleton` (PoseArray, NaN for unobserved kp). Progressive fill: 0/17 → 17/17 at scan end.
+- **JSON output**: per-region camera poses + scan data frames + dwell duration. Saved to `/tmp/exposure_scan_YYYYMMDD_HHMMSS.json`.
+- **Region-color-coded markers**: `/exposure/grid_markers` (MarkerArray) — current point larger + glow, visited dimmed, future semi-transparent. Legend in web UI.
+
+### z1_yolo_torso_tracker.py — full keypoint extraction in scan mode
+
+- **New publisher** `/exposure/body_keypoints` (PoseArray, 17 kp world frame, NaN for undetected).
+- **New method** `_extract_all_body_keypoints()`: extracts all 17 COCO keypoints (not just torso+face) during scan mode. Same projection + depth logic as existing `_extract_guidance()`.
+- **New method** `_publish_body_keypoints()`: transforms camera-frame kp to world frame via existing TF lookup and publishes.
+
+### wbc_coordinator.py — exposure scan per-point support
+
+- **`_cb_next_point`** extended: handles `EXPOSURE_SCANNING` state in addition to `SCANNING`.
+- **New method** `_apply_exposure_body_pose(idx)`: sets handoff body height + starts settle timer. Falls back to handoff height until full pose optimisation is plumbed in.
+
+### Web UI — teresa_control.html
+
+- **Grid toggle on RealSense overlay**: new `[Grid]` button projects 14 exposure markers onto camera image with region colors. Current point has white glow.
+- **Color legend bar**: appears below yolo-bar when Grid active. 7 colored swatches + region labels.
+- **Click-to-revisit**: click any grid marker on RealSense overlay → publishes `/exposure/goto_point(id)` → Spot repositions to that point.
+- **Body Map panel**: toggle via `&#128506;` button or `m` key. Top-down (X-Y world) canvas showing progressive 17-keypoint skeleton (from `/exposure/refined_skeleton`) + exposure grid markers (from `/exposure/grid_markers`). Auto-scaled, color-coded keypoints. Skeleton edges (COCO). Toggle overlays: Skeleton + Grid. Visibility synced with camera panel.
+- **`m` key** added to keyboard shortcuts.
+- **Legend hide on camera close**: Grid toggle + legend reset on camera panel close.
+
+### Paper (paper/sections/)
+
+| File | Change |
+|------|--------|
+| `abstract.tex` | +4 lines: body exposure scanning mode + "one click" closing sentence |
+| `introduction.tex` | +1 contribution (#5: exposure scanning + simultaneous skeleton refinement) |
+| `active_perception.tex` | +80 lines: new subsection IV.C "Body Exposure Scanning with Simultaneous Skeleton Refinement" — full-body grid, per-point protocol, simultaneous refinement |
+| `system_architecture.tex` | FSM 9→11 states (added EXPOSURE_SCANNING, EXPOSURE_REVIEW). Table updated. Two new bullet points. |
+
+### Fixes
+
+| # | Fix | File |
+|---|------|------|
+| 1 | `x_ee = ep.look_dir` (removed minus sign) — EE X now points toward body | `exposure_scanner.py:488` |
+| 2 | Orbbec keypoints transformed to world frame via TF | `exposure_scanner.py:_cb_skeleton` |
+| 3 | Head position estimated from shoulders when nose occluded | `exposure_scanner.py:_gen_head` |
+| 4 | Removed dead code `REGION_KEYPOINTS` dict | `exposure_scanner.py:71-79` |
+| 5 | Removed unused `field` import | `exposure_scanner.py:30` |
+
+### New topics
+
+| Topic | Publisher | Subscriber | Purpose |
+|-------|-----------|------------|---------|
+| `/exposure/body_keypoints` | z1_yolo_torso_tracker | exposure_scanner | 17 COCO kp in world frame during scan |
+| `/exposure/refined_skeleton` | exposure_scanner | web UI (Body Map) | Progressive running-average skeleton |
+
+### Files
+
+| File | +/− |
+|------|-----|
+| `exposure_scanner.py` | +360/−20 (rewrite) |
+| `z1_yolo_torso_tracker.py` | +55 |
+| `wbc_coordinator.py` | +15 |
+| `web/teresa_control.html` | +120 |
+| `paper/sections/abstract.tex` | +7 |
+| `paper/sections/introduction.tex` | +8 |
+| `paper/sections/active_perception.tex` | +80 |
+| `paper/sections/system_architecture.tex` | +12 |
 
 ---
 

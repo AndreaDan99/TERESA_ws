@@ -18,60 +18,40 @@ git status --short
 
 | Document | Contents |
 |----------|----------|
-| [`CHANGELOG.md`](CHANGELOG.md) | Changelog storico (6 May – 5 June 2026) |
+| [`CHANGELOG.md`](CHANGELOG.md) | Changelog storico (6 May – 6 June 2026) |
 | [`DESCRIPTION.md`](DESCRIPTION.md) | Architettura sistema, frame tree, FSM, build/run |
 | [`PLAN.md`](PLAN.md) | Piano futuro (exposure, injury detection, refactoring) |
 | [`web/README.md`](web/README.md) | Web control panel + camera view con YOLO overlay |
 
 ---
 
-## Current State (5 June 2026)
+## Current State (6 June 2026)
 
-### Exposure Body Scanning (NEW)
-- **exposure_scanner.py**: nodo dedicato per body scan con camera RealSense
-- Griglia punti adattiva dai keypoint COCO sul corpo del paziente
-- Pattern per-punto: body_pose(h,p) → settle → IK goal → ik_done → dwell 2s
-- Salvataggio IK goals per replay durante review interattiva
-- Pubblica `/exposure/grid_markers` (MarkerArray) per overlay web
-- Pubblica `/exposure/ready` al completamento
-- Subscriber `/exposure/goto_point` per re-inspection click-to-revisit
+### Exposure Body Scanning — full-body + simultaneous skeleton refinement
 
-### FSM States (13 total)
-- `EXPOSURE_SCANNING`: body scan automatico con camera
-- `EXPOSURE_REVIEW`: fase interattiva, click su punti griglia per re-inspect
-- `WAITING_EXPOSURE`: manual gate prima dell'exposure scan
-- `WAITING_FAST`: manual gate prima del FAST ultrasound
-- 9 stati esistenti invariati
+- **exposure_scanner.py** (650 righe, riscritto): full-body grid 14 punti su 7 regioni (HEAD, TORSO, L/R ARM, L/R LEG, FEET). Look-at dinamico EE X verso corpo. Standoff orizzontale 0.50m. TF Orbbec→world. Running-average scheletro raffinato su `/exposure/refined_skeleton`. Accumulo keypoint RealSense da `/exposure/body_keypoints` durante dwell. JSON output. Head stima da spalle se naso occluso.
+- **z1_yolo_torso_tracker.py**: publisher `/exposure/body_keypoints` (PoseArray, 17 kp COCO in scan mode). Nuovo metodo `_extract_all_body_keypoints`.
+- **wbc_coordinator.py**: `_cb_next_point` esteso a EXPOSURE_SCANNING, `_apply_exposure_body_pose`. PRE_APPROACH: Z offset +0.40m su fallback goal, sliding window ≥1/5 ESTIMATING/LOCKED tick.
+- **exposure_snapshot.py** (nuovo, 128 righe): snapshot RealSense in EXPOSURE_REVIEW. Trigger `/exposure/goto_point` + `/ik_done`, delay 1s, pubblica `/exposure/snapshot`, salva JPEG.
+- **Web UI**: Grid toggle + legenda 7 colori, click-to-revisit, Body Map (🗺 / tasto `m`), snapshot freeze + badge "📸" + Close button, gate toggle sempre visibile.
+- **Grid generation**: i keypoint Orbbec vengono pubblicati già dall'inizio (SEARCHING) su `/human_pose/points_3d`, quindi quando si entra in EXPOSURE_SCANNING il buffer `_keypoints` è già popolato. Stima per keypoint mancanti (es. head da spalle).
 
-### Manual Scan Gate
-- Parametro `manual_scan_gate` (default true)
-- Quando true: missione in pausa a WAITING_EXPOSURE e WAITING_FAST
-- Conferma via tasto `n` (keyboard) o pulsante web UI
-- Toggle MANUAL/AUTO in `teresa_control.html`
-- Publisher `/wbc/manual_scan_gate` + subscriber `/wbc/set_manual_scan_gate`
+### FSM States (11 total)
+- `EXPOSURE_SCANNING`: body scan full-body, per-point Spot reconfiguration
+- `EXPOSURE_REVIEW`: click-to-revisit interattivo
+- `WAITING_EXPOSURE`: manual gate
+- `WAITING_FAST`: manual gate
+- 7 stati esistenti invariati
 
 ### Web Interface
-- **camera_view.html**: overlay griglia exposure (punti blu) su RealSense
-  - Click su punto → `/exposure/goto_point` → Spot torna a inquadrarlo
-  - Pulsante Terminate durante EXPOSURE_REVIEW
-  - Toggle `Exposure` nella barra overlay
-- **teresa_control.html**: toggle MANUAL/AUTO scan gate
-  - Pulsanti STEP contestuali: "▶ Expose" / "▶ FAST"
+- **teresa_control.html**: Grid toggle su RealSense con legenda colori (7 regioni). Click su marker → `/exposure/goto_point`. Body Map panel (🗺 o tasto `m`): canvas top-down con scheletro progressivo (17 kp + linee COCO) + griglia exposure.
+- **camera_view.html** invariato
 
-### Experiment Logger
-- Traccia EXPOSURE_SCANNING, EXPOSURE_REVIEW nel timeline
-- Colonna CSV: `exposure_duration_s`
-- Metriche JSON: `t_exposure_start`, `t_review_start`
-
-### Paper (TERESA_RAL/)
-- 8 pagine, 42 reference, 5 figure, 0 errori compilazione
-- Introduction + Related Work unificate in sezione unica
-- Sezione IV.D: Exposure Body Scanning and Injury Detection
-- Griglia posture-adaptive (supino 15pt, seduto 29, in piedi 49)
-- Modelli wound/burn citati come footnote (non in bibliografia)
-- FSM diagram: 13 stati, 4 colonne, nuovi codici colore
-- System block diagram: +Injury Detection, +Web UI, +Exp. Scanner
-- Fig. 4: placeholder per screenshot interfaccia web
+### Nuovi topic
+| Topic | Publisher | Subscriber | Type |
+|-------|-----------|------------|------|
+| `/exposure/body_keypoints` | z1_yolo_torso_tracker | exposure_scanner | PoseArray (17 kp) |
+| `/exposure/refined_skeleton` | exposure_scanner | web UI (Body Map) | PoseArray (17 kp, running avg) |
 
 ---
 

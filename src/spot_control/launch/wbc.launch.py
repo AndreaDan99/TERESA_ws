@@ -65,12 +65,21 @@ def generate_launch_description():
         parameters=[params_file],
     )
 
+    snapshot_node = Node(
+        package='spot_control',
+        executable='exposure_snapshot',
+        name='exposure_snapshot',
+        output='screen',
+        parameters=[params_file],
+    )
+
     return LaunchDescription([
         dry_run_arg,
         step_mode_arg,
-        LogInfo(msg=['WBC — arm-only QP + coordinator + spot navigator + exposure scanner']),
+        LogInfo(msg=['WBC — arm-only QP + coordinator + spot navigator + exposure scanner + snapshot']),
         qp_node,
         coord_node,
         navigator_node,
         exposure_node,
+        snapshot_node,
     ])

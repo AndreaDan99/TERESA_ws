@@ -6,17 +6,14 @@
 
 L'exposure body scanning è stato implementato con differenze rispetto al piano originale:
 
-### Fatto
-- ✅ `exposure_scanner.py`: nodo dedicato, 5-phase FSM, protocollo per-punto
-- ✅ `EXPOSURE_SCANNING` + `EXPOSURE_REVIEW` nel FSM coordinator (13 stati totali)
-- ✅ Griglia punti adattiva dai keypoint COCO
-- ✅ Salvataggio IK goals per click-to-revisit
-- ✅ Web UI overlay: marker blu sulla RealSense, click per re-inspect
-- ✅ Pulsante Terminate per fine review
-- ✅ Toggle MANUAL/AUTO scan gate con parametro `manual_scan_gate`
-- ✅ `experiment_logger` traccia stati exposure
-- ✅ `camera_view.html` + `teresa_control.html` aggiornati
-- ✅ Paper TERESA_RAL aggiornato (8 pagine, sezione IV.D)
+### Fatto (5-6 June 2026)
+- ✅ `exposure_scanner.py`: riscritto da 310 a 650 righe. Full-body grid 14 punti su 7 regioni, look-at dinamico, standoff orizzontale 0.50m, TF Orbbec→world, running-average scheletro raffinato, JSON output
+- ✅ `exposure_snapshot.py`: nuovo nodo (128 righe). Snapshot RealSense su click in EXPOSURE_REVIEW, JPEG su disco, pubblica `/exposure/snapshot`
+- ✅ `z1_yolo_torso_tracker.py`: publisher `/exposure/body_keypoints` (17 kp COCO in scan mode)
+- ✅ `wbc_coordinator.py`: FSM 11 stati, `_cb_next_point` esteso, PRE_APPROACH fix (Z offset +0.40m, sliding window ≥1/5 tick)
+- ✅ Web UI: Grid toggle + legenda, click-to-revisit, Body Map (🗺, tasto `m`), snapshot freeze + badge + Close, gate toggle sempre visibile
+- ✅ Paper: abstract, introduction, active perception (IV.C), system architecture aggiornati
+- ✅ Head stima da spalle, fix segno x_ee, rimozione dead code
 
 ### NON ancora fatto (rispetto al PLAN.md sottostante)
 - ❌ `injury_detector.py` (nodo ROS per YOLO ferite/bruciature)

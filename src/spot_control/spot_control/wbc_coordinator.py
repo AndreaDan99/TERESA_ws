@@ -293,7 +293,7 @@ class WBCCoordinatorNode(Node):
         self._lock_lost_ticks: int = 0                # tick consecutivi senza Orbbec in LOCKING
         self._ik_done: bool = False                    # IK trajectory completion status
         self._torso_tracker_state: str = ''           # LOCKED / TRACKING / IDLE
-        self._torso_detected_ticks: int = 0           # consecutive LOCKED ticks
+        self._torso_detected_ticks: list[bool] = []      # sliding window of recent (5) LOCKED/ESTIMATING ticks
         self._torso_pos: PoseStamped | None = None    # ultima posa torso da RealSense
 
         # SEMI_LOCKING settle tracking
@@ -1043,29 +1043,36 @@ class WBCCoordinatorNode(Node):
             return None
 
     def _tick_pre_approach(self) -> None:
+        # Publish goal for WBC QP LOOKAT: prefer body_center (torso centroid),
+        # fallback to filtered_goal + Z offset for supine torso height.
         if self._body_center_odom is not None:
             self._pub_goal.publish(self._body_center_odom)
         else:
-            self._pub_goal.publish(self._filtered_goal())
+            goal = self._filtered_goal()
+            goal.pose.position.z += 0.40  # supine torso ~40cm above ground
+            self._pub_goal.publish(goal)
 
-        # Wait for 3 consecutive RealSense ESTIMATING or LOCKED ticks
-        if self._torso_tracker_state in ('ESTIMATING', 'LOCKED'):
-            self._torso_detected_ticks += 1
-            if self._torso_detected_ticks >= 3:
-                self.get_logger().info(
-                    f'RealSense {self._torso_tracker_state} ×3 → APPROACHING')
-                self._pub_spot_ctrl.publish(Bool(data=False))
-                self._set_state(CoordState.APPROACHING)
-                return
-        else:
-            self._torso_detected_ticks = 0
+        # Wait for at least 1 RealSense ESTIMATING or LOCKED tick in last 5
+        detected_now = self._torso_tracker_state in ('ESTIMATING', 'LOCKED')
+        self._torso_detected_ticks.append(detected_now)
+        if len(self._torso_detected_ticks) > 5:
+            self._torso_detected_ticks = self._torso_detected_ticks[-5:]
 
-        # Timeout fallback: if RealSense never locks, proceed anyway
+        if any(self._torso_detected_ticks):
+            positive = sum(self._torso_detected_ticks)
+            self.get_logger().info(
+                f'RealSense {self._torso_tracker_state} detected '
+                f'({positive}/{len(self._torso_detected_ticks)} ticks) → APPROACHING')
+            self._pub_spot_ctrl.publish(Bool(data=False))
+            self._set_state(CoordState.APPROACHING)
+            return
+
+        # Timeout fallback: if RealSense never detects, proceed anyway
         elapsed = (self.get_clock().now() - self._pre_approach_start).nanoseconds * 1e-9
         if elapsed >= self._pre_approach_duration:
             self.get_logger().warn(
                 f'PRE_APPROACH timeout ({self._pre_approach_duration:.1f}s) '
-                f'— RealSense {self._torso_tracker_state} {self._torso_detected_ticks}/3, proceeding anyway')
+                f'— RealSense {self._torso_tracker_state}, proceeding anyway')
             self._pub_spot_ctrl.publish(Bool(data=False))
             self._set_state(CoordState.APPROACHING)
             return
@@ -1539,7 +1546,7 @@ class WBCCoordinatorNode(Node):
             self._pub_cmd_vel.publish(Twist())
             self._pub_guidance.publish(Bool(data=False))
             self._set_body_pose(0.0, 0.0)
-            self._torso_detected_ticks = 0
+            self._torso_detected_ticks = []
         self._state = new_state
 
     def _set_body_pose(self, height: float, pitch: float = 0.0, yaw: float | None = None) -> None:

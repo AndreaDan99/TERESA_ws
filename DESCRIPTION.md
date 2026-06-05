@@ -185,11 +185,15 @@ Il QP riceve il segnale di APPROACHING e passa in modalità PERCEPTUAL_SCAN:
 `WAITING_EXPOSURE → EXPOSURE_SCANNING` (conferma manuale o auto)
 
 ### exposure_scanner node
-- Nodo dedicato (`exposure_scanner.py`), stesso pattern per-punto del FAST
-- Genera griglia punti 3D sul corpo del paziente dai keypoint COCO
-- Per ogni punto: body_pose(h,p) → settle 1.5s → body_ready → IK goal → ik_done → dwell 2s
-- Pubblica `/exposure/grid_markers` (MarkerArray) per overlay web
-- Salva gli IK goals per replay durante la review
+- Nodo dedicato (`exposure_scanner.py`, 650 righe), stesso pattern per-punto del FAST
+- **Full-body grid**: 14 punti su 7 regioni (HEAD=2, TORSO=4, ARM×2=2+2, LEG×2=2+2, FEET=2) generate dai 17 keypoint COCO Orbbec trasformati in world frame via TF
+- **Stima head da spalle**: se naso occluso nell'Orbbec, posizione testa stimata da (spalla_sx + spalla_dx) / 2 + offset verticale
+- **Look-at dinamico**: EE X verso corpo via `compute_ee_orientation`, stessa funzione del FAST ultrasound
+- **Standoff orizzontale**: 0.50 m verso Spot (X negativo), non verticale. Il braccio resta in configurazione naturale.
+- **Scheletro raffinato progressivo**: accumula `/exposure/body_keypoints` (17 kp RealSense) durante il dwell, running average (α=0.5), pubblica su `/exposure/refined_skeleton` — da 0/17 a 17/17 durante lo scan
+- Per ogni punto: body_pose(h,p) → settle 1.5s → body_ready → IK goal → ik_done → dwell 2s → running average kp → next point
+- Pubblica `/exposure/grid_markers` (MarkerArray, color-coded per regione) per overlay web
+- **JSON output**: `/tmp/exposure_scan_YYYYMMDD_HHMMSS.json` con per-regione camera pose, surface position, scan data frames
 - Al completamento pubblica `/exposure/ready`
 
 ### Spot
@@ -202,9 +206,11 @@ Il QP riceve il segnale di APPROACHING e passa in modalità PERCEPTUAL_SCAN:
 - Nessun impedance controller (solo posizionamento camera)
 
 ### Web UI
-- Overlay blu sulla RealSense: marker per ogni punto griglia
-- Punto corrente: anello blu brillante. Visitati: blu trasparente. Da visitare: blu medio.
-- Toggle `Exposure` nella barra overlay RealSense
+- **Grid toggle su RealSense**: pulsante `[Grid]` nella barra overlay proietta i 14 marker griglia sull'immagine RealSense con colori per regione
+- **Legenda colori**: barra sotto yolo-bar con 7 swatch: HEAD (giallo), TORSO (blu), L-ARM (rosso), R-ARM (arancione), L-LEG (verde), R-LEG (verde chiaro), FEET (viola)
+- Punto corrente: marker grande + glow bianco. Visitati: piccoli e trasparenti. Da visitare: medi e semi-trasparenti.
+- **Click-to-revisit**: click su marker → `/exposure/goto_point(id)` → Spot riposiziona il braccio su quel punto
+- **Body Map panel**: toggle via `&#128506;` o tasto `m`. Canvas top-down (X-Y world) con scheletro progressivo (17 kp + linee COCO) e griglia exposure. Auto-scalato, auto-fit.
 
 ---
 
@@ -237,6 +243,8 @@ Il QP riceve il segnale di APPROACHING e passa in modalità PERCEPTUAL_SCAN:
 | `/exposure/goto_point` | Int32 | camera_view.html | exposure_scanner |
 | `/exposure/terminate` | Bool | camera_view.html / keyboard | wbc_coordinator |
 | `/exposure/ready` | Bool | exposure_scanner | wbc_coordinator |
+| `/exposure/refined_skeleton` | PoseArray | exposure_scanner | web UI (Body Map) |
+| `/exposure/body_keypoints` | PoseArray | z1_yolo_torso_tracker | exposure_scanner |
 | `/wbc/set_manual_scan_gate` | Bool | teresa_control.html | wbc_coordinator |
 | `/wbc/manual_scan_gate` | Bool | wbc_coordinator | teresa_control.html |
 
@@ -339,9 +347,11 @@ I target FSM sono in world frame — quando Spot cambia body_pose, il target si 
 
 | Nodo | Ruolo |
 |------|-------|
-| `wbc_coordinator` | FSM: WAITING_TF → IDLE → SEARCHING → SEMI_LOCKING → LOCKING → PRE_APPROACH → APPROACHING → SCANNING. Hybrid lock (Orbbec full + RealSense semi-lock da GUIDING/ESTIMATING/LOCKED con ≥2 kp a conf≥0.5). WBC spento immediatamente all'ingresso in LOCKING. QualityMonitor. Body pose control. FAST body pose grid search (h,p) + WS_EXT fallback. PRE_APPROACH: LOOKAT verso body_center, ESTIMATING/LOCKED ×3 tick. APPROACHING: timeout 60s. |
-| `wbc_qp_controller` | **Arm-only WBC, 3 modalità**: ACTIVE_SEARCH (3 pose Cartesiane wide, tilt fisso -15°, loop infinito), LOOKAT (ω_des + joint centering, LOOKAT subito attivo dopo `_end_search(re_enable=True)`), PERCEPTUAL_SCAN (griglia adattiva 2-4 pose con advance X, HOME transit, BodySearchScanner, FAST points). |
-| `wbc_spot_navigator` | Navigatore semplificato per APPROACHING e WS_EXT. Legge il goal in odom, rotate → drive → stop. P-controller robusto. Spot non è mai controllato dal QP. |
+| `wbc_coordinator` | FSM (11 stati). PRE_APPROACH: LOOKAT verso body_center con Z offset +0.40m fallback, sliding window (≥1 ESTIMATING/LOCKED su 5 tick). |
+| `exposure_scanner` | Full-body exposure scan: 14-pose grid su 7 regioni, look-at dinamico, standoff orizzontale 0.50m, TF Orbbec→world, running-average scheletro raffinato su `/exposure/refined_skeleton`, JSON output. |
+| `exposure_snapshot` | Snapshot RealSense su click in EXPOSURE_REVIEW. Trigger `/exposure/goto_point` + `/ik_done`, delay 1s, pubblica `/exposure/snapshot`, salva JPEG su disco. |
+| `wbc_qp_controller` | **Arm-only WBC, 3 modalità**: ACTIVE_SEARCH (3 pose Cartesiane), LOOKAT (ω_des + joint centering), PERCEPTUAL_SCAN (griglia adattiva 2-4 pose). |
+| `wbc_spot_navigator` | Navigatore semplificato per APPROACHING e WS_EXT. |
 
 ### Coordinator FSM
 ```

@@ -216,6 +216,7 @@ body{
           <button id="rs-label-btn" onclick="ctrl.toggleRsLabel()">Label</button>
           <button id="rs-grid-btn" onclick="ctrl.toggleRsExposureGrid()">Grid</button>
           <button id="hide-rs-btn" onclick="ctrl.toggleRealSense()">👁 Hide</button>
+          <button id="rs-close-snap-btn" onclick="ctrl.closeSnapshot()" style="display:none">📸 Close</button>
         </div>
       </div>
     </div>
@@ -271,10 +272,10 @@ body{
     <button id="btn-poff"  disabled onclick="ctrl.onPowerOff()"><span class="btn-icon">⏻</span>POWER OFF</button>
     <button id="btn-stop" class="danger" disabled onclick="ctrl.onStop()"><span class="btn-icon">⏹</span>STOP</button>
   </div>
-  <div class="btn-group" id="gate-toggle" style="display:none;">
+  <div class="btn-group" id="gate-toggle">
     <span style="color:var(--text-dim);font-size:11px;padding:5px 0;">Scan:</span>
-    <button id="btn-manual" onclick="ctrl.toggleManualGate()">MANUAL</button>
-    <button id="btn-auto" onclick="ctrl.toggleManualGate()">AUTO</button>
+    <button id="btn-manual" disabled onclick="ctrl.toggleManualGate()">MANUAL</button>
+    <button id="btn-auto" disabled onclick="ctrl.toggleManualGate()">AUTO</button>
   </div>
 </div>
 
@@ -292,7 +293,7 @@ class TeresaController{
     this.odomFrame='my_spot/odom';this.bodyFrame='my_spot/body';this.updateRate=10;
     // control state
     this.hasStartPose=false;this.startPose=null;this.goalPose=null;
-    this.isReturning=false;this.kcState='IDLE';this.tfSystemReady=false;this._tfWasReady=false;this.bodyInOdom=null;this.manualScanGate=true;
+    this.isReturning=false;this.kcState='IDLE';this.tfSystemReady=false;this._tfWasReady=false;this.bodyInOdom=null;this.manualScanGate=true;this._topicsReady=false;
     // camera state
     this.camerasOpen=false;this.paused=false;
     this.orbbecHidden=false;this.rsHidden=false;this.orbbecReady=false;this.rsReady=false;
@@ -304,6 +305,7 @@ class TeresaController{
     this.orbbecK=null;this.rsCamInfo=null;this.rsCamPose=null;
     this.skeleton=null;this.bodyBbox=null;this.torsoBbox=null;this.approachMk=null;this.torsoMarkers=null;this.exposureGridMarkers=[];
     this.posture='---';this.confidence=0;this.trackerState='---';
+    this.snapshotImage=null;this.showSnapshot=false;this.snapshotLabel='';
     this._rsOverlayClickBound=null;
     // body map state
     this.bodyMapOpen=false;
@@ -353,11 +355,13 @@ class TeresaController{
     this.ros.on('connection',()=>{
       $('ros-dot').className='dot online';$('ros-status').textContent='connected';
       this.log('Rosbridge connected','info');this.initTopics();
+      this.renderGateToggle();
     });
     this.ros.on('close',()=>{
       $('ros-dot').className='dot offline';$('ros-status').textContent='disconnected';
       $('tf-dot').className='dot';$('tf-status').textContent='---';$('wbc-state').textContent='---';
       this.tfSystemReady=false;this._tfWasReady=false;this.bodyInOdom=null;
+      this._topicsReady=false;
       this.log('Rosbridge disconnected','error');this.disableAll();
     });
     this.ros.on('error',()=>{});
@@ -430,6 +434,7 @@ class TeresaController{
     this.tfStatusSub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/tf_status',messageType:'std_msgs/String'});
     this.tfStatusSub.subscribe(msg=>{$('tf-status').textContent=msg.data;});
 
+    this._topicsReady = true;
     this.enableAlways();
   }
 
@@ -454,6 +459,8 @@ class TeresaController{
     this.showRsExposureGrid=false;
     $('rs-grid-btn').classList.remove('active');
     $('exposure-legend').classList.remove('visible');
+    this.showSnapshot=false;this.snapshotImage=null;
+    $('rs-close-snap-btn').style.display='none';
     this.log('Camera panel closed');
   }
 
@@ -583,7 +590,7 @@ class TeresaController{
     /* RealSense image */
     this._rsCb=msg=>{
       this.lastRsTs=Date.now();
-      if(this.paused||this.rsHidden)return;
+      if(this.paused||this.rsHidden||this.showSnapshot)return;
       this.renderImage(msg,$('rs-img'),false);
       this.rsReady=true;
       $('rs-tag').textContent=msg.width+'×'+msg.height;$('rs-tag').classList.add('active');
@@ -640,6 +647,20 @@ class TeresaController{
     this.exposureGridSub=new ROSLIB.Topic({ros:this.ros,name:'/exposure/grid_markers',messageType:'visualization_msgs/MarkerArray'});
     this.exposureGridSub.subscribe(msg=>{this.exposureGridMarkers=msg.markers||[];this.drawRealSenseOverlay();});
 
+    /* Exposure snapshot */
+    this.snapshotSub=new ROSLIB.Topic({ros:this.ros,name:'/exposure/snapshot',messageType:'sensor_msgs/Image'});
+    this.snapshotSub.subscribe(msg=>{
+      if(!this.camerasOpen)return;
+      const fid=msg.header.frame_id||'';
+      const m=fid.match(/exposure_snapshot_(.+)_(\d+)/);
+      this.snapshotLabel=m?(m[1].replace(/_/g,' ')+' ['+m[2]+']'):'Snapshot';
+      this.snapshotImage=msg;
+      this.showSnapshot=true;
+      $('rs-close-snap-btn').style.display='inline-block';
+      this.log('📸 '+this.snapshotLabel,'info');
+      this.renderImage(msg,$('rs-img'),false);
+    });
+
     /* RS click handler for exposure grid */
     if (!this._rsOverlayClickBound) {
       this._rsOverlayClickBound = e => {
@@ -685,12 +706,13 @@ class TeresaController{
     const unsub=t=>{if(t)try{t.unsubscribe()}catch(e){}};
     [this.orbbecSub,this.orbbecInfoSub,this.rsSub,this.rsInfoSub,this.skelSub,this.bboxSub,
      this.torsoBboxSub,this.approachSub,this.postureSub,this.confSub,this.trackerSub,
-     this.torsoMkSub,this.exposureGridSub].forEach(unsub);
+     this.torsoMkSub,this.exposureGridSub,this.snapshotSub].forEach(unsub);
     if(this._rsOverlayClickBound){
       $('rs-overlay').removeEventListener('click',this._rsOverlayClickBound);
       this._rsOverlayClickBound=null;
     }
     this.exposureGridMarkers=[];
+    this.showSnapshot=false;$('rs-close-snap-btn').style.display='none';
   }
 
   /* ── Image rendering ──────────────────────── */
@@ -746,6 +768,13 @@ class TeresaController{
   /* ── RealSense overlay ────────────────────── */
   drawRealSenseOverlay(){
     const c=$('rs-overlay');if(!c||c.width===0)return;const ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);
+
+    if(this.showSnapshot){
+      ctx.fillStyle='rgba(0,0,0,.55)';ctx.fillRect(0,0,c.width,30);
+      ctx.fillStyle='#fff';ctx.font='bold 12px monospace';ctx.fillText('📸 '+this.snapshotLabel,8,20);
+      return;
+    }
+
     if(!this.rsCamInfo||!this.rsCamPose)return;
     const hasMarkers=(this.torsoMarkers&&this.torsoMarkers.length)||(this.showRsExposureGrid&&this.exposureGridMarkers.length);
     if(!hasMarkers)return;
@@ -825,6 +854,12 @@ class TeresaController{
   toggleRsCenter(){this.showRsCenter=!this.showRsCenter;$('rs-center-btn').classList.toggle('active',this.showRsCenter);this.drawRealSenseOverlay();}
   toggleRsEdges(){this.showRsEdges=!this.showRsEdges;$('rs-edges-btn').classList.toggle('active',this.showRsEdges);this.drawRealSenseOverlay();}
   toggleRsLabel(){this.showRsLabel=!this.showRsLabel;$('rs-label-btn').classList.toggle('active',this.showRsLabel);this.drawRealSenseOverlay();}
+  closeSnapshot(){
+    this.showSnapshot=false;this.snapshotImage=null;
+    $('rs-close-snap-btn').style.display='none';
+    this.drawRealSenseOverlay();
+    this.log('📸 Snapshot closed — live feed restored');
+  }
   toggleRsExposureGrid(){
     this.showRsExposureGrid=!this.showRsExposureGrid;
     $('rs-grid-btn').classList.toggle('active',this.showRsExposureGrid);
@@ -848,9 +883,11 @@ class TeresaController{
   }
   getCurrentYaw(){if(!this.bodyInOdom)return 0;const r=this.bodyInOdom.rotation;return Math.atan2(2*(r.w*r.z+r.x*r.y),1-2*(r.y*r.y+r.z*r.z));}
   clamp(v,lo,hi){return Math.max(lo,Math.min(hi,v));}
-  disableAll(){['btn-start','btn-return','btn-update','btn-step','btn-stand','btn-sit','btn-pon','btn-poff','btn-stop','pause-btn'].forEach(id=>$(id).disabled=true);}
+  disableAll(){['btn-start','btn-return','btn-update','btn-step','btn-stand','btn-sit','btn-pon','btn-poff','btn-stop','pause-btn'].forEach(id=>$(id).disabled=true);$('btn-manual').disabled=true;$('btn-auto').disabled=true;}
+
   enableAlways(){$('btn-stop').disabled=false;$('btn-stand').disabled=false;$('btn-sit').disabled=false;$('btn-pon').disabled=false;$('btn-poff').disabled=false;$('pause-btn').disabled=false;}
-  enableMissionButtons(){['btn-start','btn-return','btn-update','btn-step','btn-stop','btn-stand','btn-sit','btn-pon','btn-poff','pause-btn'].forEach(id=>$(id).disabled=false);}
+
+  enableMissionButtons(){['btn-start','btn-return','btn-update','btn-step','btn-stop','btn-stand','btn-sit','btn-pon','btn-poff','pause-btn'].forEach(id=>$(id).disabled=false);$('btn-manual').disabled=false;$('btn-auto').disabled=false;}
 
   async onStart(){
     if(!this.tfSystemReady){this.log('TF not ready — waiting for SpotCore','error');return;}
@@ -872,8 +909,6 @@ class TeresaController{
     this.log('Scan gate → '+(this.manualScanGate?'MANUAL':'AUTO'),'info');
   }
   renderGateToggle(){
-    const g = $('gate-toggle');
-    g.style.display = this.tfSystemReady ? 'flex' : 'none';
     $('btn-manual').classList.toggle('active', this.manualScanGate);
     $('btn-auto').classList.toggle('active', !this.manualScanGate);
   }
