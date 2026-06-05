@@ -214,6 +214,7 @@
       <button id="rs-edges-btn" onclick="ctrl.toggleRsEdges()">Edges</button>
       <button id="rs-label-btn" onclick="ctrl.toggleRsLabel()">Label</button>
       <button id="rs-exposure-btn" onclick="ctrl.toggleRsExposure()" class="active">Exposure</button>
+      <button id="rs-terminate-btn" onclick="ctrl.terminateExposure()" style="color:var(--danger);border-color:var(--danger)">Terminate</button>
     </div>
   </div>
 </div>
@@ -289,6 +290,8 @@
       this.showRsEdges       = false;
       this.showRsLabel       = false;
       this.showExposureGrid  = true;
+      this.exposureReviewMode = false;
+      this.exposureMarkerPositions = [];
 
       /* latest marker data */
       this.bodyBbox     = null;  // Marker: /human_pose/bounding_box
@@ -538,6 +541,44 @@
           }
         }
       });
+
+      /* ── WBC state (detect EXPOSURE_REVIEW) ── */
+      this.wbcStateSub = new ROSLIB.Topic({
+        ros: this.ros, name: '/wbc/state',
+        messageType: 'std_msgs/String'
+      });
+      this.wbcStateSub.subscribe((msg) => {
+        this.exposureReviewMode = (msg.data === 'EXPOSURE_REVIEW');
+      });
+
+      /* ── Exposure review publishers ──────── */
+      this.gotoPointPub = new ROSLIB.Topic({
+        ros: this.ros, name: '/exposure/goto_point',
+        messageType: 'std_msgs/Int32'
+      });
+      this.terminateExposurePub = new ROSLIB.Topic({
+        ros: this.ros, name: '/exposure/terminate',
+        messageType: 'std_msgs/Bool'
+      });
+
+      /* ── Click handler for exposure review ── */
+      $id('rs-overlay').addEventListener('click', (e) => {
+        if (!this.exposureReviewMode) return;
+        const canvas = $id('rs-overlay');
+        if (!canvas.width) return;
+        const rect = canvas.getBoundingClientRect();
+        const cx = (e.clientX - rect.left) * (canvas.width / rect.width);
+        const cy = (e.clientY - rect.top) * (canvas.height / rect.height);
+        let best = null, bestDist = 30;
+        for (const mk of this.exposureMarkerPositions) {
+          const d = Math.hypot(mk.x - cx, mk.y - cy);
+          if (d < bestDist) { best = mk; bestDist = d; }
+        }
+        if (best) {
+          this.gotoPointPub.publish({data: best.id});
+          console.log('Exposure review: goto point ' + best.id);
+        }
+      }, {passive: true});
     }
 
     /* ── Image rendering ───────────────────── */
@@ -776,11 +817,13 @@
       }
 
       /* ── Exposure grid (blue dots) ───────── */
+      this.exposureMarkerPositions = [];
       if (this.showExposureGrid && this.exposureMarkers.length > 0) {
         for (const m of this.exposureMarkers) {
           if (m.type !== 2) continue;
           const p = proj(m.pose.position.x, m.pose.position.y, m.pose.position.z);
           if (!p) continue;
+          this.exposureMarkerPositions.push({id: m.id, x: p.x, y: p.y});
           const r = Math.max(4, canvas.width / 200);
           const a = m.color.a;
           const rr = Math.floor(m.color.r * 255);
@@ -839,6 +882,11 @@
       this.showExposureGrid = !this.showExposureGrid;
       $id('rs-exposure-btn').classList.toggle('active', this.showExposureGrid);
       this.drawRealSenseOverlay();
+    }
+    terminateExposure() {
+      this.terminateExposurePub.publish({data: true});
+      this.exposureReviewMode = false;
+      console.log('Exposure review terminated');
     }
 
     /* ── Ping check (alive indicators) ─────── */

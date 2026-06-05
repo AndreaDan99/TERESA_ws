@@ -68,6 +68,7 @@ class ExposureScanner(Node):
         self._dwell_start = None
         self._body_ready = False
         self._ik_done = False
+        self._saved_goals = {}  # idx → PoseStamped (e body_pose)
 
         # ── subscribers ──────────────────────────────────────
         self._sub_state = self.create_subscription(
@@ -78,6 +79,9 @@ class ExposureScanner(Node):
         )
         self._sub_ik_done = self.create_subscription(
             Bool, '/ik_done', self._cb_ik_done, 10
+        )
+        self._sub_goto = self.create_subscription(
+            Int32, '/exposure/goto_point', self._cb_goto_point, 10
         )
 
         # ── publishers ───────────────────────────────────────
@@ -116,11 +120,24 @@ class ExposureScanner(Node):
         if msg.data:
             self._ik_done = True
 
+    def _cb_goto_point(self, msg):
+        idx = msg.data
+        if idx < 0 or idx >= len(self._points):
+            return
+        self._active = True
+        self._idx = idx
+        self._phase = 'request_body_pose'
+        self._body_ready = False
+        self._ik_done = False
+        self._pub_next.publish(Int32(data=idx))
+        self.get_logger().info(f'Review: goto point {idx}')
+
     # ── lifecycle ────────────────────────────────────────────
     def _start(self):
         self._active = True
         self._points = self._gen_exposure_grid()
         self._idx = 0
+        self._saved_goals = {}
         if not self._points:
             self.get_logger().warn(
                 'No exposure points generated — skipping'
@@ -214,19 +231,25 @@ class ExposureScanner(Node):
                     )
 
     def _send_ik_goal(self):
-        pt = self._points[self._idx]
-        goal = PoseStamped()
-        goal.header.frame_id = 'world'
-        goal.header.stamp = self.get_clock().now().to_msg()
-        goal.pose.position.x = float(pt[0])
-        goal.pose.position.y = float(pt[1])
-        goal.pose.position.z = float(pt[2])
-        goal.pose.orientation.x = -0.0062
-        goal.pose.orientation.y = 0.4107
-        goal.pose.orientation.z = 0.0021
-        goal.pose.orientation.w = 0.9118
-
-        self._pub_goal.publish(goal)
+        """Send IK goal for the current grid point. Reuses saved goal if available."""
+        if self._idx in self._saved_goals:
+            goal = self._saved_goals[self._idx]
+            goal.header.stamp = self.get_clock().now().to_msg()
+            self._pub_goal.publish(goal)
+        else:
+            pt = self._points[self._idx]
+            goal = PoseStamped()
+            goal.header.frame_id = 'world'
+            goal.header.stamp = self.get_clock().now().to_msg()
+            goal.pose.position.x = float(pt[0])
+            goal.pose.position.y = float(pt[1])
+            goal.pose.position.z = float(pt[2])
+            goal.pose.orientation.x = -0.0062
+            goal.pose.orientation.y = 0.4107
+            goal.pose.orientation.z = 0.0021
+            goal.pose.orientation.w = 0.9118
+            self._saved_goals[self._idx] = goal
+            self._pub_goal.publish(goal)
         self.get_logger().info(
             f'Point {self._idx}/{len(self._points)}: IK goal sent'
         )

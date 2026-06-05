@@ -100,6 +100,7 @@ class ExperimentLogger(Node):
             't_scan_done': None,
             't_fast_ready_ts': None,
             't_exposure_start': None,
+            't_review_start': None,
             't_mission_end': None,
             'fast_point_count': 0,
             'probe_errors_mm': [],
@@ -247,6 +248,8 @@ class ExperimentLogger(Node):
                     self._start_idle('scan_settle')
                 elif state == 'EXPOSURE_SCANNING':
                     self._trial['t_exposure_start'] = time.time()
+                elif state == 'EXPOSURE_REVIEW':
+                    self._trial['t_review_start'] = time.time()
                 elif state == 'IDLE':
                     self._end_idle()
                     self._finish_trial(

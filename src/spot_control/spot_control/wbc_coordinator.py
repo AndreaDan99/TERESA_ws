@@ -139,6 +139,7 @@ class CoordState:
     APPROACHING   = 'APPROACHING'
     SCANNING      = 'SCANNING'
     EXPOSURE_SCANNING = 'EXPOSURE_SCANNING'
+    EXPOSURE_REVIEW   = 'EXPOSURE_REVIEW'
     WAITING_EXPOSURE  = 'WAITING_EXPOSURE'
     WAITING_FAST      = 'WAITING_FAST'
 
@@ -337,6 +338,7 @@ class WBCCoordinatorNode(Node):
         self.create_subscription(PoseArray,      '/z1/fast_points',          self._cb_fast_points, 10)
         self.create_subscription(Int32,          '/z1/next_point_idx',       self._cb_next_point,  10)
         self.create_subscription(Bool,           '/exposure/ready',          self._cb_exposure_ready, 10)
+        self.create_subscription(Bool,           '/exposure/terminate',      self._cb_terminate_exposure, 10)
         self.create_subscription(Bool,           '/wbc/set_manual_scan_gate', self._cb_manual_gate, 10)
 
         self._pub_goal     = self.create_publisher(PoseStamped, p('wbc_goal_topic'),        10)
@@ -465,6 +467,8 @@ class WBCCoordinatorNode(Node):
         elif msg.data and self._state == CoordState.WAITING_FAST:
             self.get_logger().info('Step confirm → SCANNING')
             self._set_state(CoordState.SCANNING)
+        elif msg.data and self._state == CoordState.EXPOSURE_REVIEW:
+            self._cb_terminate_exposure(Bool(data=True))
 
     def _cb_torso_state(self, msg: String) -> None:
         self._torso_tracker_state = msg.data
@@ -528,8 +532,9 @@ class WBCCoordinatorNode(Node):
         elif self._state == CoordState.EXPOSURE_SCANNING:
             self._tick_exposure()
         elif self._state in (CoordState.WAITING_EXPOSURE,
-                             CoordState.WAITING_FAST):
-            pass  # passive wait for step_confirm
+                             CoordState.WAITING_FAST,
+                             CoordState.EXPOSURE_REVIEW):
+            pass  # passive wait for step_confirm or click
 
         s = String(); s.data = self._state
         self._pub_state.publish(s)
@@ -587,18 +592,22 @@ class WBCCoordinatorNode(Node):
 
     def _cb_exposure_ready(self, msg: Bool) -> None:
         if msg.data and self._state == CoordState.EXPOSURE_SCANNING:
-            if self._manual_scan_gate:
-                self.get_logger().info('Exposure scan complete → WAITING_FAST')
-                self._set_state(CoordState.WAITING_FAST)
-            else:
-                self.get_logger().info('Exposure scan complete → SCANNING')
-                self._set_state(CoordState.SCANNING)
+            self.get_logger().info('Exposure scan complete → EXPOSURE_REVIEW')
+            self._set_state(CoordState.EXPOSURE_REVIEW)
 
     def _cb_manual_gate(self, msg: Bool) -> None:
         self._manual_scan_gate = msg.data
         self._pub_manual_gate.publish(msg)
         mode = 'MANUAL' if msg.data else 'AUTO'
         self.get_logger().info(f'Scan gate set to {mode}')
+
+    def _cb_terminate_exposure(self, msg: Bool) -> None:
+        if msg.data and self._state == CoordState.EXPOSURE_REVIEW:
+            self.get_logger().info('Terminate exposure review')
+            if self._manual_scan_gate:
+                self._set_state(CoordState.WAITING_FAST)
+            else:
+                self._set_state(CoordState.SCANNING)
 
     def _tick_approaching(self) -> None:
         if self._approach_point_odom is None:
@@ -1496,6 +1505,11 @@ class WBCCoordinatorNode(Node):
         if new_state == CoordState.WAITING_FAST:
             self._pub_step_pending.publish(String(data='SCANNING'))
             self.get_logger().info('WAITING_FAST — press n or click Start FAST')
+        if new_state == CoordState.EXPOSURE_REVIEW:
+            self._pub_step_pending.publish(String(data='EXPOSURE_REVIEW'))
+            self.get_logger().info(
+                'EXPOSURE_REVIEW — click grid points to re-inspect, '
+                'n or Terminate to finish')
         if new_state == CoordState.LOCKING:
             self._pub_cmd_vel.publish(Twist())
             self._pub_guidance.publish(Bool(data=False))
