@@ -45,9 +45,6 @@ import cv2
 from tf2_ros import Buffer, TransformListener, TransformException
 from tf2_geometry_msgs import do_transform_point
 
-# Reuse the same Kalman3D from the YOLO tracker (same 3D tracking logic)
-from z1_vision.kalman_filter import Kalman3D
-
 # SMPL 24-joint indices (single source of truth)
 from spot_perception.sml_pose_indices import (
     SHOULDER_LEFT, SHOULDER_RIGHT, HIP_LEFT, HIP_RIGHT,
@@ -96,9 +93,6 @@ class NLFTorsoTrackerNode(Node):
         # ── Backward-compatible parameter aliases (match z1_yolo_torso_tracker) ──
         self.declare_parameter('conf_thr',           0.3)    # alias for conf_threshold
         self.declare_parameter('max_depth',          2.5)    # kept for compat
-        self.declare_parameter('kf_process_noise',   0.00005)
-        self.declare_parameter('kf_meas_noise',      1.0)
-        self.declare_parameter('kf_vel_damping',     0.9)
         self.declare_parameter('min_detection_conf', 0.6)
         self.declare_parameter('min_keypoints',      3)
         self.declare_parameter('lock_stable_frames', 20)
@@ -127,7 +121,6 @@ class NLFTorsoTrackerNode(Node):
         self.conf_thr           = float(self.get_parameter('conf_thr').value)
         self.max_depth          = float(self.get_parameter('max_depth').value)
         self.imgsz              = int(self.get_parameter('imgsz').value)
-        self.vel_damping        = float(self.get_parameter('kf_vel_damping').value)
         self.min_det_conf       = float(self.get_parameter('min_detection_conf').value)
         self.min_keypoints      = int(self.get_parameter('min_keypoints').value)
         self.lock_stable_frames = int(self.get_parameter('lock_stable_frames').value)
@@ -170,12 +163,9 @@ class NLFTorsoTrackerNode(Node):
                 "Running in STUB mode (no detections)."
             )
 
-        # ── Kalman filter ─────────────────────────────────────────────────
-        self.kf = Kalman3D(
-            dt=1.0 / tick_rate_hz,
-            process_noise=float(self.get_parameter('kf_process_noise').value),
-            measurement_noise=float(self.get_parameter('kf_meas_noise').value),
-        )
+        # ── EMA smoothing ─────────────────────────────────────────────────
+        self._prev_center = None
+        self._ema_alpha   = 0.4
 
         # ── Bridge + TF ───────────────────────────────────────────────────
         self.bridge      = CvBridge()
@@ -256,7 +246,6 @@ class NLFTorsoTrackerNode(Node):
         self.cam_info = None
 
         # ── Tick timer ────────────────────────────────────────────────────
-        self._last_tick = None
         tick_period = 1.0 / tick_rate_hz
         self._timer = self.create_timer(tick_period, self._tick)
 
@@ -479,7 +468,14 @@ class NLFTorsoTrackerNode(Node):
         # ── Primary: shoulders + hips ─────────────────────────────────────
         if len(shoulder_pts) >= 1 and len(hip_pts) >= 1:
             torso_pts = shoulder_pts + hip_pts
-            return (np.mean(torso_pts, axis=0), kp_3d,
+            center_raw = np.mean(torso_pts, axis=0)
+            # EMA smoothing
+            if self._prev_center is not None:
+                center = self._ema_alpha * center_raw + (1.0 - self._ema_alpha) * self._prev_center
+            else:
+                center = center_raw
+            self._prev_center = center
+            return (center, kp_3d,
                     len(torso_pts), float(np.mean(all_confs)))
 
         # ── Fallback: shoulders + head/neck up-direction ──────────────────
@@ -493,14 +489,20 @@ class NLFTorsoTrackerNode(Node):
                 up_norm = np.linalg.norm(up_dir)
                 if up_norm > 0.01:
                     up_dir /= up_norm
-                    torso_raw = shoulder_mid + self.chest_offset_m * (-up_dir)
+                    center_raw = shoulder_mid + self.chest_offset_m * (-up_dir)
                 else:
-                    torso_raw = shoulder_mid
+                    center_raw = shoulder_mid
+                # EMA smoothing
+                if self._prev_center is not None:
+                    center = self._ema_alpha * center_raw + (1.0 - self._ema_alpha) * self._prev_center
+                else:
+                    center = center_raw
+                self._prev_center = center
                 n_valid = len(shoulder_pts) + len(face_pts)
                 self.get_logger().debug(
                     f'[NLF] fallback face: shoulder_mid→chest offset={self.chest_offset_m:.2f}m',
                     throttle_duration_sec=2.0)
-                return torso_raw, kp_3d, n_valid, float(np.mean(all_confs))
+                return center, kp_3d, n_valid, float(np.mean(all_confs))
 
         return None, kp_3d, 0, 0.0
 
@@ -531,15 +533,6 @@ class NLFTorsoTrackerNode(Node):
 
     def _tick(self):
         """Periodic FSM tick — reads latest detection, dispatches to state handlers."""
-
-        # ── Adjust Kalman dt from real tick interval ───────────────────────
-        now = self.get_clock().now()
-        if self._last_tick is not None:
-            dt = (now - self._last_tick).nanoseconds * 1e-9
-            if 0.01 < dt < 0.5:
-                self.kf.dt = dt
-        self._last_tick = now
-
         det = self._latest_detection
 
         # ── Guidance mode ──────────────────────────────────────────────────
@@ -572,9 +565,8 @@ class NLFTorsoTrackerNode(Node):
             target = self._scan_torso_world
         else:
             target = self.locked_target
-            if target is None:
-                target = (self._camera_to_world(self.kf.get_position())
-                          if self.kf.initialized else None)
+            if target is None and self._prev_center is not None:
+                target = self._camera_to_world(self._prev_center)
 
         if target is not None:
             self._publish_markers(target, kp_3d, header)
@@ -716,8 +708,6 @@ class NLFTorsoTrackerNode(Node):
                     and n_valid >= self.min_keypoints
                     and avg_conf >= self.min_det_conf):
                 self.state            = 'ESTIMATING'
-                self.kf.reset()
-                self.kf.initialize(torso_raw)
                 self.position_history = [torso_raw.copy()]
                 self.stable_counter   = 0
                 self.tracking_current_pos = None
@@ -730,9 +720,7 @@ class NLFTorsoTrackerNode(Node):
 
                 self.recovery_counter = 0
 
-                self.kf.predict(self.vel_damping)
-                self.kf.update(torso_raw)
-                estimated_cam = self.kf.get_position()
+                estimated_cam = self._prev_center if self._prev_center is not None else torso_raw
 
                 self.position_history.append(estimated_cam.copy())
                 if len(self.position_history) > self.lock_stable_frames:
@@ -764,12 +752,10 @@ class NLFTorsoTrackerNode(Node):
                         f'⚠️ Torso lost during estimation '
                         f'({self.recovery_counter} consecutive frames) → IDLE')
                     self.state                = 'IDLE'
-                    self.kf.reset()
                     self.position_history     = []
                     self.tracking_current_pos = None
                     self.recovery_counter     = 0
                 else:
-                    self.kf.predict(self.vel_damping)
                     self.get_logger().debug(
                         f'[ESTIMATING] recovery {self.recovery_counter}/{self.recovery_frames}',
                         throttle_duration_sec=0.5)
@@ -805,8 +791,6 @@ class NLFTorsoTrackerNode(Node):
                         self.position_history     = [torso_raw.copy()]
                         self.stable_counter       = 0
                         self.drift_counter        = 0
-                        self.kf.reset()
-                        self.kf.initialize(torso_raw)
 
         # ── Log state change ───────────────────────────────────────────────
         if self.state != prev_state:
@@ -847,8 +831,7 @@ class NLFTorsoTrackerNode(Node):
         direction = target_world - self.tracking_current_pos
         distance  = np.linalg.norm(direction)
 
-        dt       = self.kf.dt if hasattr(self.kf, 'dt') else 0.033
-        max_step = self.tracking_speed * dt
+        max_step = self.tracking_speed * 0.05  # fixed 50ms tick
 
         if distance <= max_step:
             self.tracking_current_pos = target_world.copy()
@@ -866,7 +849,7 @@ class NLFTorsoTrackerNode(Node):
         self.stable_counter       = 0
         self.drift_counter        = 0
         self.recovery_counter     = 0
-        self.kf.reset()
+        self._prev_center         = None
         self._guidance_counter    = 0
         self._guidance_missed     = 0
 
