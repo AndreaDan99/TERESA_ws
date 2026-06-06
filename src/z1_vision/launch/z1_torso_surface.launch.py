@@ -33,6 +33,11 @@ def generate_launch_description():
         'config',
         'z1_yolo_torso_params.yaml'
     ])
+    nlf_torso_params_file = PathJoinSubstitution([
+        FindPackageShare('z1_vision'),
+        'config',
+        'nlf_torso_params.yaml'
+    ])
 
     # ── NUOVO: YAML parametri FSM esterna ─────────────────────────
     fsm_params_file = PathJoinSubstitution([
@@ -69,7 +74,7 @@ def generate_launch_description():
         package='z1_vision',
         executable='nlf_torso_tracker',
         name='nlf_torso_tracker',
-        parameters=[torso_params_file],
+        parameters=[nlf_torso_params_file],
         output='screen',
         condition=IfCondition(PythonExpression(['"', perception_backend, '" == "nlf"']))
     )

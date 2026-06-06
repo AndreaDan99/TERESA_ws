@@ -27,6 +27,7 @@ def generate_launch_description():
 
     # ── Config files ───────────────────────────────────────────────────
     yolo_params    = PathJoinSubstitution([pkg, 'config', 'z1_yolo_torso_params.yaml'])
+    nlf_params     = PathJoinSubstitution([pkg, 'config', 'nlf_torso_params.yaml'])
     surface_params = PathJoinSubstitution([pkg, 'config', 'surface_params.yaml'])
 
     # ── Launch arguments ───────────────────────────────────────────────
@@ -72,7 +73,7 @@ def generate_launch_description():
         package    = 'z1_vision',
         executable = 'nlf_torso_tracker',
         name       = 'nlf_torso_tracker',
-        parameters = [yolo_params],
+        parameters = [nlf_params],
         output     = 'screen',
         condition  = IfCondition(PythonExpression(['"', perception_backend, '" == "nlf"'])),
     )
