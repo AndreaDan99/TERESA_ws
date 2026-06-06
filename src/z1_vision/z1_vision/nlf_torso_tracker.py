@@ -1,3 +1,4 @@
+import time
 #!/usr/bin/env python3
 """
 NLF Torso Tracker — drop-in replacement for z1_yolo_torso_tracker.py
@@ -390,6 +391,7 @@ class NLFTorsoTrackerNode(Node):
             return None
 
         try:
+            t0 = time.monotonic()
             image_tensor = torch.from_numpy(rgb).permute(2, 0, 1).unsqueeze(0)
 
             with torch.inference_mode():
@@ -401,9 +403,12 @@ class NLFTorsoTrackerNode(Node):
                     internal_batch_size=64,
                     suppress_implausible_poses=True,
                 )
+            dt = time.monotonic() - t0
 
             if (not pred.get('joints3d') or len(pred['joints3d']) == 0
                     or len(pred['joints3d'][0]) == 0):
+                if self._frame_count % 10 == 0:
+                    self.get_logger().info(f'NLF infer: {dt:.1f}s | no people')
                 return None
 
             joints_mm = pred['joints3d'][0]       # (n_people, 24, 3) mm
@@ -411,6 +416,8 @@ class NLFTorsoTrackerNode(Node):
             n_people = joints_m.shape[0]
 
             if n_people == 1:
+                if self._frame_count % 10 == 0:
+                    self.get_logger().info(f'NLF infer: {dt:.1f}s | 1 person')
                 return joints_m[0]
 
             # Multi-person → pick highest-confidence detection
