@@ -17,6 +17,8 @@ from spot_perception.person_tracking import (
     select_target,
     TORSO_length_constraint,
 )
+from spot_perception.sml_pose_indices import NUM_JOINTS
+from spot_perception.yolo_to_smpl_pad import coco_to_smpl_24
 
 # ============================================================
 #                       Skeleton Node
@@ -73,7 +75,7 @@ class YoloSkeletonNodeOrbbec(Node):
         self._published_track_ids: set = set()
 
         # ── Skeleton structure ───────────────────────────────────
-        self.num_joints = 17
+        self.num_joints = NUM_JOINTS  # 24
         self.TORSO = {5, 6, 11, 12}
         self.ARMS  = {7, 8, 9, 10}
         self.LEGS  = {13, 14, 15, 16}
@@ -386,10 +388,11 @@ class YoloSkeletonNodeOrbbec(Node):
         self.pub_poses.publish(empty)
 
     def _publish_target_pose(self, pts, stamp):
-        """Publish PoseArray of 17 joints for the target person only."""
+        """Publish PoseArray of 24 SMPL joints for the target person only."""
         pa = PoseArray()
         pa.header.frame_id = "orbbec_color_optical_frame"
         pa.header.stamp = stamp
+        coco_poses = []
         for p in pts:
             pose = Pose()
             if p is None:
@@ -399,7 +402,8 @@ class YoloSkeletonNodeOrbbec(Node):
                 pose.position.y = float(p[1])
                 pose.position.z = float(p[2])
             pose.orientation.w = 1.0
-            pa.poses.append(pose)
+            coco_poses.append(pose)
+        pa.poses = coco_to_smpl_24(coco_poses)
         self.pub_poses.publish(pa)
 
     def _publish_all_markers(self, stamp):
