@@ -2,7 +2,7 @@ nlf_torso_tracker:
   ros__parameters:
     model_path: "nlf_s_multi.torchscript"
     model_url: "https://github.com/isarandi/nlf/releases/download/v0.3.2/nlf_s.torchscript"
-    device: "cuda"
+    device: "cpu"
     conf_threshold: 0.3
     max_depth_m: 2.0
     imgsz: 416
