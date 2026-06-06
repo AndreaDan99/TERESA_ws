@@ -26,6 +26,7 @@ Transitions:
   any           → IDLE           TF loss or emergency
 """
 import math
+import threading
 
 import numpy as np
 
@@ -148,6 +149,7 @@ class WBCCoordinatorNode(Node):
 
     def __init__(self):
         super().__init__('wbc_coordinator')
+        self._lock = threading.RLock()
 
         # ── Parameters ────────────────────────────────────────────────
         self.declare_parameter('handoff_distance',            0.05)
@@ -241,6 +243,7 @@ class WBCCoordinatorNode(Node):
         self._search_lock_samples   = int(p('search_lock_samples'))
         self._search_refine_trigger_orb_conf = float(p('search_refine_trigger_orb_conf'))
         self._pre_approach_duration = float(p('pre_approach_duration'))
+        self._body_settle_time      = float(p('body_settle_time'))
         self._step_mode          = bool(p('step_mode'))
         self._ws_ext_goal_tolerance = float(p('ws_ext_goal_tolerance'))
         self._max_reach_val          = float(p('max_workspace_reach'))
@@ -286,7 +289,7 @@ class WBCCoordinatorNode(Node):
         self._search_position_idx: int = 0
         self._search_position_start: rclpy.time.Time | None = None
         self._search_saved_idx: int = 0               # idx da riprendere dopo semi-lock
-        self._search_initial_yaw: float = 0.0         # yaw Spot all'ingresso in SEARCHING [rad, odom]
+        self._search_initial_yaw: float | None = None  # yaw Spot all'ingresso in SEARCHING [rad, odom]
         self._search_rotating: bool = False           # True mentre ruota verso il target yaw
         self._search_target_yaw: float = 0.0          # yaw assoluto desiderato [rad, odom]
         self._last_yaw_error: float = 0.0             # ultimo errore yaw per fallback TF
@@ -322,6 +325,10 @@ class WBCCoordinatorNode(Node):
         self._ws_ext_drive_start: float | None = None # timestamp when drive started
         self._ws_ext_failed: set = set()              # point indices where WS_EXT failed
 
+        # Exposure body pose optimization (same grid search as FAST)
+        self._exposure_grid_points: list | None = None  # list of np.ndarray in world frame
+        self._exposure_optimal_poses: list = []         # [(h, p, dist), ...] per point
+
         # ── Sub / Pub ─────────────────────────────────────────────────
         self.create_subscription(String,       '/human_pose/posture',        self._cb_posture,    10)
         self.create_subscription(Float32,      p('posture_confidence_topic'), self._cb_conf,       10)
@@ -340,6 +347,7 @@ class WBCCoordinatorNode(Node):
         self.create_subscription(Bool,           '/exposure/ready',          self._cb_exposure_ready, 10)
         self.create_subscription(Bool,           '/exposure/terminate',      self._cb_terminate_exposure, 10)
         self.create_subscription(Bool,           '/wbc/set_manual_scan_gate', self._cb_manual_gate, 10)
+        self.create_subscription(PoseArray,      '/exposure/grid_points',     self._cb_exposure_grid_points, 10)
 
         self._pub_goal     = self.create_publisher(PoseStamped, p('wbc_goal_topic'),        10)
         self._pub_enable   = self.create_publisher(Bool,        p('wbc_enable_topic'),     10)
@@ -361,140 +369,154 @@ class WBCCoordinatorNode(Node):
         self.get_logger().info(
             f'WBC Coordinator ready — in attesa TF da SpotCore.\n'
             f'  Attendo {self._odom_frame} → {self._body_frame} ...\n'
-            f'  FSM: 5 Hz  |  Search: 3×3 grid\n'
+            f'  FSM: 10 Hz  |  Search: 6 yaw × refinement\n'
             f'  Lock: conf≥{self._search_lock_confidence}  |  samples: {self._search_lock_samples}')
 
     # ── Callbacks ─────────────────────────────────────────────────────
 
     def _cb_posture(self, msg: String) -> None:
-        self._posture = msg.data
-        if msg.data == 'LYING':
-            self._last_lying_time = self.get_clock().now()
+        with self._lock:
+            self._posture = msg.data
+            if msg.data == 'LYING':
+                self._last_lying_time = self.get_clock().now()
 
     def _cb_conf(self, msg: Float32) -> None:
-        self._confidence = float(msg.data)
-        self._quality.update_quality(self._confidence, self.get_clock().now())
+        with self._lock:
+            self._confidence = float(msg.data)
+            self._quality.update_quality(self._confidence, self.get_clock().now())
 
     def _cb_body_axis(self, msg: Vector3Stamped) -> None:
         """Compute desired Spot yaw so that X_body ⊥ patient head-feet axis."""
-        tf = self._tf_lookup(self._odom_frame, msg.header.frame_id)
-        if tf is None:
-            return
+        with self._lock:
+            tf = self._tf_lookup(self._odom_frame, msg.header.frame_id)
+            if tf is None:
+                return
 
-        R = quat_to_rot(tf.transform.rotation)
-        axis_cam = np.array([msg.vector.x, msg.vector.y, msg.vector.z])
-        axis_odom = R.T @ axis_cam   # R is odom→camera, we need camera→odom
-        axis_odom[2] = 0.0  # project onto XY plane (Spot is on flat ground)
-        n = float(np.linalg.norm(axis_odom[:2]))
-        if n < 0.1:
-            return
+            R = quat_to_rot(tf.transform.rotation)
+            axis_cam = np.array([msg.vector.x, msg.vector.y, msg.vector.z])
+            axis_odom = R.T @ axis_cam   # R is odom→camera, we need camera→odom
+            axis_odom[2] = 0.0  # project onto XY plane (Spot is on flat ground)
+            n = float(np.linalg.norm(axis_odom[:2]))
+            if n < 0.1:
+                return
 
-        # body_axis points head → feet in odom XY.
-        # Spot X must be ⊥ to body_axis → two candidates: ±90°
-        θ_body = math.atan2(float(axis_odom[1]), float(axis_odom[0]))
-        opt1 = normalize_angle(θ_body + math.pi / 2)
-        opt2 = normalize_angle(θ_body - math.pi / 2)
+            # body_axis points head → feet in odom XY.
+            # Spot X must be ⊥ to body_axis → two candidates: ±90°
+            θ_body = math.atan2(float(axis_odom[1]), float(axis_odom[0]))
+            opt1 = normalize_angle(θ_body + math.pi / 2)
+            opt2 = normalize_angle(θ_body - math.pi / 2)
 
-        # Pick the option closest to current Spot yaw (minimum rotation).
-        body_in_odom = self._tf_lookup(self._odom_frame, self._body_frame)
-        if body_in_odom is None:
-            return
+            # Pick the option closest to current Spot yaw (minimum rotation).
+            body_in_odom = self._tf_lookup(self._odom_frame, self._body_frame)
+            if body_in_odom is None:
+                return
 
-        if not self._tf_ready:
-            self._tf_ready = True
-            self.get_logger().info(
-                f'TF disponibile: {self._odom_frame} → {self._body_frame} OK. '
-                f'SpotCore connesso via DDS.')
+            if not self._tf_ready:
+                self._tf_ready = True
+                self.get_logger().info(
+                    f'TF disponibile: {self._odom_frame} → {self._body_frame} OK. '
+                    f'SpotCore connesso via DDS.')
 
-        θ_current = _yaw_from_quat(body_in_odom.transform.rotation)
-        err1 = abs(normalize_angle(opt1 - θ_current))
-        err2 = abs(normalize_angle(opt2 - θ_current))
-        self._desired_yaw = opt1 if err1 <= err2 else opt2
+            θ_current = _yaw_from_quat(body_in_odom.transform.rotation)
+            err1 = abs(normalize_angle(opt1 - θ_current))
+            err2 = abs(normalize_angle(opt2 - θ_current))
+            self._desired_yaw = opt1 if err1 <= err2 else opt2
 
-        msg_out = Float32()
-        msg_out.data = float(self._desired_yaw)
-        self._pub_yaw.publish(msg_out)
+            msg_out = Float32()
+            msg_out.data = float(self._desired_yaw)
+            self._pub_yaw.publish(msg_out)
 
     def _cb_approach(self, msg: PoseStamped) -> None:
         goal_odom = self._tf_transform(msg, self._odom_frame)
         if goal_odom is None:
             return
-        self._approach_point_odom = goal_odom
-        if self._state != CoordState.SEARCHING:
-            # In SEARCHING, target is set via lock + average; avoid polluting QualityMonitor.
-            z = np.array([
-                goal_odom.pose.position.x,
-                goal_odom.pose.position.y,
-                goal_odom.pose.position.z,
-            ])
-            self._quality.try_init(z, self.get_clock().now())
+        with self._lock:
+            self._approach_point_odom = goal_odom
+            if self._state != CoordState.SEARCHING:
+                z = np.array([
+                    goal_odom.pose.position.x,
+                    goal_odom.pose.position.y,
+                    goal_odom.pose.position.z,
+                ])
+                self._quality.try_init(z, self.get_clock().now())
 
     def _cb_body_center(self, msg: PoseStamped) -> None:
         center_odom = self._tf_transform(msg, self._odom_frame)
         if center_odom is not None:
-            self._body_center_odom = center_odom
+            with self._lock:
+                self._body_center_odom = center_odom
 
     def _cb_ik_done(self, msg: Bool) -> None:
-        self._ik_done = msg.data
+        with self._lock:
+            self._ik_done = msg.data
 
     def _cb_z1_state(self, msg: String) -> None:
         pass
 
     def _cb_fast_ready(self, msg: Bool) -> None:
-        if msg.data and self._state == CoordState.SCANNING:
-            self.get_logger().info('FAST ready — disabling WBC')
-            self._set_wbc_enabled(False)
+        with self._lock:
+            if msg.data and self._state == CoordState.SCANNING:
+                self.get_logger().info('FAST ready — disabling WBC')
+                self._set_wbc_enabled(False)
 
     def _cb_restart(self, msg: Bool) -> None:
-        if msg.data and self._state == CoordState.IDLE:
-            self.get_logger().info('Keyboard restart → SEARCHING')
-            self._set_state(CoordState.SEARCHING)
-        elif not msg.data and self._state not in (CoordState.IDLE,):
-            self.get_logger().info('Keyboard stop → IDLE')
-            self._step_pending_state = None
-            self._step_confirmed = False
-            self._set_state(CoordState.IDLE, force=True)
-            self._set_wbc_enabled(False)
+        with self._lock:
+            if msg.data and self._state == CoordState.IDLE:
+                self.get_logger().info('Keyboard restart → SEARCHING')
+                self._set_state(CoordState.SEARCHING)
+            elif not msg.data and self._state not in (CoordState.IDLE,):
+                self.get_logger().info('Keyboard stop → IDLE')
+                self._step_pending_state = None
+                self._step_confirmed = False
+                self._set_state(CoordState.IDLE, force=True)
+                self._set_wbc_enabled(False)
 
     def _cb_step_confirm(self, msg: Bool) -> None:
-        if msg.data and self._step_pending_state is not None:
-            self._step_confirmed = True
-            self.get_logger().info(f'[STEP] Confermato passaggio a {self._step_pending_state}')
-        # Handle manual scan gate
-        if msg.data and self._state == CoordState.WAITING_EXPOSURE:
-            self.get_logger().info('Step confirm → EXPOSURE_SCANNING')
-            self._set_state(CoordState.EXPOSURE_SCANNING)
-        elif msg.data and self._state == CoordState.WAITING_FAST:
-            self.get_logger().info('Step confirm → SCANNING')
-            self._set_state(CoordState.SCANNING)
-        elif msg.data and self._state == CoordState.EXPOSURE_REVIEW:
-            self._cb_terminate_exposure(Bool(data=True))
+        with self._lock:
+            if msg.data and self._step_pending_state is not None:
+                self._step_confirmed = True
+                self.get_logger().info(f'[STEP] Confermato passaggio a {self._step_pending_state}')
+            if msg.data and self._state == CoordState.WAITING_EXPOSURE:
+                self.get_logger().info('Step confirm → EXPOSURE_SCANNING')
+                self._set_state(CoordState.EXPOSURE_SCANNING)
+            elif msg.data and self._state == CoordState.WAITING_FAST:
+                self.get_logger().info('Step confirm → SCANNING')
+                self._set_state(CoordState.SCANNING)
+            elif msg.data and self._state == CoordState.EXPOSURE_REVIEW:
+                self._cb_terminate_exposure(Bool(data=True))
 
     def _cb_torso_state(self, msg: String) -> None:
-        self._torso_tracker_state = msg.data
+        with self._lock:
+            self._torso_tracker_state = msg.data
 
     def _cb_torso_pos(self, msg: PoseStamped) -> None:
-        self._torso_pos = msg
+        with self._lock:
+            self._torso_pos = msg
 
     def _cb_tf_ready(self, msg: Bool) -> None:
-        if msg.data and self._state == CoordState.WAITING_TF:
-            self.get_logger().info(
-                'TF SpotCore disponibile → IDLE.\n'
-                '  Premi "s" sul keyboard controller per avviare la missione.')
-            self._tf_ready = True
-            self._set_state(CoordState.IDLE)
-        elif not msg.data and self._state != CoordState.WAITING_TF:
-            self.get_logger().error(
-                '⚠️  TF perse — tornando in WAITING_TF. '
-                'Spot e braccio fermati.')
-            self._tf_ready = False
-            self._step_pending_state = None
-            self._step_confirmed = False
-            self._set_state(CoordState.WAITING_TF, force=True)
+        with self._lock:
+            if msg.data and self._state == CoordState.WAITING_TF:
+                self.get_logger().info(
+                    'TF SpotCore disponibile → IDLE.\n'
+                    '  Premi "s" sul keyboard controller per avviare la missione.')
+                self._tf_ready = True
+                self._set_state(CoordState.IDLE)
+            elif not msg.data and self._state != CoordState.WAITING_TF:
+                self.get_logger().error(
+                    '⚠️  TF perse — tornando in WAITING_TF. '
+                    'Spot e braccio fermati.')
+                self._tf_ready = False
+                self._step_pending_state = None
+                self._step_confirmed = False
+                self._set_state(CoordState.WAITING_TF, force=True)
 
     # ── FSM tick ──────────────────────────────────────────────────────
 
     def _tick(self) -> None:
+        with self._lock:
+            self._tick_locked()
+
+    def _tick_locked(self) -> None:
         if self._step_mode and self._step_pending_state is not None:
             if self._step_confirmed:
                 self.get_logger().info(
@@ -591,23 +613,38 @@ class WBCCoordinatorNode(Node):
             self._set_state(CoordState.IDLE)
 
     def _cb_exposure_ready(self, msg: Bool) -> None:
-        if msg.data and self._state == CoordState.EXPOSURE_SCANNING:
-            self.get_logger().info('Exposure scan complete → EXPOSURE_REVIEW')
-            self._set_state(CoordState.EXPOSURE_REVIEW)
+        with self._lock:
+            if msg.data and self._state == CoordState.EXPOSURE_SCANNING:
+                self.get_logger().info('Exposure scan complete → EXPOSURE_REVIEW')
+                self._set_state(CoordState.EXPOSURE_REVIEW)
 
     def _cb_manual_gate(self, msg: Bool) -> None:
-        self._manual_scan_gate = msg.data
-        self._pub_manual_gate.publish(msg)
-        mode = 'MANUAL' if msg.data else 'AUTO'
-        self.get_logger().info(f'Scan gate set to {mode}')
+        with self._lock:
+            self._manual_scan_gate = msg.data
+            self._pub_manual_gate.publish(msg)
+            mode = 'MANUAL' if msg.data else 'AUTO'
+            self.get_logger().info(f'Scan gate set to {mode}')
+
+    def _cb_exposure_grid_points(self, msg: PoseArray) -> None:
+        with self._lock:
+            if len(msg.poses) < 1:
+                return
+            points = []
+            for pose in msg.poses:
+                points.append(np.array([pose.position.x, pose.position.y, pose.position.z]))
+            self._exposure_grid_points = points
+            self._optimize_exposure_body_poses()
+            self.get_logger().info(
+                f'Exposure grid points received ({len(points)}), optimized')
 
     def _cb_terminate_exposure(self, msg: Bool) -> None:
-        if msg.data and self._state == CoordState.EXPOSURE_REVIEW:
-            self.get_logger().info('Terminate exposure review')
-            if self._manual_scan_gate:
-                self._set_state(CoordState.WAITING_FAST)
-            else:
-                self._set_state(CoordState.SCANNING)
+        with self._lock:
+            if msg.data and self._state == CoordState.EXPOSURE_REVIEW:
+                self.get_logger().info('Terminate exposure review')
+                if self._manual_scan_gate:
+                    self._set_state(CoordState.WAITING_FAST)
+                else:
+                    self._set_state(CoordState.SCANNING)
 
     def _tick_approaching(self) -> None:
         if self._approach_point_odom is None:
@@ -639,15 +676,16 @@ class WBCCoordinatorNode(Node):
             else:
                 self._pub_spot_ctrl.publish(Bool(data=True))   # scanner done, resume
         elif dist < self._handoff_dist:
+            # Always do exposure body scan first, then FAST ultrasound
             if self._manual_scan_gate:
                 self.get_logger().info(
-                    f'Handoff: dist={dist:.2f}m → WAITING_EXPOSURE (manual gate)')
+                    f'Handoff ({self._posture}): dist={dist:.2f}m → WAITING_EXPOSURE (manual gate)')
                 self._pub_spot_ctrl.publish(Bool(data=False))
                 self._pub_handoff.publish(Bool(data=True))
                 self._set_state(CoordState.WAITING_EXPOSURE)
             else:
                 self.get_logger().info(
-                    f'Handoff: dist={dist:.2f}m < {self._handoff_dist:.2f}m → EXPOSURE_SCANNING')
+                    f'Handoff ({self._posture}): dist={dist:.2f}m → EXPOSURE_SCANNING')
                 self._pub_spot_ctrl.publish(Bool(data=False))
                 self._pub_handoff.publish(Bool(data=True))
                 self._set_state(CoordState.EXPOSURE_SCANNING)
@@ -774,6 +812,8 @@ class WBCCoordinatorNode(Node):
                 and self._confidence >= self._search_lock_confidence \
                 and self._approach_point_odom is not None:
             self._lock_lost_ticks = 0
+            if self._search_lock_buffer is None:
+                self._search_lock_buffer = []
             z = self._approach_point_odom_pos()
             if len(self._search_lock_buffer) < self._search_lock_samples:
                 self._search_lock_buffer.append(z)
@@ -994,9 +1034,15 @@ class WBCCoordinatorNode(Node):
 
     def _finish_refinement_lock(self) -> None:
         self._refining = False
-        z = (self._refine_best_approach.copy()
-             if self._refine_best_approach is not None
-             else self._approach_point_odom_pos())
+        if self._refine_best_approach is not None:
+            z = self._refine_best_approach.copy()
+        elif self._approach_point_odom is not None:
+            z = self._approach_point_odom_pos()
+        else:
+            self.get_logger().error(
+                'Refinement lock: no approach_point available — aborting lock')
+            self._finish_refinement_fail()
+            return
         self._search_lock_buffer = [z]
         self._set_body_pose(self._search_body_height, self._refine_best_pitch)
         self.get_logger().info(
@@ -1136,29 +1182,28 @@ class WBCCoordinatorNode(Node):
     # ── FAST body pose optimization ────────────────────────────────────
 
     def _cb_fast_points(self, msg: PoseArray) -> None:
-        """Receive FAST points from wbc_approach_scanner — run grid search."""
-        if len(msg.poses) < 1:
-            return
-        self._fast_points = msg
-        self.get_logger().info(f'FAST points received ({len(msg.poses)} poses)')
-        self._optimize_body_poses()
-        # Apply first body pose if already in SCANNING
-        if self._state == CoordState.SCANNING:
-            self._apply_fast_body_pose(0)
+        with self._lock:
+            if len(msg.poses) < 1:
+                return
+            self._fast_points = msg
+            self.get_logger().info(f'FAST points received ({len(msg.poses)} poses)')
+            self._optimize_body_poses()
+            if self._state == CoordState.SCANNING:
+                self._apply_fast_body_pose(0)
 
     def _cb_next_point(self, msg: Int32) -> None:
-        """FSM signals next point index (FAST or EXPOSURE)."""
-        idx = msg.data
-        if idx < 0:
-            kind = 'EXPOSURE' if self._state == CoordState.EXPOSURE_SCANNING else 'FAST'
-            self.get_logger().info(f'{kind} done — restoring handoff height')
-            self._set_body_pose(self._handoff_body_height, 0.0)
-            self._pub_body_ready.publish(Bool(data=True))
-            return
-        if self._state == CoordState.SCANNING:
-            self._apply_fast_body_pose(idx)
-        elif self._state == CoordState.EXPOSURE_SCANNING:
-            self._apply_exposure_body_pose(idx)
+        with self._lock:
+            idx = msg.data
+            if idx < 0:
+                kind = 'EXPOSURE' if self._state == CoordState.EXPOSURE_SCANNING else 'FAST'
+                self.get_logger().info(f'{kind} done — restoring handoff height')
+                self._set_body_pose(self._handoff_body_height, 0.0)
+                self._pub_body_ready.publish(Bool(data=True))
+                return
+            if self._state == CoordState.SCANNING:
+                self._apply_fast_body_pose(idx)
+            elif self._state == CoordState.EXPOSURE_SCANNING:
+                self._apply_exposure_body_pose(idx)
 
     def _optimize_body_poses(self) -> None:
         """Grid search: for each FAST point, find optimal (h, p)."""
@@ -1203,6 +1248,43 @@ class WBCCoordinatorNode(Node):
 
             if best_dist > self._max_workspace_reach():
                 self._needs_ws_ext.add(i)  # will trigger WS_EXT on apply
+
+    def _optimize_exposure_body_poses(self) -> None:
+        heights = self._body_grid_heights
+        pitches = self._body_grid_pitches
+        sweet = self._body_sweet_spot
+
+        if self._exposure_grid_points is None:
+            return
+
+        body_tf = self._tf_lookup(self._odom_frame, self._body_frame)
+        if body_tf is None:
+            return
+
+        body_yaw = _yaw_from_quat(body_tf.transform.rotation)
+        body_pos = np.array([body_tf.transform.translation.x,
+                              body_tf.transform.translation.y,
+                              body_tf.transform.translation.z])
+
+        self._exposure_optimal_poses = []
+        for i, point_world in enumerate(self._exposure_grid_points):
+            target_link00 = point_world
+
+            best_h, best_p, best_dist = 0.0, 0.0, float('inf')
+            for h in heights:
+                for p in pitches:
+                    link00_odom, _ = self._simulate_link00(body_pos, body_yaw, h, p)
+                    target_odom = self._link00_to_odom_vec(body_tf, target_link00)
+                    target_new_link00 = self._odom_to_link00_vec(
+                        target_odom, link00_odom, body_yaw, p)
+                    dist = float(np.linalg.norm(target_new_link00 - sweet))
+                    if dist < best_dist:
+                        best_h, best_p, best_dist = h, p, dist
+
+            self._exposure_optimal_poses.append((best_h, best_p, best_dist))
+            self.get_logger().info(
+                f'Exposure pt[{i}]: best (h={best_h:.2f}m, '
+                f'p={math.degrees(best_p):.1f}°) → sweet_dist={best_dist:.3f}m')
 
     def _max_workspace_reach(self) -> float:
         """Estimate max reachable distance from link00 in meters."""
@@ -1343,13 +1425,17 @@ class WBCCoordinatorNode(Node):
         self._ws_ext_driving = False
 
     def _apply_exposure_body_pose(self, idx: int) -> None:
-        """Apply body pose for exposure point idx.
-
-        Uses the same grid-search optimisation as FAST when exposure
-        points have been received and optimised. Falls back to handoff
-        body height until full exposure pose optimisation is plumbed in.
-        """
-        self._set_body_pose(self._handoff_body_height, 0.0)
+        if self._exposure_optimal_poses and idx < len(self._exposure_optimal_poses):
+            h, p, dist = self._exposure_optimal_poses[idx]
+            self.get_logger().info(
+                f'Exposure pt[{idx}]: optimized pose '
+                f'(h={h:.2f}m, p={math.degrees(p):.1f}°, sweet_dist={dist:.3f}m)')
+        else:
+            h, p = self._handoff_body_height, 0.0
+            self.get_logger().info(
+                f'Exposure pt[{idx}]: no optimized pose — using handoff fallback '
+                f'(h={h:.2f}m)')
+        self._set_body_pose(h, p)
         self._body_settle_start = self.get_clock().now().nanoseconds * 1e-9
         self._ws_ext_driving = False
 

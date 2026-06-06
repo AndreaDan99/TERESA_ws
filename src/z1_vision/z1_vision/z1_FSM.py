@@ -3,6 +3,7 @@ import rclpy
 from rclpy.node import Node
 
 import numpy as np
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from std_msgs.msg import Bool, Float32MultiArray, Int32, String
@@ -47,6 +48,7 @@ class Z1FSM(Node):
 
     def __init__(self):
         super().__init__("z1_fsm")
+        self._lock = threading.RLock()
 
         # ── Topic params ────────────────────────────────────────────────
         self.declare_parameter("torso_locked_topic",  "/torso_target_ee_locked")
@@ -357,43 +359,64 @@ class Z1FSM(Node):
     # =================================================================== #
 
     def on_torso_locked(self, msg: PoseStamped):
-        self.last_torso_pose = msg
-        self.last_torso_time = self.get_clock().now()
+        with self._lock:
+            self.last_torso_pose = msg
+            self.last_torso_time = self.get_clock().now()
 
     def _on_surface_frame(self, msg: PoseStamped):
-        self._latest_surface_frame = msg
+        with self._lock:
+            self._latest_surface_frame = msg
+
+    _IK_DONE_STATES = frozenset([
+        "WAIT_IK_DONE", "WRIST_ALIGN", "BODY_SCANNING", "SCAN_PRELIFT", "HOMING",
+    ])
 
     def on_ik_done(self, msg: Bool):
-        if msg.data:
-            self.ik_done = True
+        with self._lock:
+            if msg.data:
+                if self.state in self._IK_DONE_STATES:
+                    self.ik_done = True
+                else:
+                    self.get_logger().debug(
+                        f'Ignoring ik_done in state {self.state}',
+                        throttle_duration_sec=2.0)
 
     def on_impedance_done(self, msg: Bool):
-        if msg.data:
-            self.impedance_done = True
+        with self._lock:
+            if msg.data:
+                if self.state == self.IMPEDANCE_RUNNING:
+                    self.impedance_done = True
+                else:
+                    self.get_logger().debug(
+                        f'Ignoring impedance_done in state {self.state}',
+                        throttle_duration_sec=2.0)
 
     def _on_wbc_state(self, msg: String):
-        self._wbc_state_str = msg.data
-        self._wbc_wait_start = None   # WBC connected, clear timeout
+        with self._lock:
+            self._wbc_state_str = msg.data
+            self._wbc_wait_start = None   # WBC connected, clear timeout
 
     def _on_fast_points(self, msg: PoseArray) -> None:
-        """Receive precomputed FAST points from WBC approach scanner."""
-        if len(msg.poses) >= 1:
-            self._precomputed_fast_points = msg
-            self.get_logger().info(f'FAST points from WBC ({len(msg.poses)} points)')
+        with self._lock:
+            if len(msg.poses) >= 1:
+                self._precomputed_fast_points = msg
+                self.get_logger().info(f'FAST points from WBC ({len(msg.poses)} points)')
 
     def _on_fast_ready(self, msg: Bool) -> None:
-        if msg.data:
-            self._fast_ready = True
-            self.get_logger().info('FAST ready from WBC')
+        with self._lock:
+            if msg.data:
+                self._fast_ready = True
+                self.get_logger().info('FAST ready from WBC')
 
     def _on_body_ready(self, msg: Bool) -> None:
-        self._body_ready = msg.data
+        with self._lock:
+            self._body_ready = msg.data
 
     def _on_keyboard_cmd(self, msg: String):
-        """Riceve comandi da z1_keyboard_safety via /z1_keyboard_cmd."""
-        cmd = msg.data.strip().lower()
-        if cmd in ("home", "emergency", "reset"):
-            self._pending_keyboard_cmd = cmd
+        with self._lock:
+            cmd = msg.data.strip().lower()
+            if cmd in ("home", "emergency", "reset"):
+                self._pending_keyboard_cmd = cmd
 
     # =================================================================== #
     #  HELPERS                                                              #
@@ -997,28 +1020,18 @@ class Z1FSM(Node):
         return poses, transit_indices
 
     def _on_tracker_state(self, msg: String):
-        """Primo messaggio da /torso_tracker_state → tracker avviato e YOLO caricato."""
-        if not self._tracker_ready:
-            self._tracker_ready = True
-            self.get_logger().info('✅ Torso tracker pronto → body scan abilitata')
+        with self._lock:
+            if not self._tracker_ready:
+                self._tracker_ready = True
+                self.get_logger().info('✅ Torso tracker pronto → body scan abilitata')
 
     def _on_scan_point(self, msg: Float32MultiArray):
-        """
-        Callback /torso_scan_point: riceve dati per-frame dal tracker
-        durante la body scan e li invia allo scanner.
-        data = [score, n_kp, conf, x_world, y_world, z_world,
-                kp5_conf, kp6_conf, kp11_conf, kp12_conf]
-        Gli indici 6-9 (per-keypoint confidence) sono opzionali per
-        retrocompatibilità con tracker privi di tale campo.
-        """
-        if self.state == self.BODY_SCANNING and self._body_scanner is not None:
-            self._body_scanner.feed_scan_data(list(msg.data))
-        # Aggiorna stima posizione torso per look-at dinamico.
-        # Salva l'ultima rilevazione 3D valida (score > 0) indipendentemente
-        # dallo stato: se il tracker vede il torso, teniamo la posizione.
         data = list(msg.data)
-        if len(data) >= 6 and float(data[0]) > 0.0:
-            self._scan_torso_estimate = np.array(data[3:6], dtype=float)
+        with self._lock:
+            if self.state == self.BODY_SCANNING and self._body_scanner is not None:
+                self._body_scanner.feed_scan_data(data)
+            if len(data) >= 6 and float(data[0]) > 0.0:
+                self._scan_torso_estimate = np.array(data[3:6], dtype=float)
 
     def _make_home_pose(self) -> PoseStamped:
         """Costruisce un PoseStamped con la posizione home definita dai parametri YAML."""
@@ -1088,6 +1101,10 @@ class Z1FSM(Node):
     # =================================================================== #
 
     def tick(self):
+        with self._lock:
+            self._tick_locked()
+
+    def _tick_locked(self):
 
         # ── Keyboard commands (priorità massima, processati prima del tick) ──
         if self._pending_keyboard_cmd:
@@ -1678,12 +1695,18 @@ class Z1FSM(Node):
                         )
                         self._body_ready = False
                         self._scan_mgr.advance()
-                        nxt = Int32()
-                        nxt.data = (-1 if self._scan_mgr.is_complete
-                                    else self._scan_mgr.idx)
-                        self.pub_next_point.publish(nxt)
-                        self._scan_pause_start = None
-                        self.set_state(self.SCAN_PAUSE)
+                        if self._scan_mgr.is_complete:
+                            self.get_logger().info(
+                                'FAST scan complete after body_ready timeout → HOMING')
+                            self.pub_next_point.publish(Int32(data=-1))
+                            self._scan_pause_start = None
+                            self.set_state(self.HOMING)
+                        else:
+                            nxt = Int32()
+                            nxt.data = self._scan_mgr.idx
+                            self.pub_next_point.publish(nxt)
+                            self._scan_pause_start = None
+                            self.set_state(self.SCAN_PAUSE)
 
         # ── HOMING ────────────────────────────────────────────────────────
         elif self.state == self.HOMING:

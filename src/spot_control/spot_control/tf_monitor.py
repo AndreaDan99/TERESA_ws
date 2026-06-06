@@ -11,6 +11,9 @@ Condizioni:
 
 Se una condizione fallisce → pubblica False al tick successivo.
 
+Ogni topic ha un heartbeat watchdog: se non riceve messaggi per
+topic_heartbeat_timeout secondi, viene marcato come DEGRADED.
+
 Uso:
   ros2 run spot_control tf_monitor
 """
@@ -44,15 +47,17 @@ class TFMonitorNode(Node):
 
         self.declare_parameter('check_rate', 0.5)
         self.declare_parameter('tf_timeout', 0.2)
+        self.declare_parameter('topic_heartbeat_timeout', 5.0)
         self.declare_parameter('joint_states_topic', '/joint_states')
         self.declare_parameter('orbbec_topic', '/orbbec/color/image_raw')
         self.declare_parameter('realsense_topic', '/camera/camera/color/image_raw')
 
-        self._check_rate  = float(self.get_parameter('check_rate').value)
-        self._tf_timeout  = float(self.get_parameter('tf_timeout').value)
-        self._js_topic    = self.get_parameter('joint_states_topic').value
-        self._orbbec_topic = self.get_parameter('orbbec_topic').value
-        self._rs_topic    = self.get_parameter('realsense_topic').value
+        self._check_rate    = float(self.get_parameter('check_rate').value)
+        self._tf_timeout    = float(self.get_parameter('tf_timeout').value)
+        self._topic_timeout = float(self.get_parameter('topic_heartbeat_timeout').value)
+        self._js_topic      = self.get_parameter('joint_states_topic').value
+        self._orbbec_topic  = self.get_parameter('orbbec_topic').value
+        self._rs_topic      = self.get_parameter('realsense_topic').value
 
         # ── TF ────────────────────────────────────────────────────────
         self._tf = Buffer()
@@ -62,6 +67,11 @@ class TFMonitorNode(Node):
         self._js_ok = False
         self._orbbec_ok = False
         self._rs_ok = False
+
+        # Timestamps for heartbeat watchdog
+        self._js_last: rclpy.time.Time | None = None
+        self._orbbec_last: rclpy.time.Time | None = None
+        self._rs_last: rclpy.time.Time | None = None
 
         self.create_subscription(JointState, self._js_topic, self._cb_js, 10)
         self.create_subscription(Image, self._orbbec_topic, self._cb_orbbec, 10)
@@ -80,28 +90,56 @@ class TFMonitorNode(Node):
         self.get_logger().info(
             'TF Monitor avviato.\n'
             '  4 condizioni: Z1 driver | Orbbec | RealSense | 8 catene TF\n'
+            f'  Heartbeat watchdog: {self._topic_timeout:.0f}s per topic\n'
             '  Diagnostica manuale: bash src/spot_control/scripts/tf_diag.sh')
 
     # ── Callbacks ─────────────────────────────────────────────────────
 
     def _cb_js(self, _msg: JointState) -> None:
+        self._js_last = self.get_clock().now()
         if not self._js_ok:
             self._js_ok = True
             self.get_logger().info('Z1 driver: joint_states OK')
 
     def _cb_orbbec(self, _msg: Image) -> None:
+        self._orbbec_last = self.get_clock().now()
         if not self._orbbec_ok:
             self._orbbec_ok = True
             self.get_logger().info('Orbbec: /orbbec/color/image_raw OK')
 
     def _cb_realsense(self, _msg: Image) -> None:
+        self._rs_last = self.get_clock().now()
         if not self._rs_ok:
             self._rs_ok = True
             self.get_logger().info('RealSense: /camera/color/image_raw OK')
 
+    # ── Heartbeat watchdog ────────────────────────────────────────────
+
+    def _check_heartbeats(self) -> None:
+        """Reset OK flags for topics that haven't published within timeout."""
+        now = self.get_clock().now()
+        for last_attr, ok_attr, name in [
+            ('_js_last', '_js_ok', 'Z1 driver'),
+            ('_orbbec_last', '_orbbec_ok', 'Orbbec'),
+            ('_rs_last', '_rs_ok', 'RealSense'),
+        ]:
+            last = getattr(self, last_attr)
+            if last is None:
+                continue  # never received yet — stay False
+            elapsed = (now - last).nanoseconds * 1e-9
+            if elapsed >= self._topic_timeout:
+                if getattr(self, ok_attr):
+                    setattr(self, ok_attr, False)
+                    self.get_logger().warn(
+                        f'{name}: no messages for {elapsed:.0f}s '
+                        f'(timeout={self._topic_timeout:.0f}s) → DEGRADED')
+
     # ── Tick ──────────────────────────────────────────────────────────
 
     def _tick(self) -> None:
+        # ── Heartbeat watchdog ────────────────────────────────────────
+        self._check_heartbeats()
+
         # ── TF check ──────────────────────────────────────────────────
         tf_ok_count = 0
         tf_total = len(TF_CHAINS)
@@ -152,7 +190,7 @@ class TFMonitorNode(Node):
                 self.get_logger().info(
                     '========================================\n'
                     ' TUTTO PRONTO\n'
-                    ' Z1 driver OK | Orbbec OK | RealSense OK | TF 7/7 OK\n'
+                    f' Z1 driver OK | Orbbec OK | RealSense OK | TF {tf_total}/{tf_total} OK\n'
                     ' /wbc/tf_ready = True\n'
                     ' Ora puoi lanciare i terminali applicativi.\n'
                     '========================================')
@@ -173,3 +211,7 @@ def main(args=None):
     finally:
         node.destroy_node()
         rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
