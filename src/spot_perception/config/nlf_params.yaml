@@ -6,7 +6,7 @@ nlf_skeleton:
     conf_threshold: 0.3
     max_depth_m: 5.0
     imgsz: 416
-    publish_mesh: true
+    publish_mesh: false
     mesh_topic: "/human_pose/smpl_mesh"
     mesh_decimation: 4
     num_joints: 24
