@@ -305,7 +305,7 @@ class YoloSkeletonNode(Node):
             coco_poses.append(pose)
 
         # Convert to 24 SMPL joints
-        smpl_poses = coco_to_smpl_24(coco_poses)
+        smpl_poses = coco_to_smpl_24(coco_poses, Pose)
 
         pa = PoseArray()
         pa.header.frame_id = "orbbec_color_optical_frame"

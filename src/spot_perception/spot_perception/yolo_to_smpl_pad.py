@@ -56,17 +56,18 @@ def _make_nan_pose():
     )()
 
 
-def coco_to_smpl_24(coco_poses):
+def coco_to_smpl_24(coco_poses, PoseClass=None):
     """Convert 17 COCO keypoint poses to 24 SMPL poses.
-
-    Args:
-        coco_poses: Iterable of 17 pose-like objects, each with
-                    .position.x, .position.y, .position.z.
-
-    Returns:
-        List of 24 Pose objects. Unmapped joints are NaN.
-    """
-    output = [_make_nan_pose() for _ in range(NUM_JOINTS)]
+    Uses proper ROS2 Pose objects if PoseClass is provided."""
+    if PoseClass is not None:
+        def _nan_pose():
+            p = PoseClass()
+            p.position.x = p.position.y = p.position.z = float('nan')
+            p.orientation.w = 1.0
+            return p
+        output = [_nan_pose() for _ in range(NUM_JOINTS)]
+    else:
+        output = [_make_nan_pose() for _ in range(NUM_JOINTS)]
 
     for coco_idx, smpl_idx in COCO_TO_SMPL.items():
         if smpl_idx is not None:
