@@ -5,6 +5,45 @@ Per la descrizione del sistema corrente vedi [`DESCRIPTION.md`](DESCRIPTION.md).
 
 ---
 
+## 6 June 2026 — NLF Integration (24 SMPL Joints)
+
+### Overview
+- **NLF (Neural Localizer Fields)** replaces YOLO11n-pose as default perception backend
+- **24 SMPL joints** natively published on `/human_pose/points_3d` (up from 17 COCO)
+- **YOLO fallback** via `perception_backend:=yolo` — publishes 24 joints with NaN padding
+- **New topic**: `/human_pose/smpl_mesh` (SMPL mesh vertices, decimated)
+- **New nodes**: `nlf_skeleton.py` (Orbbec), `nlf_torso_tracker.py` (RealSense)
+- **Updated consumers**: posture_classifier, laying_human_detector, person_tracking, z1_scan_manager, exposure_scanner, body_search_scanner — all migrated to SMPL-24 indices
+- **New module**: `sml_pose_indices.py` — shared SMPL-24 joint constants
+
+### New files
+- `src/spot_perception/spot_perception/sml_pose_indices.py` — SMPL-24 constants
+- `src/spot_perception/spot_perception/yolo_to_smpl_pad.py` — YOLO→SMPL adapter
+- `src/spot_perception/spot_perception/nlf_skeleton.py` — NLF Orbbec node
+- `src/z1_vision/z1_vision/nlf_torso_tracker.py` — NLF RealSense node
+- `src/spot_perception/config/nlf_params.yaml`, `src/z1_vision/config/nlf_torso_params.yaml`
+- `scripts/download_nlf_models.sh`
+
+### Modified files
+- Launch files: `spot_perception.launch.py`, `z1_perception.launch.py`, `z1_torso_surface.launch.py` — added `perception_backend` (default: `nlf`)
+- YOLO nodes updated to publish 24 joints: `yolo_skeleton_spot.py`, `z1_yolo_torso_tracker.py`
+- Consumer updates: `person_tracking.py`, `posture_classifier.py`, `laying_human_detector.py`, `z1_scan_manager.py`, `exposure_scanner.py`, `body_search_scanner.py`
+
+---
+
+## 6 June 2026 (cont.) — Always exposure before FAST
+
+### Modifica flusso handoff
+
+- **Prima**: paziente LYING → direttamente a SCANNING (FAST); paziente non-LYING → EXPOSURE_SCANNING → SCANNING
+- **Ora**: TUTTI i pazienti fanno sempre EXPOSURE_SCANNING → EXPOSURE_REVIEW → SCANNING (FAST)
+- Motivazione clinica: la body map di esposizione è utile sempre, indipendentemente dalla postura
+
+### File modificati
+`wbc_coordinator.py` — rimosso il ramo condizionale `if self._posture == 'LYING'` in `_tick_approaching()`
+
+---
+
 ## 6 June 2026 (cont.) — Exposure snapshot + PRE_APPROACH fixes
 
 ### New node: exposure_snapshot.py

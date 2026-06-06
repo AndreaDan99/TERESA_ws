@@ -15,6 +15,21 @@ Due pipeline coesistono:
 | **Z1 standalone** | Unitree Z1 arm | RealSense D435 | FAST ultrasound scanning (no Spot) |
 | **Spot + Z1 (WBC)** | Boston Dynamics Spot + Z1 arm | Orbbec Femto Bolt + RealSense D435 | Spot naviga verso il paziente, Z1 esegue ecografia |
 
+### Perception Backend
+
+Two perception backends are available, selectable via the `perception_backend` launch parameter:
+
+- **`nlf` (default)**: NLF (Neural Localizer Fields) — direct 3D SMPL joints from RGB, no depth back-projection needed. 24 joints published.
+- **`yolo`**: YOLO11n-pose — 2D keypoints + depth back-projection + Kalman filtering. 24 joints published (17 COCO mapped + 7 NaN for SMPL-only joints).
+
+Switch at launch:
+```bash
+ros2 launch spot_control teresa_perception.launch.py perception_backend:=nlf
+ros2 launch spot_control teresa_perception.launch.py perception_backend:=yolo
+```
+
+The `/human_pose/points_3d` topic always carries 24 SMPL joints regardless of backend.
+
 ---
 
 ## Frame Tree
@@ -47,7 +62,7 @@ my_spot/odom                        ← world-fixed odometry (spot_ros2 su SpotC
 # T1: Core — driver hardware + TF statiche + tf_monitor
 ros2 launch spot_control teresa_core.launch.py
 
-# T2: Perception — Orbbec + RealSense YOLO
+# T2: Perception — Orbbec NLF + RealSense NLF (default)
 ros2 launch spot_control teresa_perception.launch.py
 
 # T3: Z1 Control — IK + switch + mux + FSM
@@ -441,7 +456,7 @@ JTC è il default di sicurezza.
 | File | Ruolo |
 |------|-------|
 | `teresa_core.launch.py` | Core launch: driver Orbbec+RealSense+Z1 + TF statiche + tf_monitor |
-| `teresa_perception.launch.py` | Perception launch: Orbbec YOLO posture + RealSense YOLO torso tracker |
+| `teresa_perception.launch.py` | Perception launch: Orbbec NLF skeleton + RealSense NLF torso tracker (default); YOLO fallback via `perception_backend:=yolo` |
 | `wbc.launch.py` | WBC launch: coordinator + QP + navigator |
 | `wbc_coordinator.py` | FSM Spot+Z1: WAITING_TF→IDLE→SEARCHING→SEMI_LOCKING→LOCKING→PRE_APPROACH→APPROACHING→SCANNING. Coarse rotation + refinement pitch. QualityMonitor. Body pose grid search (h,p) + WS_EXT fallback. Per-point body_ready. |
 | `wbc_qp_controller.py` | WBC arm-only, 3 modalità: ACTIVE_SEARCH / LOOKAT (damped pseudo-inverse) / PERCEPTUAL_SCAN. Mai muove Spot. |
@@ -493,7 +508,7 @@ ros2 launch z1_vision z1_control.launch.py
 ros2 launch spot_control teresa_core.launch.py
 # Aspettare: [TUTTO PRONTO] /wbc/tf_ready = True
 
-# T2: Perception — Orbbec + RealSense YOLO
+# T2: Perception — Orbbec NLF + RealSense NLF (default)
 ros2 launch spot_control teresa_perception.launch.py
 
 # T3: Z1 Control — IK + switch + mux + FSM
@@ -535,9 +550,9 @@ The keyboard node subscribes to `/wbc/tf_ready` (Bool) to know when SpotCore is 
 | Package | Ruolo |
 |---------|-------|
 | `src/teresa_utils/` | Shared orientation & transform utilities (no ROS node) |
-| `src/z1_vision/` | Z1 arm: FSM, IK, impedance, YOLO tracking, workspace checker |
+| `src/z1_vision/` | Z1 arm: FSM, IK, impedance, NLF (default) / YOLO torso tracking, workspace checker |
 | `src/spot_control/` | Spot navigation, WBC coordinator, WBC QP controller, ik_goal_mux, perception launcher |
-| `src/spot_perception/` | Orbbec perception: YOLO skeleton, posture classifier, laying detector |
+| `src/spot_perception/` | Orbbec perception: NLF skeleton (default) / YOLO skeleton fallback, posture classifier, laying detector |
 | `src/teresa_demo/` | Visitor demo: Spot + Z1 simultaneous search movements (no cameras/WBC) |
 | `src/spot_msgs/` | Custom ROS2 messages (Trajectory action only) |
 | `src/z1_ros2/` | Unitree Z1 hardware interface, URDF, MoveIt2, bringup configs |
@@ -590,9 +605,12 @@ Z → right to left
 
 ## Hardware Notes
 
-### YOLO Model
+### Perception Models
 
-`yolo11n-pose.pt` lives at the workspace root. Used by both `z1_yolo_torso_tracker` (RealSense) and `yolo_skeleton_spot` (Orbbec).
+Two model families are used depending on the `perception_backend` parameter:
+
+- **NLF (default)**: Neural Localizer Fields models downloaded via `scripts/download_nlf_models.sh` to `models/nlf/`. Used by `nlf_skeleton.py` (Orbbec) and `nlf_torso_tracker.py` (RealSense).
+- **YOLO fallback**: `yolo11n-pose.pt` lives at the workspace root. Used by `z1_yolo_torso_tracker` (RealSense) and `yolo_skeleton_spot` (Orbbec).
 
 ### Orbbec Femto Bolt — Power
 
