@@ -261,7 +261,10 @@ class YoloSkeletonNodeOrbbec(Node):
         track.visible = [False] * self.num_joints
         pts = [None] * self.num_joints
 
-        for i in range(self.num_joints):
+        # YOLO produces 17 COCO joints — only process those, rest stay NaN
+        n_coco = len(kp)
+
+        for i in range(n_coco):
             if i in {1, 2, 3, 4}:
                 continue
 
