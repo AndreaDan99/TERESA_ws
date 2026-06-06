@@ -353,7 +353,7 @@ class NLFTorsoTrackerNode(Node):
         kp_all_3d = self._extract_all_body_keypoints(joints3d)
 
         # ── Extract guidance detection (any valid keypoint) ────────────────
-        guidance_raw, guidance_n, guidance_conf = self._extract_guidance(joints3d)
+        guidance_raw, _, guidance_n, guidance_conf = self._extract_guidance(joints3d)
 
         self._latest_detection = {
             'torso_raw':     torso_raw,
@@ -499,7 +499,7 @@ class NLFTorsoTrackerNode(Node):
         valid_mask = ~np.any(np.isnan(joints3d), axis=1)  # (24,) bool
         valid_indices = np.where(valid_mask)[0]
         if len(valid_indices) < 1:
-            return None, 0, 0.0
+            return None, {}, 0, 0.0
 
         pts = joints3d[valid_indices]
         kp_3d = {int(idx): joints3d[idx].tolist() for idx in valid_indices}
