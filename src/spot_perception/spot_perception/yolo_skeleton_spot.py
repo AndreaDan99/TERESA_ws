@@ -80,6 +80,8 @@ class YoloSkeletonNode(Node):
         self.target_id           = None          # current target (ByteTrack ID)
         self.hysteresis_miss     = 0             # consecutive non-lying frames
         self._published_track_ids: set = set()   # for marker DELETEs
+        self._smoothed_kp: dict = {}   # EMA smoothed keypoints per ByteTrack person ID
+        self._ema_alpha = 0.3          # smoothing factor (0=no update, 1=raw)
 
         # ── Skeleton structure (COCO 17) ─────────────────────────
         self.num_joints = 17
@@ -233,6 +235,18 @@ class YoloSkeletonNode(Node):
                     tid = int(boxes.id[di].item())
 
                 pts_3d = self._keypoints_3d(kp, conf, fx, fy, cx, cy)
+
+                # EMA smoothing per person (replaces Kalman3D)
+                if tid is not None:
+                    prev = self._smoothed_kp.get(tid, pts_3d)
+                    smoothed = []
+                    for j in range(self.num_joints):
+                        if pts_3d[j] is not None and prev[j] is not None:
+                            smoothed.append(self._ema_alpha * pts_3d[j] + (1 - self._ema_alpha) * prev[j])
+                        else:
+                            smoothed.append(pts_3d[j] if pts_3d[j] is not None else (prev[j] if prev[j] is not None else None))
+                    self._smoothed_kp[tid] = smoothed
+                    pts_3d = smoothed
 
                 # Centre-depth for sorting (median of torso joints)
                 torso_z = []
