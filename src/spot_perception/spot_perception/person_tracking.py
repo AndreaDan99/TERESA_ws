@@ -2,13 +2,22 @@
 import time
 import numpy as np
 
+from spot_perception.sml_pose_indices import (
+    PELVIS, HIP_LEFT, HIP_RIGHT, SPINE1, KNEE_LEFT, KNEE_RIGHT,
+    SPINE2, ANKLE_LEFT, ANKLE_RIGHT, SPINE3, FOOT_LEFT, FOOT_RIGHT,
+    NECK, COLLAR_LEFT, COLLAR_RIGHT, HEAD,
+    SHOULDER_LEFT, SHOULDER_RIGHT, ELBOW_LEFT, ELBOW_RIGHT,
+    WRIST_LEFT, WRIST_RIGHT, HAND_LEFT, HAND_RIGHT,
+    NUM_JOINTS,
+    TORSO_JOINTS, ARM_JOINTS, LEG_JOINTS,
+    SPINE_JOINTS, HEAD_JOINTS, FEET_JOINTS,
+)
 
-# ── Joint group sets (COCO 17-joint) ──────────────────────────
-TORSO_JOINTS = {5, 6, 11, 12}
-ARM_JOINTS   = {7, 8, 9, 10}
-LEG_JOINTS   = {13, 14, 15, 16}
-NOSE_JOINTS  = {0}
-SKIP_JOINTS  = {1, 2, 3, 4}   # eyes / ears — not tracked
+
+# ── Joint group sets (SMPL-24) ────────────────────────────────
+# TORSO_JOINTS, ARM_JOINTS, LEG_JOINTS imported from sml_pose_indices
+NOSE_JOINTS  = {0}  # PELVIS used as nose proxy
+SKIP_JOINTS  = set()  # all 24 joints are tracked now
 
 _UP = np.array([0.0, -1.0, 0.0], dtype=np.float64)  # camera optical: Y down → world-up = -Y
 
@@ -59,17 +68,17 @@ class Kalman3D:
 
 # ── PersonTrack ───────────────────────────────────────────────
 class PersonTrack:
-    """One tracked person: 17 independent Kalman filters + tracking metadata."""
+    """One tracked person: NUM_JOINTS independent Kalman filters + tracking metadata."""
 
     def __init__(self, track_id: int):
         self.track_id = track_id
-        self.kf = [Kalman3D() for _ in range(17)]
-        self.visible = [False] * 17
-        self.missing_count = [0] * 17
+        self.kf = [Kalman3D() for _ in range(NUM_JOINTS)]
+        self.visible = [False] * NUM_JOINTS
+        self.missing_count = [0] * NUM_JOINTS
         self.TORSO_len_ref = None
         self.centroid = None        # np.array([x,y,z]) — mean of torso joints, updated each frame
         self.last_seen: float = time.monotonic()
-        self._cached_pts = [None] * 17  # last corrected positions (after constraints)
+        self._cached_pts = [None] * NUM_JOINTS  # last corrected positions (after constraints)
 
         # Per-joint Q/R tuning
         for i, kf in enumerate(self.kf):
@@ -82,22 +91,35 @@ class PersonTrack:
             elif i in NOSE_JOINTS:
                 kf.Q *= 1.5
                 kf.R *= 1.5
-            # ARM_JOINTS: factor 1.0 — no change
+            elif i in SPINE_JOINTS:
+                kf.Q *= 0.25   # process_noise=0.00005 relative to base 0.0002
+                kf.R *= 0.125  # meas_noise=0.25 relative to base 2.0
+            elif i in HEAD_JOINTS:
+                kf.Q *= 0.75   # process_noise=0.00015
+                kf.R *= 0.375  # meas_noise=0.75
+            elif i in FEET_JOINTS:
+                kf.Q *= 0.35   # process_noise=0.00007
+                kf.R *= 0.175  # meas_noise=0.35
+            # HAND_LEFT, HAND_RIGHT: factor 0.5 → process_noise=0.0001, meas_noise=0.5
+            elif i in {HAND_LEFT, HAND_RIGHT}:
+                kf.Q *= 0.5
+                kf.R *= 0.25
+            # ARM_JOINTS (shoulders/elbows/wrists): factor 1.0 — no change
 
 
 # ── TORSO length constraint ───────────────────────────────────
 def TORSO_length_constraint(pts, visible, L_ref, stiffness=0.35):
     """Soft constraint: keep shoulder-hip distance close to reference length L_ref."""
-    # NOTE: mutates pts[5] and pts[6] in-place. Callers must pass mutable arrays.
+    # NOTE: mutates pts[SHOULDER_LEFT] and pts[SHOULDER_RIGHT] in-place. Callers must pass mutable arrays.
     if L_ref is None:
         return pts
-    idx = [5, 6, 11, 12]
+    idx = [SHOULDER_LEFT, SHOULDER_RIGHT, HIP_LEFT, HIP_RIGHT]
     if any(pts[i] is None for i in idx):
         return pts
     if all(visible[i] for i in idx):
         return pts   # all visible — no correction needed
-    sh_mid  = 0.5 * (pts[5] + pts[6])
-    hip_mid = 0.5 * (pts[11] + pts[12])
+    sh_mid  = 0.5 * (pts[SHOULDER_LEFT] + pts[SHOULDER_RIGHT])
+    hip_mid = 0.5 * (pts[HIP_LEFT] + pts[HIP_RIGHT])
     v = sh_mid - hip_mid
     dist = np.linalg.norm(v)
     if dist < 1e-6:
@@ -105,8 +127,8 @@ def TORSO_length_constraint(pts, visible, L_ref, stiffness=0.35):
     v_corr = (v / dist) * L_ref
     target_sh_mid = hip_mid + v_corr
     delta = target_sh_mid - sh_mid
-    pts[5] += stiffness * delta
-    pts[6] += stiffness * delta
+    pts[SHOULDER_LEFT] += stiffness * delta
+    pts[SHOULDER_RIGHT] += stiffness * delta
     return pts
 
 
@@ -165,16 +187,13 @@ def assign_detections_to_tracks(detection_centroids, tracks, max_dist):
 # ── Target selection ──────────────────────────────────────────
 def torso_angle_deg(track):
     """
-    Compute torso angle (°) between the shoulder-hip vector and world-up.
-    Returns None if any of joints 5, 6, 11, 12 are unavailable.
+    Compute torso angle (°) between the SPINE vector (SPINE3→SPINE1) and world-up.
+    Returns None if SPINE1 or SPINE3 are unavailable.
     """
     pts = [kf.get_position() for kf in track.kf]
-    for i in [5, 6, 11, 12]:
-        if pts[i] is None:
-            return None
-    sh_mid  = 0.5 * (pts[5] + pts[6])
-    hip_mid = 0.5 * (pts[11] + pts[12])
-    v = sh_mid - hip_mid
+    if pts[SPINE1] is None or pts[SPINE3] is None:
+        return None
+    v = pts[SPINE3] - pts[SPINE1]  # SPINE3→SPINE1 (upward in body frame)
     n = np.linalg.norm(v)
     if n < 1e-6:
         return None

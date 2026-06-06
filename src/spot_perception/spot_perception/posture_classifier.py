@@ -33,17 +33,18 @@ def percentile_height(points, up, p):
 
 
 # ============================================================
-# COCO/YOLO keypoint indices
+# SMPL-24 joint indices (single source of truth)
 # ============================================================
 
-L_SHOULDER = 5
-R_SHOULDER = 6
-L_HIP = 11
-R_HIP = 12
-L_KNEE = 13
-R_KNEE = 14
-L_ANKLE = 15
-R_ANKLE = 16
+from spot_perception.sml_pose_indices import (
+    HIP_LEFT, HIP_RIGHT,
+    KNEE_LEFT, KNEE_RIGHT,
+    ANKLE_LEFT, ANKLE_RIGHT,
+    SHOULDER_LEFT, SHOULDER_RIGHT,
+    SPINE1, SPINE3,
+    NECK,
+    NUM_JOINTS,
+)
 
 
 # ============================================================
@@ -125,7 +126,7 @@ class HumanPostureAnalyzerSpot(Node):
         up = np.array([0.0, -1.0, 0.0], dtype=np.float64)
 
         valid = [p for p in pts if p is not None]
-        quality = len(valid) / 17.0
+        quality = len(valid) / NUM_JOINTS
 
         if len(valid) < 4:
             return "UNKNOWN", 0.0, None, None, None, None
@@ -136,22 +137,22 @@ class HumanPostureAnalyzerSpot(Node):
         height = None
 
         shoulders = []
-        if pts[L_SHOULDER] is not None:
-            shoulders.append(pts[L_SHOULDER])
-        if pts[R_SHOULDER] is not None:
-            shoulders.append(pts[R_SHOULDER])
+        if pts[SHOULDER_LEFT] is not None:
+            shoulders.append(pts[SHOULDER_LEFT])
+        if pts[SHOULDER_RIGHT] is not None:
+            shoulders.append(pts[SHOULDER_RIGHT])
 
         feet = []
-        if pts[L_ANKLE] is not None:
-            feet.append(pts[L_ANKLE])
-        if pts[R_ANKLE] is not None:
-            feet.append(pts[R_ANKLE])
+        if pts[ANKLE_LEFT] is not None:
+            feet.append(pts[ANKLE_LEFT])
+        if pts[ANKLE_RIGHT] is not None:
+            feet.append(pts[ANKLE_RIGHT])
 
         if len(feet) == 0:
-            if pts[L_KNEE] is not None:
-                feet.append(pts[L_KNEE])
-            if pts[R_KNEE] is not None:
-                feet.append(pts[R_KNEE])
+            if pts[KNEE_LEFT] is not None:
+                feet.append(pts[KNEE_LEFT])
+            if pts[KNEE_RIGHT] is not None:
+                feet.append(pts[KNEE_RIGHT])
 
         if len(shoulders) > 0 and len(feet) > 0:
             sh_mid = np.mean(shoulders, axis=0)
@@ -164,12 +165,12 @@ class HumanPostureAnalyzerSpot(Node):
         # Hip midpoint
         # --------------------------------------------------
         hip_mid = None
-        if pts[L_HIP] is not None and pts[R_HIP] is not None:
-            hip_mid = 0.5 * (pts[L_HIP] + pts[R_HIP])
-        elif pts[L_HIP] is not None:
-            hip_mid = pts[L_HIP]
-        elif pts[R_HIP] is not None:
-            hip_mid = pts[R_HIP]
+        if pts[HIP_LEFT] is not None and pts[HIP_RIGHT] is not None:
+            hip_mid = 0.5 * (pts[HIP_LEFT] + pts[HIP_RIGHT])
+        elif pts[HIP_LEFT] is not None:
+            hip_mid = pts[HIP_LEFT]
+        elif pts[HIP_RIGHT] is not None:
+            hip_mid = pts[HIP_RIGHT]
 
         if hip_mid is None:
             return "UNKNOWN", 0.0, height, None, None, None
@@ -179,10 +180,10 @@ class HumanPostureAnalyzerSpot(Node):
         # --------------------------------------------------
         knee_mid = None
         knees = []
-        if pts[L_KNEE] is not None:
-            knees.append(pts[L_KNEE])
-        if pts[R_KNEE] is not None:
-            knees.append(pts[R_KNEE])
+        if pts[KNEE_LEFT] is not None:
+            knees.append(pts[KNEE_LEFT])
+        if pts[KNEE_RIGHT] is not None:
+            knees.append(pts[KNEE_RIGHT])
 
         if len(knees) > 0:
             knee_mid = np.mean(knees, axis=0)
@@ -194,7 +195,17 @@ class HumanPostureAnalyzerSpot(Node):
             return "UNKNOWN", 0.0, height, None, None, None
 
         sh_mid = np.mean(shoulders, axis=0)
-        torso_vec = sh_mid - hip_mid
+
+        # SPINE vector (SPINE1→SPINE3) preferred for torso angle
+        if pts[SPINE1] is not None and pts[SPINE3] is not None:
+            spine_vec = pts[SPINE3] - pts[SPINE1]
+            if np.linalg.norm(spine_vec) > 1e-6:
+                torso_vec = spine_vec
+            else:
+                torso_vec = sh_mid - hip_mid
+        else:
+            torso_vec = sh_mid - hip_mid
+
         torso_angle = angle_deg(torso_vec, up)
 
         # --------------------------------------------------
@@ -209,13 +220,13 @@ class HumanPostureAnalyzerSpot(Node):
 
         knee_angles = []
 
-        if pts[L_HIP] is not None and pts[L_KNEE] is not None and pts[L_ANKLE] is not None:
-            ang = knee_angle(pts[L_HIP], pts[L_KNEE], pts[L_ANKLE])
+        if pts[HIP_LEFT] is not None and pts[KNEE_LEFT] is not None and pts[ANKLE_LEFT] is not None:
+            ang = knee_angle(pts[HIP_LEFT], pts[KNEE_LEFT], pts[ANKLE_LEFT])
             if ang is not None:
                 knee_angles.append(ang)
 
-        if pts[R_HIP] is not None and pts[R_KNEE] is not None and pts[R_ANKLE] is not None:
-            ang = knee_angle(pts[R_HIP], pts[R_KNEE], pts[R_ANKLE])
+        if pts[HIP_RIGHT] is not None and pts[KNEE_RIGHT] is not None and pts[ANKLE_RIGHT] is not None:
+            ang = knee_angle(pts[HIP_RIGHT], pts[KNEE_RIGHT], pts[ANKLE_RIGHT])
             if ang is not None:
                 knee_angles.append(ang)
 

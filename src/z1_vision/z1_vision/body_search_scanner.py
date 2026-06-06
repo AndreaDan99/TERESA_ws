@@ -29,7 +29,7 @@ Score per punto:
   final_score = detection_rate × avg_per_frame_score
   dove:
     detection_rate     = frame_validi / frame_totali
-    per_frame_score    = (n_kp / max_kp) × avg_conf  (calcolato dal tracker)
+    per_frame_score    = (n_kp / NUM_JOINTS) × avg_conf  (calcolato dal tracker, NUM_JOINTS=24)
     avg_per_frame_score = media dei per_frame_score validi
 """
 
@@ -41,6 +41,12 @@ from enum import Enum
 from typing import Any, Optional
 
 from geometry_msgs.msg import PoseStamped
+from spot_perception.sml_pose_indices import (
+    SHOULDER_LEFT, SHOULDER_RIGHT,
+    HIP_LEFT, HIP_RIGHT,
+    SPINE1, SPINE2, SPINE3,
+    NUM_JOINTS,
+)
 
 
 # ── Azioni restituite da tick() ───────────────────────────────────────────────
@@ -69,14 +75,14 @@ class _PointResult:
     score:      float
     torso_xyz:  np.ndarray   # mediana posizioni world frame valide in quel punto
     std_dev_3d: float = 0.0  # deviazione standard 3D delle posizioni (proxy qualità depth)
-    kp_conf:    np.ndarray = None  # conf media per keypoint [kp5, kp6, kp11, kp12]
-    kp_xyz:     np.ndarray = None  # posizioni 3D world [4,3]: [kp5,kp6,kp11,kp12]; NaN se mancante
+    kp_conf:    np.ndarray = None  # conf media per keypoint [SHOULDER_L, SHOULDER_R, HIP_L, HIP_R, SPINE1, SPINE2, SPINE3]
+    kp_xyz:     np.ndarray = None  # posizioni 3D world [7,3]: [SHOULDER_L, SHOULDER_R, HIP_L, HIP_R, SPINE1, SPINE2, SPINE3]; NaN se mancante
 
     def __post_init__(self):
         if self.kp_conf is None:
-            self.kp_conf = np.zeros(4)
+            self.kp_conf = np.zeros(7)
         if self.kp_xyz is None:
-            self.kp_xyz = np.full((4, 3), np.nan)
+            self.kp_xyz = np.full((7, 3), np.nan)
 
 
 # ── Stato interno ─────────────────────────────────────────────────────────────
@@ -146,9 +152,9 @@ class BodySearchScanner:
 
         # Buffer messaggi in arrivo (riempito da feed_scan_data, svuotato in tick)
         self._pending: list[list[float]] = []
-        self._kp_conf_sum: np.ndarray    = np.zeros(4)  # [kp5, kp6, kp11, kp12]
-        self._kp_xyz_sum:   np.ndarray = np.zeros((4, 3))  # somma pesata posizioni [kp5,kp6,kp11,kp12]
-        self._kp_xyz_count: np.ndarray = np.zeros(4)        # conta frame validi per keypoint
+        self._kp_conf_sum: np.ndarray    = np.zeros(7)  # [SHOULDER_L, SHOULDER_R, HIP_L, HIP_R, SPINE1, SPINE2, SPINE3]
+        self._kp_xyz_sum:   np.ndarray = np.zeros((7, 3))  # somma pesata posizioni
+        self._kp_xyz_count: np.ndarray = np.zeros(7)        # conta frame validi per keypoint
 
     # ── API pubblica ──────────────────────────────────────────────────────────
 
@@ -167,8 +173,8 @@ class BodySearchScanner:
         """
         Chiamata dalla FSM ad ogni messaggio /torso_scan_point ricevuto.
         data = [score, n_kp, conf, x_world, y_world, z_world,
-                kp5_conf, kp6_conf, kp11_conf, kp12_conf]
-        Gli indici 6-9 (per-keypoint confidence) sono opzionali:
+                kp16_conf, kp17_conf, kp1_conf, kp2_conf, kp3_conf, kp6_conf, kp9_conf]
+        Gli indici 6-12 (per-keypoint confidence) sono opzionali:
         se il messaggio ha solo 6 elementi (tracker vecchio), vengono ignorati.
         """
         self._pending.append(data)
@@ -277,12 +283,13 @@ class BodySearchScanner:
                     self._frames_valid += 1
                     self._score_sum    += score
                     self._positions.append(np.array(data[3:6], dtype=float))
-                    # Accumula confidence per-keypoint (kp5, kp6, kp11, kp12)
-                    if len(data) >= 10:
-                        self._kp_conf_sum += np.array(data[6:10], dtype=float)
-                    # Accumula posizioni 3D per-keypoint (kp5, kp6, kp11, kp12) — indici 10-21
-                    if len(data) >= 22:
-                        for ki, base in enumerate((10, 13, 16, 19)):
+                    # Accumula confidence per-keypoint (SHOULDER_L, SHOULDER_R, HIP_L, HIP_R, SPINE1, SPINE2, SPINE3)
+                    if len(data) >= 13:
+                        self._kp_conf_sum += np.array(data[6:13], dtype=float)
+                    # Accumula posizioni 3D per-keypoint — indici 13-33 (7 keypoint × 3)
+                    if len(data) >= 34:
+                        for ki in range(7):
+                            base = 13 + ki * 3
                             kp_pos = np.array(data[base:base+3], dtype=float)
                             conf_k = float(data[6 + ki])   # kp_conf corrispondente
                             # Accumula solo se keypoint rilevato (pos != [0,0,0] e conf > 0)
@@ -302,10 +309,10 @@ class BodySearchScanner:
         xyz_median = (np.median(np.array(self._positions), axis=0)
                       if self._positions else np.zeros(3))
         kp_avg = (self._kp_conf_sum / self._frames_valid
-                  if self._frames_valid > 0 else np.zeros(4))
+                  if self._frames_valid > 0 else np.zeros(7))
         # Media pesata posizioni keypoint (NaN se keypoint mai rilevato)
-        kp_xyz_avg = np.full((4, 3), np.nan)
-        for ki in range(4):
+        kp_xyz_avg = np.full((7, 3), np.nan)
+        for ki in range(7):
             if self._kp_xyz_count[ki] > 0.0:
                 kp_xyz_avg[ki] = self._kp_xyz_sum[ki] / self._kp_xyz_count[ki]
         self._results.append(_PointResult(
@@ -318,14 +325,15 @@ class BodySearchScanner:
         ))
 
         tag = "✅" if ready else "⏱️ timeout"
-        sh_avg  = float(np.mean(kp_avg[0:2]))   # spalle (kp5+kp6)/2
-        hip_avg = float(np.mean(kp_avg[2:4]))   # fianchi (kp11+kp12)/2
+        sh_avg  = float(np.mean(kp_avg[0:2]))   # spalle (SHOULDER_L + SHOULDER_R)/2
+        hip_avg = float(np.mean(kp_avg[2:4]))   # fianchi (HIP_L + HIP_R)/2
+        sp_avg  = float(np.mean(kp_avg[4:7]))   # colonna (SPINE1+SPINE2+SPINE3)/3
         self._log_i(
             f"{tag} Punto {self._idx + 1}/{len(self._poses)}: "
             f"score={final_score:.3f} "
             f"({self._frames_valid}/{self._frames_total} frame validi, "
             f"std3d={std_3d*100:.1f}cm, "
-            f"sh={sh_avg:.2f} hip={hip_avg:.2f})"
+            f"sh={sh_avg:.2f} hip={hip_avg:.2f} sp={sp_avg:.2f})"
         )
 
         # ── Early stop? ──
@@ -393,7 +401,7 @@ class BodySearchScanner:
 
         dove:
           detection_rate      = frame_validi / frame_totali
-          avg_per_frame_score = mean((n_kp/max_kp) × avg_conf) dei frame validi
+          avg_per_frame_score = mean((n_kp/NUM_JOINTS) × avg_conf) dei frame validi
           stability_3d        = 1 / (1 + stability_k × std_dev_3D)
 
         std_dev_3D è la deviazione standard media delle posizioni 3D accumulate
@@ -486,21 +494,22 @@ class BodySearchScanner:
         (score > 0), pesata per score.
 
         Ritorna un dizionario con:
-          'per_kp'   : np.array([kp5, kp6, kp11, kp12]) — conf media pesata
-          'shoulders': media (kp5 + kp6) / 2
-          'hips'     : media (kp11 + kp12) / 2
-          'left'     : media (kp5 + kp11) / 2  — lato spalla lontana + fianco sx
-          'right'    : media (kp6 + kp12) / 2  — lato spalla vicina + fianco dx
+          'per_kp'    : np.array([SHOULDER_L, SHOULDER_R, HIP_L, HIP_R, SPINE1, SPINE2, SPINE3]) — conf media pesata
+          'shoulders' : media (SHOULDER_L + SHOULDER_R) / 2
+          'hips'      : media (HIP_L + HIP_R) / 2
+          'spine'     : media (SPINE1 + SPINE2 + SPINE3) / 3
+          'left'      : media (SHOULDER_L + HIP_L) / 2
+          'right'     : media (SHOULDER_R + HIP_R) / 2
         Ritorna valori zero se nessun risultato valido.
         """
         valid = [r for r in self._results if r.score > 0.0]
         if not valid:
-            return {'per_kp': np.zeros(4), 'shoulders': 0.0,
-                    'hips': 0.0, 'left': 0.0, 'right': 0.0}
+            return {'per_kp': np.zeros(7), 'shoulders': 0.0,
+                    'hips': 0.0, 'spine': 0.0, 'left': 0.0, 'right': 0.0}
 
         total_score = sum(r.score for r in valid)
         if total_score < 1e-9:
-            per_kp = np.zeros(4)
+            per_kp = np.zeros(7)
         else:
             per_kp = sum(r.kp_conf * r.score for r in valid) / total_score
 
@@ -508,8 +517,9 @@ class BodySearchScanner:
             'per_kp'   : per_kp,
             'shoulders': float(np.mean(per_kp[0:2])),
             'hips'     : float(np.mean(per_kp[2:4])),
-            'left'     : float(np.mean(per_kp[[0, 2]])),  # kp5 + kp11
-            'right'    : float(np.mean(per_kp[[1, 3]])),  # kp6 + kp12
+            'spine'    : float(np.mean(per_kp[4:7])),
+            'left'     : float(np.mean(per_kp[[0, 2]])),
+            'right'    : float(np.mean(per_kp[[1, 3]])),
         }
 
     def best_arm_pose(self) -> Optional[PoseStamped]:
@@ -532,9 +542,9 @@ class BodySearchScanner:
 
         Peso di ogni punto:
           w = score × (1 + completeness_boost × completeness)
-        dove completeness = mean(kp5_conf, kp6_conf, kp11_conf, kp12_conf).
+        dove completeness = mean(SHOULDER_L, SHOULDER_R, HIP_L, HIP_R, SPINE1, SPINE2, SPINE3).
 
-        Questo favorisce i punti in cui tutti e 4 i keypoint erano visibili
+        Questo favorisce i punti in cui tutti e 7 i keypoint erano visibili
         (stima geometricamente diretta) rispetto a quelli con sola spalla +
         offset fisso (stima approssimata).
         Con completeness_boost=0.5: punto con tutti kp visibili pesa 1.5×
@@ -582,14 +592,17 @@ class BodySearchScanner:
 
     def fused_kp_xyz(self) -> np.ndarray | None:
         """
-        Restituisce le posizioni 3D world fuse dei 4 keypoint torso,
+        Restituisce le posizioni 3D world fuse dei 7 keypoint torso,
         pesate per score × kp_conf individuale.
 
-        Ritorna np.ndarray shape (4, 3) con:
-          [0] = kp5  (spalla lontana)
-          [1] = kp6  (spalla vicina)
-          [2] = kp11 (fianco lontano)
-          [3] = kp12 (fianco vicino)
+        Ritorna np.ndarray shape (7, 3) con:
+          [0] = SHOULDER_L
+          [1] = SHOULDER_R
+          [2] = HIP_L
+          [3] = HIP_R
+          [4] = SPINE1
+          [5] = SPINE2
+          [6] = SPINE3
 
         NaN per keypoint mai rilevato in nessun punto.
         Ritorna None se nessun punto valido disponibile.
@@ -598,20 +611,20 @@ class BodySearchScanner:
         if not valid:
             return None
 
-        kp_xyz_sum   = np.zeros((4, 3))
-        kp_weight    = np.zeros(4)
+        kp_xyz_sum   = np.zeros((7, 3))
+        kp_weight    = np.zeros(7)
 
         for r in valid:
             if r.kp_xyz is None:
                 continue
-            for ki in range(4):
+            for ki in range(7):
                 if not np.isnan(r.kp_xyz[ki]).any():
                     w = r.score * float(r.kp_conf[ki]) if r.kp_conf is not None else r.score
                     kp_xyz_sum[ki]   += r.kp_xyz[ki] * w
                     kp_weight[ki]    += w
 
-        result = np.full((4, 3), np.nan)
-        for ki in range(4):
+        result = np.full((7, 3), np.nan)
+        for ki in range(7):
             if kp_weight[ki] > 1e-9:
                 result[ki] = kp_xyz_sum[ki] / kp_weight[ki]
 
@@ -626,9 +639,9 @@ class BodySearchScanner:
         self._frames_valid = 0
         self._score_sum    = 0.0
         self._positions    = []
-        self._kp_conf_sum  = np.zeros(4)   # [kp5, kp6, kp11, kp12]
-        self._kp_xyz_sum   = np.zeros((4, 3))
-        self._kp_xyz_count = np.zeros(4)
+        self._kp_conf_sum  = np.zeros(7)   # [SHOULDER_L, SHOULDER_R, HIP_L, HIP_R, SPINE1, SPINE2, SPINE3]
+        self._kp_xyz_sum   = np.zeros((7, 3))
+        self._kp_xyz_count = np.zeros(7)
 
     def _log_i(self, msg: str):
         if self._log:

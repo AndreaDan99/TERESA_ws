@@ -15,18 +15,18 @@ Struttura sequenza:
   idx=3 : LUQ - Koller's pouch  (fianco sinistro)
   idx=4 : Sovrapubica  (pelvica)
 
-Calcolo punti FAST da keypoint anatomici:
-  kp5  = spalla lontana (+X in world frame)
-  kp6  = spalla vicina  (-X in world frame)
-  kp11 = fianco lontano (+X)
-  kp12 = fianco vicino  (-X)
+Calcolo punti FAST da keypoint anatomici (SMPL-24 indices):
+  SHOULDER_LEFT  = 16  (spalla lontana, +X in world frame)
+  SHOULDER_RIGHT = 17  (spalla vicina,  -X in world frame)
+  HIP_LEFT       = 1   (fianco lontano, +X)
+  HIP_RIGHT      = 2   (fianco vicino,  -X)
 
-  shoulder_mid  = (kp5 + kp6) / 2
-  hip_mid       = (kp11 + kp12) / 2
+  shoulder_mid  = (SHOULDER_LEFT + SHOULDER_RIGHT) / 2
+  hip_mid       = (HIP_LEFT + HIP_RIGHT) / 2
   body_axis     = normalize(hip_mid - shoulder_mid)   [head → feet]
-  lateral_axis  = normalize(kp5 - kp6)                [right → left]
+  lateral_axis  = normalize(SHOULDER_LEFT - SHOULDER_RIGHT)  [right → left]
   torso_len     = |hip_mid - shoulder_mid|
-  shoulder_width = |kp5 - kp6|
+  shoulder_width = |SHOULDER_LEFT - SHOULDER_RIGHT|
 
   pt_subxiphoid  = shoulder_mid + ratio_subxiphoid_body * torso_len * body_axis
   pt_ruq         = shoulder_mid + ratio_ruq_body * torso_len * body_axis
@@ -53,6 +53,16 @@ from __future__ import annotations
 import numpy as np
 
 from builtin_interfaces.msg  import Duration as BuiltinDuration
+from spot_perception.sml_pose_indices import (
+    SHOULDER_LEFT,
+    SHOULDER_RIGHT,
+    HIP_LEFT,
+    HIP_RIGHT,
+    SPINE1,
+    SPINE2,
+    SPINE3,
+    NECK,
+)
 from geometry_msgs.msg       import PoseStamped
 from std_msgs.msg            import Bool
 from visualization_msgs.msg  import Marker
@@ -230,8 +240,8 @@ class ScanManager:
 
         Parameters
         ----------
-        kp_xyz       : np.ndarray shape (4, 3) — [kp5, kp6, kp11, kp12] in world frame.
-                       NaN per keypoint non rilevato.
+        kp_xyz       : np.ndarray shape (4, 3) — [SHOULDER_LEFT, SHOULDER_RIGHT, HIP_LEFT, HIP_RIGHT]
+                       in world frame. NaN per keypoint non rilevato.
         torso_center : np.ndarray shape (3,)   — centro torso fuso dal body scan.
 
         Returns True se il calcolo è riuscito, False se i keypoint sono insufficienti
@@ -240,19 +250,19 @@ class ScanManager:
         if kp_xyz is None or kp_xyz.shape != (4, 3):
             return False
 
-        kp5, kp6, kp11, kp12 = kp_xyz[0], kp_xyz[1], kp_xyz[2], kp_xyz[3]
+        sh_l, sh_r, hi_l, hi_r = kp_xyz[0], kp_xyz[1], kp_xyz[2], kp_xyz[3]
 
         # Controlla che spalle e fianchi siano disponibili
-        shoulders_ok = not (np.isnan(kp5).any() or np.isnan(kp6).any())
-        hips_ok      = not (np.isnan(kp11).any() or np.isnan(kp12).any())
+        shoulders_ok = not (np.isnan(sh_l).any() or np.isnan(sh_r).any())
+        hips_ok      = not (np.isnan(hi_l).any() or np.isnan(hi_r).any())
 
         if not shoulders_ok:
             return False  # spalle obbligatorie (definiscono gli assi)
 
-        shoulder_mid = (kp5 + kp6) / 2.0
+        shoulder_mid = (sh_l + sh_r) / 2.0
 
         if hips_ok:
-            hip_mid = (kp11 + kp12) / 2.0
+            hip_mid = (hi_l + hi_r) / 2.0
         else:
             # Fallback: stima fianchi come shoulder_mid + 0.3m lungo Y world
             hip_mid = shoulder_mid + np.array([0.0, 0.30, 0.0])
@@ -264,7 +274,7 @@ class ScanManager:
             return False
         body_axis = body_vec / body_len
 
-        lat_vec = kp5 - kp6
+        lat_vec = sh_l - sh_r
         lat_len = float(np.linalg.norm(lat_vec))
         if lat_len < 0.02:
             # Fallback: asse Z world come laterale

@@ -6,9 +6,9 @@ Moves the Z1 arm with the RealSense camera over a grid of points
 on the patient's body, coordinating with the WBC coordinator for
 Spot body posture changes via the same per-point protocol as FAST.
 
-Regions (14 points total):
-  HEAD (2) → TORSO (4) → LEFT_ARM (2) → RIGHT_ARM (2) →
-  LEFT_LEG (2) → RIGHT_LEG (2) → FEET (2)
+Regions (22+ points total):
+  HEAD (3) → TORSO (6) → LEFT_ARM (3) → RIGHT_ARM (3) →
+  LEFT_LEG (3) → RIGHT_LEG (3) → FEET (2)
 
 Protocol:
   exposure_scanner          wbc_coordinator
@@ -43,6 +43,7 @@ from tf2_ros import Buffer, TransformListener, TransformException
 from tf2_geometry_msgs import do_transform_point
 
 from teresa_utils.orientation import compute_ee_orientation
+from spot_perception.sml_pose_indices import *
 
 HOME_ORI = np.array([-0.0062, 0.4107, 0.0021, 0.9118])
 
@@ -82,12 +83,12 @@ REGION_COLORS = {
 }
 
 POINTS_PER_REGION = {
-    BodyRegion.HEAD:      2,
-    BodyRegion.TORSO:     4,
-    BodyRegion.LEFT_ARM:  2,
-    BodyRegion.RIGHT_ARM: 2,
-    BodyRegion.LEFT_LEG:  2,
-    BodyRegion.RIGHT_LEG: 2,
+    BodyRegion.HEAD:      3,
+    BodyRegion.TORSO:     6,
+    BodyRegion.LEFT_ARM:  3,
+    BodyRegion.RIGHT_ARM: 3,
+    BodyRegion.LEFT_LEG:  3,
+    BodyRegion.RIGHT_LEG: 3,
     BodyRegion.FEET:      2,
 }
 
@@ -116,7 +117,7 @@ class ExposureScanner(Node):
             .get_parameter_value().double_value
         )
         self._torso_rows = int(
-            self.declare_parameter('exposure_torso_rows', 2)
+            self.declare_parameter('exposure_torso_rows', 3)
             .get_parameter_value().integer_value
         )
         self._torso_cols = int(
@@ -186,6 +187,9 @@ class ExposureScanner(Node):
         self._pub_refined = self.create_publisher(
             PoseArray, '/exposure/refined_skeleton', 10
         )
+        self._pub_grid_points = self.create_publisher(
+            PoseArray, '/exposure/grid_points', 10
+        )
 
         self._timer = self.create_timer(0.1, self._tick)
         self._grid_timer = self.create_timer(0.2, self._publish_grid_markers)
@@ -223,7 +227,7 @@ class ExposureScanner(Node):
         self.get_logger().info(f'Review: goto point {idx}')
 
     def _cb_skeleton(self, msg: PoseArray):
-        if len(msg.poses) < 17:
+        if len(msg.poses) < NUM_JOINTS:
             return
         frame_id = msg.header.frame_id or 'orbbec_color_optical_frame'
         for i, pose in enumerate(msg.poses):
@@ -254,7 +258,7 @@ class ExposureScanner(Node):
     def _cb_body_keypoints(self, msg: PoseArray):
         if not self._active or self._phase != 'dwell':
             return
-        if len(msg.poses) < 17:
+        if len(msg.poses) < NUM_JOINTS:
             return
         for i, pose in enumerate(msg.poses):
             p = pose.position
@@ -288,6 +292,7 @@ class ExposureScanner(Node):
             f'Exposure scan started: {len(self._points)} points, '
             f'{len(set(ep.region for ep in self._points))} regions'
         )
+        self._publish_grid_points()
         self._pub_next.publish(Int32(data=0))
 
     # ── grid generation ──────────────────────────────────────────
@@ -320,37 +325,42 @@ class ExposureScanner(Node):
         elif region == BodyRegion.TORSO:
             return self._gen_torso(kp, z_off)
         elif region == BodyRegion.LEFT_ARM:
-            return self._gen_arm(kp, [5, 7, 9], z_off, region)
+            return self._gen_arm(kp, [SHOULDER_LEFT, ELBOW_LEFT, WRIST_LEFT, HAND_LEFT], z_off, region)
         elif region == BodyRegion.RIGHT_ARM:
-            return self._gen_arm(kp, [6, 8, 10], z_off, region)
+            return self._gen_arm(kp, [SHOULDER_RIGHT, ELBOW_RIGHT, WRIST_RIGHT, HAND_RIGHT], z_off, region)
         elif region == BodyRegion.LEFT_LEG:
-            return self._gen_leg(kp, [11, 13, 15], z_off, region)
+            return self._gen_leg(kp, [HIP_LEFT, KNEE_LEFT, ANKLE_LEFT, FOOT_LEFT], z_off, region)
         elif region == BodyRegion.RIGHT_LEG:
-            return self._gen_leg(kp, [12, 14, 16], z_off, region)
+            return self._gen_leg(kp, [HIP_RIGHT, KNEE_RIGHT, ANKLE_RIGHT, FOOT_RIGHT], z_off, region)
         elif region == BodyRegion.FEET:
             return self._gen_feet(kp, z_off)
         return []
 
     def _gen_head(self, kp: dict,
                   z_off: np.ndarray) -> list[ExposurePoint]:
-        nose = kp.get(0)
-        if nose is None:
-            s5, s6 = kp.get(5), kp.get(6)
-            if s5 is not None and s6 is not None:
-                nose = (s5 + s6) / 2.0 + np.array([0.0, -0.25, 0.0])
+        neck = kp.get(NECK)
+        if neck is None:
+            sl = kp.get(SHOULDER_LEFT)
+            sr = kp.get(SHOULDER_RIGHT)
+            if sl is not None and sr is not None:
+                neck = (sl + sr) / 2.0 + np.array([0.0, -0.25, 0.0])
             else:
                 return []
 
+        head = kp.get(HEAD)
+        center = head if head is not None else neck
+
         shoulder_width = 0.15
-        s5, s6 = kp.get(5), kp.get(6)
-        if s5 is not None and s6 is not None:
-            shoulder_width = float(np.linalg.norm(s6 - s5)) * 0.7
+        sl = kp.get(SHOULDER_LEFT)
+        sr = kp.get(SHOULDER_RIGHT)
+        if sl is not None and sr is not None:
+            shoulder_width = float(np.linalg.norm(sr - sl)) * 0.7
 
         points = []
         n = POINTS_PER_REGION[BodyRegion.HEAD]
         for i in range(n):
             offset_y = (i / max(n - 1, 1) - 0.5) * shoulder_width
-            surface = nose + np.array([0.0, offset_y, 0.0])
+            surface = center + np.array([0.0, offset_y, 0.0])
             camera = surface + z_off
             look_dir = surface - camera
             look_dir /= float(np.linalg.norm(look_dir))
@@ -362,12 +372,12 @@ class ExposureScanner(Node):
 
     def _gen_torso(self, kp: dict,
                    z_off: np.ndarray) -> list[ExposurePoint]:
-        tl = kp.get(5)
-        tr = kp.get(6)
-        bl = kp.get(11)
-        br = kp.get(12)
+        tl = kp.get(SHOULDER_LEFT)
+        tr = kp.get(SHOULDER_RIGHT)
+        bl = kp.get(HIP_LEFT)
+        br = kp.get(HIP_RIGHT)
         if any(x is None for x in [tl, tr, bl, br]):
-            available = [kp[i] for i in [5, 6, 11, 12] if kp.get(i) is not None]
+            available = [kp[i] for i in [SHOULDER_LEFT, SHOULDER_RIGHT, HIP_LEFT, HIP_RIGHT] if kp.get(i) is not None]
             if len(available) < self._min_keypoints:
                 return []
             tl = tr = bl = br = np.mean(available, axis=0)
@@ -416,7 +426,7 @@ class ExposureScanner(Node):
                   z_off: np.ndarray) -> list[ExposurePoint]:
         feet = []
         for side, knee_idx, ankle_idx in [
-            ('left', 13, 15), ('right', 14, 16),
+            ('left', KNEE_LEFT, ANKLE_LEFT), ('right', KNEE_RIGHT, ANKLE_RIGHT),
         ]:
             ankle = kp.get(ankle_idx)
             if ankle is None:
@@ -538,7 +548,7 @@ class ExposureScanner(Node):
         pa = PoseArray()
         pa.header.frame_id = 'world'
         pa.header.stamp = self.get_clock().now().to_msg()
-        for i in range(17):
+        for i in range(NUM_JOINTS):
             pose = Pose()
             if i in self._refined_kp:
                 kp = self._refined_kp[i]
@@ -595,6 +605,21 @@ class ExposureScanner(Node):
                 m.color.a = 0.7
             markers.markers.append(m)
         self._pub_grid.publish(markers)
+
+    def _publish_grid_points(self):
+        pa = PoseArray()
+        pa.header.frame_id = 'world'
+        pa.header.stamp = self.get_clock().now().to_msg()
+        for ep in self._points:
+            pose = Pose()
+            pose.position.x = float(ep.camera_xyz[0])
+            pose.position.y = float(ep.camera_xyz[1])
+            pose.position.z = float(ep.camera_xyz[2])
+            pose.orientation.w = 1.0
+            pa.poses.append(pose)
+        self._pub_grid_points.publish(pa)
+        self.get_logger().info(
+            f'Grid points published: {len(self._points)} positions in world frame')
 
     def _finish(self):
         self._active = False

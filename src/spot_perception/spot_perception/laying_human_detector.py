@@ -13,16 +13,7 @@ from geometry_msgs.msg import PoseArray, PoseStamped, Vector3Stamped
 from std_msgs.msg import String, Float32
 from visualization_msgs.msg import Marker
 
-# COCO keypoint indices
-NOSE      = 0
-L_SHOULDER = 5
-R_SHOULDER = 6
-L_HIP      = 11
-R_HIP      = 12
-L_KNEE     = 13
-R_KNEE     = 14
-L_ANKLE    = 15
-R_ANKLE    = 16
+from spot_perception.sml_pose_indices import *
 
 
 class LayingHumanDetector(Node):
@@ -169,27 +160,29 @@ class LayingHumanDetector(Node):
         - orientamento: Spot guarda verso torso_center
         """
         kp = self._extract_kp(msg)
-        if len(kp) < 17:
+        if len(kp) < NUM_JOINTS:
             return
 
         # --- Centro torso ---
-        torso_pts = [kp[i] for i in [L_SHOULDER, R_SHOULDER, L_HIP, R_HIP] if kp[i] is not None]
+        torso_pts = [kp[i] for i in [SHOULDER_LEFT, SHOULDER_RIGHT, HIP_LEFT, HIP_RIGHT] if kp[i] is not None]
         if len(torso_pts) < 2:
             return
         torso_center = np.mean(torso_pts, axis=0)
 
-        # --- Asse corpo (piedi → testa) ---
-        head_pts = [kp[i] for i in [NOSE, L_SHOULDER, R_SHOULDER] if kp[i] is not None]
-        feet_pts = [kp[i] for i in [L_ANKLE, R_ANKLE] if kp[i] is not None]
-        if len(feet_pts) == 0:
-            feet_pts = [kp[i] for i in [L_KNEE, R_KNEE] if kp[i] is not None]
-        if len(head_pts) == 0 or len(feet_pts) == 0:
-            return
-
-        head_center = np.mean(head_pts, axis=0)
-        feet_center = np.mean(feet_pts, axis=0)
-        body_axis   = head_center - feet_center
-        body_len    = np.linalg.norm(body_axis)
+        # --- Asse corpo (testa → bacino) ---
+        head_pos   = kp[HEAD]   if kp[HEAD]   is not None else None
+        pelvis_pos = kp[PELVIS] if kp[PELVIS] is not None else None
+        if head_pos is not None and pelvis_pos is not None:
+            body_axis = head_pos - pelvis_pos
+        else:
+            # fallback: NECK → mean(ankles)
+            feet_pts = [kp[i] for i in [ANKLE_LEFT, ANKLE_RIGHT] if kp[i] is not None]
+            if len(feet_pts) == 0:
+                feet_pts = [kp[i] for i in [KNEE_LEFT, KNEE_RIGHT] if kp[i] is not None]
+            if kp[NECK] is None or len(feet_pts) == 0:
+                return
+            body_axis = kp[NECK] - np.mean(feet_pts, axis=0)
+        body_len = np.linalg.norm(body_axis)
         if body_len < 0.1:
             return
         body_axis_n = body_axis / body_len
@@ -204,7 +197,10 @@ class LayingHumanDetector(Node):
             lateral = lateral / lat_norm
 
         # --- Bbox half nella direzione laterale ---
-        all_pts = np.array([kp[i] for i in range(17) if kp[i] is not None])
+        arm_leg_points = [kp[i] for i in ARM_JOINTS + LEG_JOINTS if kp[i] is not None]
+        if len(arm_leg_points) < 2:
+            arm_leg_points = [kp[i] for i in range(NUM_JOINTS) if kp[i] is not None]
+        all_pts = np.array(arm_leg_points)
         bbox_min = all_pts.min(axis=0)
         bbox_max = all_pts.max(axis=0)
         bbox_size = bbox_max - bbox_min
@@ -271,13 +267,15 @@ class LayingHumanDetector(Node):
                 return None
             return np.array([p.x, p.y, p.z])
 
-        kp5, kp6   = _kp(5),  _kp(6)
-        kp11, kp12 = _kp(11), _kp(12)
-        if any(x is None for x in [kp5, kp6, kp11, kp12]):
+        kp_shl = _kp(SHOULDER_LEFT)
+        kp_shr = _kp(SHOULDER_RIGHT)
+        kp_hl  = _kp(HIP_LEFT)
+        kp_hr  = _kp(HIP_RIGHT)
+        if any(x is None for x in [kp_shl, kp_shr, kp_hl, kp_hr]):
             return
 
-        shoulder_mid = (kp5 + kp6) / 2.0
-        hip_mid      = (kp11 + kp12) / 2.0
+        shoulder_mid = (kp_shl + kp_shr) / 2.0
+        hip_mid      = (kp_hl + kp_hr) / 2.0
         body_vec     = hip_mid - shoulder_mid
         body_len     = float(np.linalg.norm(body_vec))
         if body_len < 0.1:
