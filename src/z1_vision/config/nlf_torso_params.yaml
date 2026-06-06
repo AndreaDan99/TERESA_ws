@@ -10,3 +10,4 @@ nlf_torso_tracker:
     num_joints: 24
     tracking_mode: "torso"
     scan_mode_output_format: "legacy"
+    process_every_n_frames: 5

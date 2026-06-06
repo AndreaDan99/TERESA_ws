@@ -201,6 +201,10 @@ class NLFSkeletonNode(Node):
         self.declare_parameter("lying_torso_angle_min", 65.0)
         self.declare_parameter("max_tracks",             5)
         self.declare_parameter("target_hysteresis_frames", 10)
+        self.declare_parameter("process_every_n_frames", 5)
+
+        self._process_every = int(self.get_parameter("process_every_n_frames").value)
+        self._frame_count = 0
 
         self._model_path     = str(self.get_parameter("model_path").value)
         self._device         = str(self.get_parameter("device").value)
@@ -417,6 +421,11 @@ class NLFSkeletonNode(Node):
         Inference → assign detections → Kalman update → target selection → publish.
         Mirrors YoloSkeletonNodeOrbbec.cb_color flow exactly.
         """
+        # ── Frame-skip: only run NLF every N frames ───────────────────────
+        self._frame_count += 1
+        if self._frame_count % self._process_every != 0:
+            return  # Kalman filter predicts on skipped frames
+
         if not self._nlf_ready and not self._nlf_stub_warned:
             self._init_model()
         if self.cam_info is None:

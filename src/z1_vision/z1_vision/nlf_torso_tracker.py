@@ -109,6 +109,7 @@ class NLFTorsoTrackerNode(Node):
         self.declare_parameter('recovery_frames',    10)
         self.declare_parameter('tracking_speed',     0.05)
         self.declare_parameter('use_face_fallback',  True)
+        self.declare_parameter('process_every_n_frames', 5)
         self.declare_parameter('chest_offset_from_shoulder', 0.15)
         self.declare_parameter('scan_min_frames',    8)
         self.declare_parameter('guidance_min_conf',      0.5)
@@ -117,6 +118,10 @@ class NLFTorsoTrackerNode(Node):
         # ── NLF-specific parameters ───────────────────────────────────────
         self.declare_parameter('camera_frame', 'camera_color_optical_frame')
         self.declare_parameter('tick_rate_hz', 20.0)
+
+        # ── Frame-skip state ──────────────────────────────────────────────
+        self._process_every = self.get_parameter('process_every_n_frames').value
+        self._frame_count = 0
 
         # ── Read parameters ───────────────────────────────────────────────
         self.conf_thr           = float(self.get_parameter('conf_thr').value)
@@ -331,6 +336,11 @@ class NLFTorsoTrackerNode(Node):
 
     def _cb_image(self, msg: Image):
         """Process incoming RGB image through NLF, extract torso, store for _tick."""
+        # ── Frame-skip: only run NLF every N frames ───────────────────────
+        self._frame_count += 1
+        if self._frame_count % self._process_every != 0:
+            return  # Kalman filter predicts in _tick
+
         # ── Convert ROS image → numpy ─────────────────────────────────────
         try:
             rgb = self.bridge.imgmsg_to_cv2(msg, desired_encoding='rgb8')
