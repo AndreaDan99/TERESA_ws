@@ -537,7 +537,7 @@ The keyboard node subscribes to `/wbc/tf_ready` (Bool) to know when SpotCore is 
 | `src/teresa_utils/` | Shared orientation & transform utilities (no ROS node) |
 | `src/z1_vision/` | Z1 arm: FSM, IK, impedance, YOLO tracking, workspace checker |
 | `src/spot_control/` | Spot navigation, WBC coordinator, WBC QP controller, ik_goal_mux, perception launcher |
-| `src/spot_perception/` | Orbbec perception: YOLO skeleton, posture classifier, laying detector |
+| `src/spot_perception/` | Orbbec perception: YOLO skeleton (ByteTrack tracking, EMA smoothing), posture classifier (torso-only fallback), laying detector |
 | `src/teresa_demo/` | Visitor demo: Spot + Z1 simultaneous search movements (no cameras/WBC) |
 | `src/spot_msgs/` | Custom ROS2 messages (Trajectory action only) |
 | `src/z1_ros2/` | Unitree Z1 hardware interface, URDF, MoveIt2, bringup configs |
@@ -551,7 +551,7 @@ The keyboard node subscribes to `/wbc/tf_ready` (Bool) to know when SpotCore is 
 | File | Package | Governs |
 |------|---------|---------|
 | `z1_fsm_params.yaml` | z1_vision | FSM topics, home pose, approach offset, FAST point ratios, workspace safety margin, WBC startup timeout |
-| `z1_yolo_torso_params.yaml` | z1_vision | YOLO model path, confidence, Kalman gains, lock threshold |
+| `z1_yolo_torso_params.yaml` | z1_vision | YOLO model path, confidence, ByteTrack tracking params, lock threshold |
 | `z1_ik_jtc_params.yaml` | z1_vision | URDF path, IK tol/damping, max_joint_vel (0.2 rad/s), trajectory timing |
 | `impedance_control_params.yaml` | z1_vision | K_p [150,150,300], K_d, K_i, approach speed, contact threshold |
 | `surface_params.yaml` | z1_vision | Depth ROI size, PCA config, frame names |
@@ -593,6 +593,14 @@ Z → right to left
 ### YOLO Model
 
 `yolo11n-pose.pt` lives at the workspace root. Used by both `z1_yolo_torso_tracker` (RealSense) and `yolo_skeleton_spot` (Orbbec).
+
+### YOLO Skeleton Tracking (yolo_skeleton_spot.py)
+
+The Orbbec skeleton node uses YOLO's built-in `model.track()` with **ByteTrack** for multi-person tracking with persistent IDs across frames. This replaces the previous manual Kalman3D tracking (17 independent filters, greedy assignment, mahalanobis gating).
+
+- **ByteTrack**: automatic ID assignment and re-identification. No more confusion with multiple people in frame.
+- **EMA smoothing** (alpha=0.3): temporal smoothing of keypoint positions without Kalman overhead. Produces stable 3D keypoints for downstream posture classification and approach point computation.
+- **Torso-only fallback**: when knees are not visible (common with desk-mounted camera), the posture classifier falls back to torso angle alone: STANDING (< 25°), SITTING (25-65°), LYING (> 65°). The existing knee-based classification is preserved when legs are fully visible.
 
 ### Orbbec Femto Bolt — Power
 

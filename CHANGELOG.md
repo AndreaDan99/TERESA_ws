@@ -5,6 +5,29 @@ Per la descrizione del sistema corrente vedi [`DESCRIPTION.md`](DESCRIPTION.md).
 
 ---
 
+## 6 June 2026 (cont.) — YOLO tracking + posture improvements
+
+### ByteTrack tracking (replaces manual Kalman)
+- Replaced manual Kalman3D tracking (~200 lines) with YOLO's built-in `model.track()` (ByteTrack)
+- Automatic multi-person tracking with persistent IDs across frames — no more "impazzisce con più persone"
+- Removed: 17× Kalman3D filters, greedy assignment, PersonTrack, mahalanobis gating, knee angle validation
+- Added: EMA smoothing (alpha=0.3) for stable keypoints without Kalman overhead
+
+### Posture classifier improvements
+- Added torso-only fallback when knees are not visible (common with desk-mounted camera)
+- Classifies STANDING (torso < 25°), SITTING (25-65°), LYING (> 65°) by torso angle alone
+- Existing knee-based classification preserved for when legs are fully visible
+
+### Branch: nlf-24-smpl
+- All NLF integration work (24 SMPL joints, NLF nodes, config, model download script)
+  saved to branch `nlf-24-smpl` for future reference
+- TERESA main branch restored to pre-NLF state for stability
+
+### Files modified
+`yolo_skeleton_spot.py` (rewritten, 518→407 lines), `posture_classifier.py`, `spot_perception.launch.py`
+
+---
+
 ## 6 June 2026 (cont.) — Exposure snapshot + PRE_APPROACH fixes
 
 ### New node: exposure_snapshot.py
