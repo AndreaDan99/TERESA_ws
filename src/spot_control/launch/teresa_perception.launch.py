@@ -6,8 +6,8 @@ Avvia contemporaneamente spot_perception (Orbbec) e z1_perception (RealSense).
 
 Uso:
   ros2 launch spot_control teresa_perception.launch.py
-  ros2 launch spot_control teresa_perception.launch.py use_orbbec_driver:=true
-  ros2 launch spot_control teresa_perception.launch.py use_surface:=false
+  ros2 launch spot_control teresa_perception.launch.py perception_backend:=nlf
+  ros2 launch spot_control teresa_perception.launch.py perception_backend:=yolo
 """
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
@@ -31,11 +31,15 @@ def generate_launch_description():
     use_surface_arg = DeclareLaunchArgument(
         'use_surface', default_value='true',
         description='Avvia realsense_surface_node')
+    perception_backend_arg = DeclareLaunchArgument(
+        'perception_backend', default_value='nlf',
+        description='Perception backend: nlf or yolo')
 
     test_mode = LaunchConfiguration('test_mode')
     use_orbbec_driver = LaunchConfiguration('use_orbbec_driver')
     use_tracker = LaunchConfiguration('use_tracker')
     use_surface = LaunchConfiguration('use_surface')
+    perception_backend = LaunchConfiguration('perception_backend')
 
     # ── Spot perception (Orbbec → WBC) ─────────────────────────────────
     spot_perception_launch = IncludeLaunchDescription(
@@ -46,8 +50,9 @@ def generate_launch_description():
             ])
         ]),
         launch_arguments={
-            'test_mode':          test_mode,
-            'use_orbbec_driver':  use_orbbec_driver,
+            'test_mode':            test_mode,
+            'use_orbbec_driver':    use_orbbec_driver,
+            'perception_backend':   perception_backend,
         }.items(),
     )
 
@@ -60,8 +65,9 @@ def generate_launch_description():
             ])
         ]),
         launch_arguments={
-            'use_tracker': use_tracker,
-            'use_surface': use_surface,
+            'use_tracker':         use_tracker,
+            'use_surface':         use_surface,
+            'perception_backend':  perception_backend,
         }.items(),
     )
 
@@ -70,6 +76,7 @@ def generate_launch_description():
         use_orbbec_driver_arg,
         use_tracker_arg,
         use_surface_arg,
+        perception_backend_arg,
         spot_perception_launch,
         z1_perception_launch,
     ])
