@@ -36,6 +36,10 @@ from visualization_msgs.msg import Marker, MarkerArray
 from cv_bridge import CvBridge
 
 import numpy as np
+
+import torch
+import torchvision  # MANDATORY for NLF TorchScript model (YOLOv8x ops)
+
 import cv2
 
 from tf2_ros import Buffer, TransformListener, TransformException
@@ -81,7 +85,7 @@ class NLFTorsoTrackerNode(Node):
         super().__init__('nlf_torso_tracker')
 
         # ── Parameters (from nlf_torso_params.yaml) ──────────────────────
-        self.declare_parameter('model_path',         'nlf_s.torchscript')
+        self.declare_parameter('model_path',         'nlf_s_multi.torchscript')
         self.declare_parameter('device',             'cuda')
         self.declare_parameter('conf_threshold',     0.3)
         self.declare_parameter('max_depth_m',        2.0)
@@ -136,24 +140,30 @@ class NLFTorsoTrackerNode(Node):
         self._camera_frame      = str(self.get_parameter('camera_frame').value)
         tick_rate_hz            = float(self.get_parameter('tick_rate_hz').value)
 
-        # ── NLF model (STUB) ──────────────────────────────────────────────
-        # TODO: Replace with actual NLF torchscript model when available.
-        #   import torch
-        #   model_path = self.get_parameter('model_path').value
-        #   self.nlf_device = self.get_parameter('device').value
-        #   self.nlf_model = torch.jit.load(model_path).to(self.nlf_device).eval()
-        #   self.get_logger().info(f'NLF model loaded: {model_path} on {self.nlf_device}')
-        #
-        # Expected inference interface:
-        #   joints3d = self.nlf_model(image_tensor)  # (1, 24, 3) in camera frame
-        #   joints3d = joints3d.squeeze(0).cpu().numpy()  # (24, 3)
+        # ── NLF model ────────────────────────────────────────────────────
+        self._model_path = str(self.get_parameter('model_path').value)
+        self.nlf_device  = str(self.get_parameter('device').value)
         self.nlf_model = None
-        self.nlf_device = 'cpu'
-        self.get_logger().warn(
-            '⚠️  NLF model not loaded — using STUB (no detections). '
-            'Place nlf_s.torchscript in the package share directory and '
-            'uncomment the torch.jit.load() block above.'
-        )
+
+        try:
+            self.get_logger().info(
+                f"Loading NLF model: {self._model_path} on {self.nlf_device}")
+            self.nlf_model = torch.jit.load(self._model_path)
+            if self.nlf_device == 'cuda' and torch.cuda.is_available():
+                self.nlf_model = self.nlf_model.cuda()
+            else:
+                self.nlf_model = self.nlf_model.cpu()
+                if self.nlf_device == 'cuda':
+                    self.get_logger().warn(
+                        "CUDA requested but not available — falling back to CPU")
+            self.nlf_model.eval()
+            self.get_logger().info("NLF model loaded successfully")
+        except Exception as e:
+            self.get_logger().error(
+                f"Failed to load NLF model ({e}). "
+                "Place nlf_s_multi.torchscript in the workspace root and verify torch/torchvision are installed. "
+                "Running in STUB mode (no detections)."
+            )
 
         # ── Kalman filter ─────────────────────────────────────────────────
         self.kf = Kalman3D(
@@ -323,7 +333,7 @@ class NLFTorsoTrackerNode(Node):
         """Process incoming RGB image through NLF, extract torso, store for _tick."""
         # ── Convert ROS image → numpy ─────────────────────────────────────
         try:
-            rgb = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            rgb = self.bridge.imgmsg_to_cv2(msg, desired_encoding='rgb8')
         except Exception as e:
             self.get_logger().error(f'Image conversion failed: {e}')
             return
@@ -363,41 +373,53 @@ class NLFTorsoTrackerNode(Node):
 
     def _nlf_infer(self, rgb: np.ndarray, stamp) -> np.ndarray | None:
         """
-        Run NLF inference on an RGB image.
-
-        STUB: Returns None until nlf_s.torchscript is available.
-
-        TODO — Real implementation:
-            import torch
-            import torchvision.transforms.functional as TF
-
-            # Preprocess
-            img_rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
-            img_tensor = TF.to_tensor(img_rgb).unsqueeze(0).to(self.nlf_device)
-            # Resize to imgsz x imgsz
-            img_tensor = TF.resize(img_tensor, [self.imgsz, self.imgsz])
-
-            # Inference
-            with torch.no_grad():
-                output = self.nlf_model(img_tensor)
-                joints3d = output['joints3d'].squeeze(0).cpu().numpy()  # (24, 3)
-
-            return joints3d
-
-        Returns:
-            np.ndarray of shape (24, 3) in camera frame, or None.
+        Run NLF inference on an RGB image (numpy H×W×3 uint8).
+        Returns (24, 3) in camera frame (meters) for the best detected person, or None.
         """
-        del rgb, stamp  # unused in stub
-
-        # ── STUB: no model loaded ─────────────────────────────────────────
         if self.nlf_model is None:
             return None
 
-        # TODO: Unreachable until torch.jit.load is uncommented above.
-        # The code below is the expected real inference path.
-        raise NotImplementedError(
-            'NLF model stub — replace with torch.jit.load() when nlf_s.torchscript is available.'
-        )
+        try:
+            image_tensor = torch.from_numpy(rgb).permute(2, 0, 1).unsqueeze(0)
+
+            with torch.inference_mode():
+                pred = self.nlf_model.detect_smpl_batched(
+                    image_tensor,
+                    default_fov_degrees=55.0,
+                    num_aug=1,
+                    detector_threshold=self.conf_thr,
+                    internal_batch_size=64,
+                    suppress_implausible_poses=True,
+                )
+
+            if (not pred.get('joints3d') or len(pred['joints3d']) == 0
+                    or len(pred['joints3d'][0]) == 0):
+                return None
+
+            joints_mm = pred['joints3d'][0]       # (n_people, 24, 3) mm
+            joints_m = joints_mm.cpu().numpy() / 1000.0
+            n_people = joints_m.shape[0]
+
+            if n_people == 1:
+                return joints_m[0]
+
+            # Multi-person → pick highest-confidence detection
+            best_idx = 0
+            best_score = -1.0
+            if pred.get('boxes') and len(pred['boxes']) > 0:
+                boxes = pred['boxes'][0].cpu().numpy()  # (n_people, 5)
+                if boxes.shape[0] == n_people:
+                    best_idx = int(np.argmax(boxes[:, 4]))
+                    best_score = float(boxes[best_idx, 4])
+
+            self.get_logger().debug(
+                f"NLF: {n_people} people, selected #{best_idx} (score={best_score:.2f})",
+                throttle_duration_sec=2.0)
+            return joints_m[best_idx]
+
+        except Exception as e:
+            self.get_logger().error(f"NLF inference failed: {e}", throttle_duration_sec=2.0)
+            return None
 
     # ══════════════════════════════════════════════════════════════════════
     #  TORSO / KEYPOINT EXTRACTION

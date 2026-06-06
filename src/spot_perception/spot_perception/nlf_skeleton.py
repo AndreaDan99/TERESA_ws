@@ -9,6 +9,9 @@ import time
 
 import numpy as np
 
+import torch
+import torchvision  # MANDATORY for NLF TorchScript model (YOLOv8x ops)
+
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, CameraInfo
@@ -182,8 +185,8 @@ class NLFSkeletonNode(Node):
         super().__init__("nlf_skeleton_node")
 
         # ── Parameters (from nlf_params.yaml) ─────────────────────────────────
-        self.declare_parameter("model_path",        "nlf_s.torchscript")
-        self.declare_parameter("model_url",         "https://github.com/isarandi/nlf/releases/download/v0.3.2/nlf_s.torchscript")
+        self.declare_parameter("model_path",        "nlf_s_multi.torchscript")
+        self.declare_parameter("model_url",         "https://github.com/isarandi/nlf/releases/download/v0.2.0/nlf_s_multi_multi.torchscript")
         self.declare_parameter("device",            "cuda")
         self.declare_parameter("conf_threshold",     0.3)
         self.declare_parameter("max_depth_m",        5.0)
@@ -245,7 +248,7 @@ class NLFSkeletonNode(Node):
         self.KNEE_MIN_DEG = 30.0
         self.KNEE_MAX_DEG = 175.0
 
-        # NLF model (lazy init, stub until nlf_s.torchscript is available)
+        # NLF model (lazy init, stub until nlf_s_multi.torchscript is available)
         self._nlf_model = None
         self._nlf_ready = False
         self._nlf_stub_warned = False
@@ -256,27 +259,33 @@ class NLFSkeletonNode(Node):
     # ── NLF model loading ──────────────────────────────────────────────────────
 
     def _init_model(self):
-        """
-        TODO: NLF model integration.
-        When nlf_s.torchscript is available at self._model_path:
-            import torch
-            self._nlf_model = torch.jit.load(self._model_path).to(self._device).eval()
-            self._nlf_ready = True
-            self.get_logger().info(f"NLF model loaded from {self._model_path}")
-        """
+        """Load NLF TorchScript model from self._model_path. Sets self._nlf_ready on success."""
         try:
-            import torch  # noqa: F401 — verify torch is installed
-        except ImportError:
+            import torch  # noqa: F401
+            import torchvision  # noqa: F401
+        except ImportError as e:
             self.get_logger().error(
-                "PyTorch not installed. NLF inference requires torch. "
-                "Install with: pip install torch")
+                f"PyTorch/torchvision not installed ({e}). "
+                "Install with: pip install torch torchvision")
             self._nlf_stub_warned = True
             return
 
-        if not self._nlf_stub_warned:
-            self.get_logger().warn(
-                "NLF model not available. Set model_path to a valid nlf_s.torchscript file. "
-                "Publishing empty poses until model is loaded.")
+        try:
+            self.get_logger().info(
+                f"Loading NLF model: {self._model_path} on {self._device}")
+            self._nlf_model = torch.jit.load(self._model_path)
+            if self._device == 'cuda' and torch.cuda.is_available():
+                self._nlf_model = self._nlf_model.cuda()
+            else:
+                self._nlf_model = self._nlf_model.cpu()
+                if self._device == 'cuda':
+                    self.get_logger().warn(
+                        "CUDA requested but not available — falling back to CPU")
+            self._nlf_model.eval()
+            self._nlf_ready = True
+            self.get_logger().info("NLF model loaded successfully")
+        except Exception as e:
+            self.get_logger().error(f"Failed to load NLF model: {e}")
             self._nlf_stub_warned = True
 
     def _cb_caminfo(self, msg):
@@ -284,21 +293,78 @@ class NLFSkeletonNode(Node):
 
     # ── NLF inference ──────────────────────────────────────────────────────────
 
-    def _run_nlf_inference(self, img):
+    def _run_nlf_inference(self, img_rgb):
         """
-        Run NLF inference on RGB image. Returns list[dict] per detected person:
-          {'joints3d': (24,3), 'conf': (24,), 'vertices3d': (6890,3)|None, 'bbox': ...}
-        STUB: returns [] until model is loaded.
-        TODO: replace with actual NLF inference:
-            input_tensor = self._preprocess(img)
-            with torch.no_grad():
-                output = self._nlf_model(input_tensor.to(self._device))
-            return self._postprocess(output)
+        Run NLF inference on RGB image (numpy H×W×3 uint8).
+        Returns list[dict] per detected person:
+          {'joints3d': (24,3) meters, 'conf': (24,) [0-1],
+           'vertices3d': (6890,3) meters|None, 'bbox': ...}
         """
-        if not self._nlf_stub_warned:
-            self.get_logger().warn("NLF model not loaded. Returning empty detections.")
-            self._nlf_stub_warned = True
-        return []
+        if not self._nlf_ready:
+            return []
+
+        try:
+            # HWC → CHW → add batch dim, keep uint8 [0-255]
+            image_tensor = torch.from_numpy(img_rgb).permute(2, 0, 1).unsqueeze(0)
+
+            with torch.inference_mode():
+                pred = self._nlf_model.detect_smpl_batched(
+                    image_tensor,
+                    default_fov_degrees=55.0,
+                    num_aug=1,
+                    detector_threshold=self._conf_thr,
+                    internal_batch_size=64,
+                    suppress_implausible_poses=True,
+                )
+
+            # Extract results for the (single) batch element
+            if (not pred.get('joints3d') or len(pred['joints3d']) == 0
+                    or len(pred['joints3d'][0]) == 0):
+                return []
+
+            joints_mm = pred['joints3d'][0]          # (n_people, 24, 3) mm
+            joints_m = joints_mm.cpu().numpy() / 1000.0  # m
+            n_people = joints_m.shape[0]
+
+            # Per-joint confidence from uncertainty (mm) → [0-1]
+            if pred.get('joint_uncertainties') and len(pred['joint_uncertainties']) > 0:
+                uncert_mm = pred['joint_uncertainties'][0].cpu().numpy()  # (n_people, 24)
+                conf = np.exp(-uncert_mm / 50.0)  # 50 mm → ~0.37
+            else:
+                conf = np.ones((n_people, NUM_JOINTS), dtype=np.float64)
+
+            # Box scores for person-level conf
+            box_scores = np.ones(n_people, dtype=np.float64)
+            if pred.get('boxes') and len(pred['boxes']) > 0:
+                boxes = pred['boxes'][0].cpu().numpy()  # (n_people, 5)
+                if boxes.shape[0] == n_people:
+                    box_scores = boxes[:, 4]  # confidence score
+
+            # Vertices for mesh (if available)
+            vertices_list = [None] * n_people
+            if pred.get('vertices3d') and len(pred['vertices3d']) > 0:
+                verts_mm = pred['vertices3d'][0].cpu().numpy()  # (n_people, 6890, 3) mm
+                if verts_mm.shape[0] == n_people:
+                    for p in range(n_people):
+                        vertices_list[p] = verts_mm[p] / 1000.0  # m
+
+            # Build per-person detection dicts
+            detections = []
+            for p in range(n_people):
+                det = {
+                    'joints3d': joints_m[p],           # (24, 3) m
+                    'conf': conf[p].astype(np.float64),  # (24,)
+                    'bbox_score': float(box_scores[p]),
+                }
+                if vertices_list[p] is not None:
+                    det['vertices3d'] = vertices_list[p]
+                detections.append(det)
+
+            return detections
+
+        except Exception as e:
+            self.get_logger().error(f"NLF inference failed: {e}", throttle_duration_sec=2.0)
+            return []
 
     # ── Torso centroid (for track assignment) ──────────────────────────────────
 
@@ -356,7 +422,7 @@ class NLFSkeletonNode(Node):
         if self.cam_info is None:
             return
 
-        img = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+        img = self.bridge.imgmsg_to_cv2(msg, "rgb8")
         detections = self._run_nlf_inference(img)
         now = time.monotonic()
 
