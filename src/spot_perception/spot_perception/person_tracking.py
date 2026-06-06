@@ -187,18 +187,33 @@ def assign_detections_to_tracks(detection_centroids, tracks, max_dist):
 # ── Target selection ──────────────────────────────────────────
 def torso_angle_deg(track):
     """
-    Compute torso angle (°) between the SPINE vector (SPINE3→SPINE1) and world-up.
-    Returns None if SPINE1 or SPINE3 are unavailable.
+    Compute torso angle (°) between the torso axis and world-up.
+    Primary: SPINE vector (SPINE3→SPINE1) for NLF mode.
+    Fallback: shoulder→hip vector for YOLO mode (spine joints are NaN).
+    Returns None if neither can be computed.
     """
     pts = [kf.get_position() for kf in track.kf]
-    if pts[SPINE1] is None or pts[SPINE3] is None:
-        return None
-    v = pts[SPINE3] - pts[SPINE1]  # SPINE3→SPINE1 (upward in body frame)
-    n = np.linalg.norm(v)
-    if n < 1e-6:
-        return None
-    cos_a = float(np.clip(np.dot(v / n, _UP), -1.0, 1.0))
-    return float(np.degrees(np.arccos(cos_a)))
+
+    # Primary: SPINE vector (NLF mode — spine joints available)
+    if pts[SPINE1] is not None and pts[SPINE3] is not None:
+        v = pts[SPINE3] - pts[SPINE1]  # SPINE3→SPINE1 (upward in body frame)
+        n = np.linalg.norm(v)
+        if n >= 1e-6:
+            cos_a = float(np.clip(np.dot(v / n, _UP), -1.0, 1.0))
+            return float(np.degrees(np.arccos(cos_a)))
+
+    # Fallback: shoulder→hip vector (YOLO mode — spine joints are NaN)
+    if (pts[SHOULDER_LEFT] is not None and pts[SHOULDER_RIGHT] is not None and
+            pts[HIP_LEFT] is not None and pts[HIP_RIGHT] is not None):
+        shoulder_mid = (pts[SHOULDER_LEFT] + pts[SHOULDER_RIGHT]) / 2.0
+        hip_mid = (pts[HIP_LEFT] + pts[HIP_RIGHT]) / 2.0
+        v = shoulder_mid - hip_mid
+        n = np.linalg.norm(v)
+        if n >= 1e-6:
+            cos_a = float(np.clip(np.dot(v / n, _UP), -1.0, 1.0))
+            return float(np.degrees(np.arccos(cos_a)))
+
+    return None
 
 
 def select_target(tracks, lying_angle_min,
