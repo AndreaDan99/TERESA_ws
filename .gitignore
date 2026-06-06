@@ -56,3 +56,6 @@ paper/
 TERESA_RAL/
 TERESA_z1_progress.tex
 TERESA_z1_progress.pdf
+
+# NLF model files
+*.torchscript
