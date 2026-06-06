@@ -2,8 +2,8 @@
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE_ROOT="$(dirname "$SCRIPT_DIR")"
-MODEL_URL="https://github.com/isarandi/nlf/releases/download/v0.3.2/nlf_s.torchscript"
-MODEL_PATH="$WORKSPACE_ROOT/nlf_s.torchscript"
+MODEL_URL="https://github.com/isarandi/nlf/releases/download/v0.2.0/nlf_s_multi.torchscript"
+MODEL_PATH="$WORKSPACE_ROOT/nlf_s_multi.torchscript"
 
 if [ -f "$MODEL_PATH" ]; then
     echo "Model already exists at $MODEL_PATH"
