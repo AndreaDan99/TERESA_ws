@@ -224,7 +224,7 @@ body{
       <span class="label">Posture:</span><span class="val" id="posture-val">---</span>
       <span class="label">Conf:</span><span class="val" id="conf-val">---</span>
       <span class="label">Torso:</span><span class="val" id="tracker-val">---</span>
-      <span class="label">Joints:</span><span class="val" id="joints-val">0/17</span>
+       <span class="label">Joints:</span><span class="val" id="joints-val">0/24</span>
     </div>
     <div id="exposure-legend" style="display:none">
       <span class="legend-label">EXPOSURE:</span>
@@ -242,7 +242,7 @@ body{
     <div class="cam-panel" style="flex:1;min-height:400px">
       <div class="cam-header">
         <span class="title">BODY MAP — top-down view</span>
-        <span class="tag" id="bm-kp-count">0/17</span>
+         <span class="tag" id="bm-kp-count">0/24</span>
       </div>
       <div class="cam-body" style="background:var(--bg)">
         <canvas id="body-map-canvas"></canvas>
@@ -482,7 +482,7 @@ class TeresaController{
       this._bodyMapSkelSub.subscribe(msg=>{
         this.bodyMapSkeleton=msg.poses||[];
         const c=this.bodyMapSkeleton.filter(p=>p.position&&!isNaN(p.position.x)).length;
-        $('bm-kp-count').textContent=c+'/17';
+         $('bm-kp-count').textContent=c+'/24';
         if(c>0){$('bm-placeholder').style.display='none';}
         this.drawBodyMap();
       });
@@ -502,7 +502,7 @@ class TeresaController{
   _closeBodyMap(){
     this.bodyMapSkelVisible=false;this.bodyMapGridVisible=false;
     $('bm-placeholder').style.display='flex';
-    $('bm-kp-count').textContent='0/17';
+     $('bm-kp-count').textContent='0/24';
     const c=$('body-map-canvas');c.getContext('2d').clearRect(0,0,c.width,c.height);
     this.log('Body Map closed');
   }
@@ -533,9 +533,9 @@ class TeresaController{
     const ox=(W-dx*scale)/2,oy=(H-dy*scale)/2;
     const proj=(wx,wy)=>({x:ox+(wx-xMin)*scale,y:oy+(wy-yMin)*scale});
 
-    const BODY_KP_COLORS=['#ffdc00','#00ccff','#00ccff','#00ddff','#00ddff','#3366ff','#3366ff','#ff3333','#ff8000','#ff3333','#ff8000','#33cc33','#66ff66','#33cc33','#66ff66','#33cc33','#66ff66'];
+     const BODY_KP_COLORS=['#ffdc00','#33cc33','#66ff66','#ff8000','#33cc33','#66ff66','#ff8000','#33cc33','#66ff66','#ff8000','#9933ff','#9933ff','#00ccff','#3366ff','#3366ff','#cc00ff','#3366ff','#3366ff','#ff3333','#ff8000','#ff3333','#ff8000','#ffcc00','#ffcc00'];
 
-    if(this.bodyMapSkelVisible&&skel&&skel.length>=17){
+     if(this.bodyMapSkelVisible&&skel&&skel.length>=24){
       const pts=skel.map(p=>(p.position&&!isNaN(p.position.x))?proj(p.position.x,p.position.y):null);
       ctx.strokeStyle='rgba(200,200,220,.5)';ctx.lineWidth=1.5;
       for(const[i,j]of SKELETON_EDGES){const a=pts[i],b=pts[j];if(a&&b){ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}}
@@ -604,7 +604,7 @@ class TeresaController{
     this.skelSub.subscribe(msg=>{
       this.lastSkelTs=Date.now();this.skeleton=msg.poses||[];this.drawOrbbecOverlay();
       const v=this.skeleton.filter(p=>p.position&&p.position.z>.01).length;
-      $('joints-val').textContent=v+'/17';$('yolo-indicator')&&($('yolo-indicator').textContent='active');
+       $('joints-val').textContent=v+'/24';$('yolo-indicator')&&($('yolo-indicator').textContent='active');
     });
 
     /* Body bbox */

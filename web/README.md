@@ -98,11 +98,11 @@ Pagina separata (apribile dal pannello controllo o indipendentemente) che mostra
 │  [1280×720 px]              │  [1280×720 px]              │
 │                             │                             │
 │  feed camera +              │  feed camera                │
-│  scheletro YOLO overlay     │  bordo verde/giallo per     │
-│  (17 joint + connessioni)   │  stato torso tracker        │
+│  scheletro SMPL overlay      │  bordo verde/giallo per     │
+│  (24 joint + connessioni)   │  stato torso tracker        │
 │                             │                             │
 ├─────────────────────────────┴─────────────────────────────┤
-│  LYING  |  85%  |  LOCKED  |  12/17                       │
+│  LYING  |  85%  |  LOCKED  |  18/24                       │
 ├───────────────────────────────────────────────────────────┤
 │  [← Back to Control] [⏸ Pause] [👁 Hide Orbbec] [👁 Hide RS] │
 └───────────────────────────────────────────────────────────┘
@@ -115,14 +115,14 @@ Pagina separata (apribile dal pannello controllo o indipendentemente) che mostra
 | `/orbbec/color/image_raw` | `sensor_msgs/Image` | Feed Orbbec |
 | `/orbbec/color/camera_info` | `sensor_msgs/CameraInfo` | Intrinseci per proiezione 3D→2D |
 | `/camera/camera/color/image_raw` | `sensor_msgs/Image` | Feed RealSense |
-| `/human_pose/points_3d` | `geometry_msgs/PoseArray` | Scheletro YOLO in 3D (17 keypoint COCO) |
+| `/human_pose/points_3d` | `geometry_msgs/PoseArray` | Scheletro SMPL in 3D (24 keypoint) |
 | `/human_pose/posture` | `std_msgs/String` | Postura rilevata |
 | `/human_pose/posture_confidence` | `std_msgs/Float32` | Confidenza [0-1] |
 | `/torso_tracker_state` | `std_msgs/String` | Stato tracker RealSense |
 
 ### Overlay YOLO su Orbbec
 
-I 17 keypoint 3D vengono proiettati in 2D usando i parametri intrinseci della camera (fx, fy, cx, cy da CameraInfo):
+I 24 keypoint 3D vengono proiettati in 2D usando i parametri intrinseci della camera (fx, fy, cx, cy da CameraInfo):
 
 ```
 u = fx * (x/z) + cx    v = fy * (y/z) + cy

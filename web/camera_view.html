@@ -227,7 +227,7 @@
   <span class="label">Torso tracker:</span>
   <span class="val" id="tracker-val">---</span>
   <span class="label">Skeleton joints:</span>
-  <span class="val" id="joints-val">0/17</span>
+   <span class="val" id="joints-val">0/24</span>
 </div>
 
 <div id="nav-bar">
@@ -411,7 +411,7 @@
         this.skeleton = msg.poses || [];
         this.drawOrbbecOverlay();
         const visible = this.skeleton.filter(p => p.position.z > 0.01).length;
-        $id('joints-val').textContent = visible + '/17';
+         $id('joints-val').textContent = visible + '/24';
         $id('yolo-indicator').textContent = 'active';
         $id('yolo-indicator').style.color = 'var(--accent)';
       });
