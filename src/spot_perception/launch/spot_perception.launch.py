@@ -42,6 +42,10 @@ def generate_launch_description():
     )
     perception_backend = LaunchConfiguration('perception_backend')
 
+    # Config files
+    nlf_params_file = PathJoinSubstitution([
+        FindPackageShare('spot_perception'), 'config', 'nlf_params.yaml']) 
+
     # ============================================================
     # 1) ORBBEC CAMERA (Femto Bolt)
     # ============================================================
@@ -134,17 +138,7 @@ def generate_launch_description():
         executable='nlf_skeleton',
         name='nlf_skeleton',
         output='screen',
-        parameters=[{
-            'model_path': 'yolo11n-pose.pt',
-            'conf_thr': 0.25,
-            'vel_damping': 0.5,
-            'max_depth_m': 5.0,
-            'max_track_distance': 0.6,
-            'track_timeout': 1.5,
-            'lying_torso_angle_min': 65.0,
-            'max_tracks': 5,
-            'target_hysteresis_frames': 10,
-        }],
+        parameters=[nlf_params_file],
         condition=IfCondition(PythonExpression(['"', perception_backend, '" == "nlf"']))
     )
 
