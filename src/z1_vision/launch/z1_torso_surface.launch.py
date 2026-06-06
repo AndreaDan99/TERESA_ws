@@ -20,6 +20,13 @@ def generate_launch_description():
     use_fsm = LaunchConfiguration('use_fsm')
     use_tracker_node = LaunchConfiguration('use_tracker_node')
 
+    perception_backend_arg = DeclareLaunchArgument(
+        'perception_backend',
+        default_value='nlf',
+        description='Perception backend: nlf or yolo'
+    )
+    perception_backend = LaunchConfiguration('perception_backend')
+
     # ── NUOVO: YAML parametri torso tracker ───────────────────────
     torso_params_file = PathJoinSubstitution([
         FindPackageShare('z1_vision'),
@@ -50,7 +57,21 @@ def generate_launch_description():
         name='z1_yolo_torso_tracker',
         parameters=[torso_params_file],   # ← carica da YAML
         output='screen',
-        condition=IfCondition(use_tracker_node)
+        condition=IfCondition(PythonExpression([
+            '"', perception_backend, '" == "yolo" and "', use_tracker_node, '" == "true"'
+        ]))
+    )
+
+    # =========================================================
+    # NODO 1b: NLF Torso Tracker (alternative to YOLO)
+    # =========================================================
+    nlf_tracker_node = Node(
+        package='z1_vision',
+        executable='nlf_torso_tracker',
+        name='nlf_torso_tracker',
+        parameters=[torso_params_file],
+        output='screen',
+        condition=IfCondition(PythonExpression(['"', perception_backend, '" == "nlf"']))
     )
 
     # =========================================================
@@ -93,7 +114,9 @@ def generate_launch_description():
             default_value='true',
             description='Launch external torso FSM (state machine)'
         ),
+        perception_backend_arg,
 
+        nlf_tracker_node,
         yolo_tracker_node,
         z1_fsm_node,
         surface_node,

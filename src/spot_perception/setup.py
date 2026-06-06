@@ -28,6 +28,7 @@ setup(
             'human_posture_analyzer_spot = spot_perception.posture_classifier:main',
             'human_bounding_box_visualizer = spot_perception.human_bounding_box_visualizer:main',
             'laying_human_detector = spot_perception.laying_human_detector:main',
+            'nlf_skeleton = spot_perception.nlf_skeleton:main',
         ],
     },
 )

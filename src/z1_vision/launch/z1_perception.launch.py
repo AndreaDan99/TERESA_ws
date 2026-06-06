@@ -44,6 +44,13 @@ def generate_launch_description():
     use_tracker = LaunchConfiguration('use_tracker')
     use_surface = LaunchConfiguration('use_surface')
 
+    perception_backend_arg = DeclareLaunchArgument(
+        'perception_backend',
+        default_value='nlf',
+        description='Perception backend: nlf or yolo'
+    )
+    perception_backend = LaunchConfiguration('perception_backend')
+
     # ── Nodi ──────────────────────────────────────────────────────────
 
     # NODO 1 — YOLO Torso Tracker
@@ -55,7 +62,19 @@ def generate_launch_description():
         name       = 'z1_yolo_torso_tracker',
         parameters = [yolo_params],
         output     = 'screen',
-        condition  = IfCondition(use_tracker),
+        condition  = IfCondition(PythonExpression([
+            '"', perception_backend, '" == "yolo" and "', use_tracker, '" == "true"'
+        ])),
+    )
+
+    # NODO 1b — NLF Torso Tracker (alternative to YOLO)
+    nlf_tracker_node = Node(
+        package    = 'z1_vision',
+        executable = 'nlf_torso_tracker',
+        name       = 'nlf_torso_tracker',
+        parameters = [yolo_params],
+        output     = 'screen',
+        condition  = IfCondition(PythonExpression(['"', perception_backend, '" == "nlf"'])),
     )
 
     # NODO 2 — RealSense Surface Node
@@ -73,6 +92,8 @@ def generate_launch_description():
     return LaunchDescription([
         use_tracker_arg,
         use_surface_arg,
+        perception_backend_arg,
+        nlf_tracker_node,
         yolo_tracker_node,
         surface_node,
     ])

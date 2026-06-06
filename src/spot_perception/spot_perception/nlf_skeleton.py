@@ -240,6 +240,7 @@ class NLFSkeletonNode(Node):
         self._target_track_id = None
         self._target_hysteresis_miss = 0
         self._published_track_ids: set = set()
+        self._last_vertices = None          # (N,3) or None — for mesh publishing
         self.edges = _SMPL_EDGES
         self.KNEE_MIN_DEG = 30.0
         self.KNEE_MAX_DEG = 175.0
@@ -406,8 +407,23 @@ class NLFSkeletonNode(Node):
         target = next(
             (t for t in self.tracks if t.track_id == self._target_track_id), None)
         if target is not None:
+            # Store vertices from the matching detection for mesh publishing
+            target_det = None
+            for det in detections:
+                if det.get("track_id") == target.track_id:
+                    target_det = det
+                    break
+            if target_det is None and len(detections) > 0:
+                # Fallback: use first detection if track_id not set in detections
+                target_det = detections[0]
+            self._last_vertices = (
+                target_det.get("vertices3d")
+                if target_det is not None and target_det.get("vertices3d") is not None
+                else None
+            )
             self._publish_target_pose(target, msg.header.stamp)
         else:
+            self._last_vertices = None
             self._publish_empty(msg.header.stamp)
         self._publish_all_markers(msg.header.stamp)
 
@@ -553,6 +569,21 @@ class NLFSkeletonNode(Node):
             pose.orientation.w = 1.0
             pa.poses.append(pose)
         self.pub_poses.publish(pa)
+
+        # ── Mesh publishing ────────────────────────────────────────────────────
+        if self._publish_mesh and self._last_vertices is not None:
+            mesh_msg = PoseArray()
+            mesh_msg.header.frame_id = "orbbec_color_optical_frame"
+            mesh_msg.header.stamp = stamp
+            dec = self._mesh_decimation
+            for v in self._last_vertices[::dec]:
+                pose = Pose()
+                pose.position.x = float(v[0])
+                pose.position.y = float(v[1])
+                pose.position.z = float(v[2])
+                pose.orientation.w = 1.0
+                mesh_msg.poses.append(pose)
+            self.pub_mesh.publish(mesh_msg)
 
     def _publish_all_markers(self, stamp):
         """MarkerArray: green (target) or grey (others) joints + bones. DELETE expired tracks."""

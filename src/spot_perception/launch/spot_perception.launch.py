@@ -35,6 +35,13 @@ def generate_launch_description():
     )
     use_orbbec_driver = LaunchConfiguration('use_orbbec_driver')
 
+    perception_backend_arg = DeclareLaunchArgument(
+        'perception_backend',
+        default_value='nlf',
+        description='Perception backend: nlf or yolo'
+    )
+    perception_backend = LaunchConfiguration('perception_backend')
+
     # ============================================================
     # 1) ORBBEC CAMERA (Femto Bolt)
     # ============================================================
@@ -115,7 +122,30 @@ def generate_launch_description():
             'lying_torso_angle_min': 65.0,
             'max_tracks': 5,
             'target_hysteresis_frames': 10,
-        }]
+        }],
+        condition=IfCondition(PythonExpression(['"', perception_backend, '" == "yolo"']))
+    )
+
+    # ============================================================
+    # 3b) NLF SKELETON (Orbbec) — alternative to YOLO
+    # ============================================================
+    nlf_skeleton_node = Node(
+        package='spot_perception',
+        executable='nlf_skeleton',
+        name='nlf_skeleton',
+        output='screen',
+        parameters=[{
+            'model_path': 'yolo11n-pose.pt',
+            'conf_thr': 0.25,
+            'vel_damping': 0.5,
+            'max_depth_m': 5.0,
+            'max_track_distance': 0.6,
+            'track_timeout': 1.5,
+            'lying_torso_angle_min': 65.0,
+            'max_tracks': 5,
+            'target_hysteresis_frames': 10,
+        }],
+        condition=IfCondition(PythonExpression(['"', perception_backend, '" == "nlf"']))
     )
 
     # ============================================================
@@ -172,6 +202,7 @@ def generate_launch_description():
     return LaunchDescription([
         test_mode_arg,
         use_orbbec_driver_arg,
+        perception_backend_arg,
 
         LogInfo(msg=['Spot Perception System — Jetson + Orbbec Femto Bolt']),
         LogInfo(msg=['   Topics: /orbbec/color/image_raw + /orbbec/depth/image_raw']),
@@ -188,10 +219,14 @@ def generate_launch_description():
         ], condition=IfCondition(use_orbbec_driver)),
 
         # Perception: 4s se Orbbec parte qui, 1s se già avviato dal core
+        # Sceglie backend in base a perception_backend (nlf o yolo)
         TimerAction(period=PythonExpression([
             '4.0 if "', use_orbbec_driver, '" == "true" else 1.0'
         ]), actions=[
-            LogInfo(msg=['YOLO skeleton + Posture + BBox + Laying detector']),
+            LogInfo(msg=['Perception backend: ', perception_backend]),
+            # NLF backend (default)
+            nlf_skeleton_node,
+            # YOLO backend (perception_backend:=yolo)
             yolo_skeleton_node,
             posture_analyzer_node,
             bbox_visualizer_node,
