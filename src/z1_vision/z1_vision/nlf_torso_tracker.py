@@ -148,7 +148,7 @@ class NLFTorsoTrackerNode(Node):
         try:
             self.get_logger().info(
                 f"Loading NLF model: {self._model_path} on {self.nlf_device}")
-            self.nlf_model = torch.jit.load(self._model_path)
+            self.nlf_model = torch.jit.load(self._model_path, map_location=self.nlf_device)
             if self.nlf_device == 'cuda' and torch.cuda.is_available():
                 self.nlf_model = self.nlf_model.cuda()
             else:

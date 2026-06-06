@@ -273,7 +273,7 @@ class NLFSkeletonNode(Node):
         try:
             self.get_logger().info(
                 f"Loading NLF model: {self._model_path} on {self._device}")
-            self._nlf_model = torch.jit.load(self._model_path)
+            self._nlf_model = torch.jit.load(self._model_path, map_location=self._device)
             if self._device == 'cuda' and torch.cuda.is_available():
                 self._nlf_model = self._nlf_model.cuda()
             else:
