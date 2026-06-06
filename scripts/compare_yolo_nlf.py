@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """
 Confronto YOLO vs NLF — velocità e output visivo.
-Cattura un frame dalla RealSense, lo processa con entrambi i modelli,
-stampa i tempi e salva le immagini annotate.
-
 Uso:
-  python3 scripts/compare_yolo_nlf.py
+  python3 scripts/compare_yolo_nlf.py [immagine.jpg]
+  python3 scripts/compare_yolo_nlf.py frame.jpg
 """
 
 import time, sys, os
@@ -15,24 +13,31 @@ import numpy as np
 WORKSPACE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(WORKSPACE)
 
-# ── 1. Cattura frame dalla RealSense ───────────────────────────
-print("📷 Catturo frame dalla RealSense...")
-cap = cv2.VideoCapture(0)  # /dev/video0 — potrebbe essere 2,4,6...
-if not cap.isOpened():
-    for i in range(10):
-        cap = cv2.VideoCapture(i)
-        if cap.isOpened():
-            print(f"   Trovata camera su /dev/video{i}")
-            break
-    else:
-        print("❌ Nessuna camera trovata. Collega la RealSense.")
+# ── 1. Carica immagine ─────────────────────────────────────────
+if len(sys.argv) > 1:
+    path = sys.argv[1]
+    print(f"📷 Carico: {path}")
+    frame = cv2.imread(path)
+    if frame is None:
+        print(f"❌ Impossibile leggere {path}")
         sys.exit(1)
-
-ret, frame = cap.read()
-cap.release()
-if not ret:
-    print("❌ Impossibile leggere il frame.")
-    sys.exit(1)
+else:
+    print("📷 Catturo frame dalla webcam...")
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        for i in range(10):
+            cap = cv2.VideoCapture(i)
+            if cap.isOpened():
+                print(f"   Trovata camera su /dev/video{i}")
+                break
+        else:
+            print("❌ Nessuna camera trovata. Specifica un file: python3 scripts/compare_yolo_nlf.py immagine.jpg")
+            sys.exit(1)
+    ret, frame = cap.read()
+    cap.release()
+    if not ret:
+        print("❌ Impossibile leggere il frame.")
+        sys.exit(1)
 
 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 h, w = frame_rgb.shape[:2]
