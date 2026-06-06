@@ -235,6 +235,18 @@ class HumanPostureAnalyzerSpot(Node):
         posture = "UNKNOWN"
         score = 0.0
 
+        # Fallback: torso-only classification when knees not visible
+        if avg_knee_angle is None and hip_knee_dist_ratio is None:
+            if torso_angle > 65.0:
+                posture = "LYING"
+                score = 0.70
+            elif torso_angle < 25.0:
+                posture = "STANDING"
+                score = 0.65
+            else:
+                posture = "SITTING"
+                score = 0.55
+
         # LYING
         if torso_angle > self.torso_lying and (height is None or height < 0.50):
             posture = "LYING"
