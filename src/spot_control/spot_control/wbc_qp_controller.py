@@ -557,64 +557,34 @@ class WBCQPControllerNode(Node):
 
     # ── PERCEPTUAL_SCAN mode (APPROACHING) ───────────────────────────────
 
-    def _gen_cartesian_scan_grid(self, p_ee: np.ndarray,
-                                  target: np.ndarray) -> list[PoseStamped]:
+    def _gen_cartesian_scan_grid(self, target: np.ndarray) -> list[PoseStamped]:
+        """Generate 6-pose scan grid centered on torso estimate.
+        NLF prior → tight offsets (4cm wrist, 6cm lateral)
+        YOLO only → wide offsets (12cm wrist, 20cm lateral)
+        """
+        # Decide center and offsets
         if self._nlf_prior_valid():
-            return self._gen_reduced_grid_from_prior(self._nlf_prior)
-
-        adv = self._cartesian_x_advance   # 0.10m forward
-        s   = self._cartesian_step        # 0.12m
-        x_desired = target - p_ee
-        x_desired /= max(float(np.linalg.norm(x_desired)), 1e-6)
-
-        all_ok = all(c >= self._pre_scan_conf_thr for c in self._pre_scan_kp_conf)
-        if all_ok:
-            self._pub_grid_type.publish(String(data='minimal'))
-            waypoints = [
-                (adv,       0,  0),    # HOME (+X advance)
-                (adv + s,   0, +s),    # +X+Z
-            ]
+            import numpy as np
+            from spot_perception.sml_pose_indices import SPINE1, SPINE2, SPINE3, PELVIS
+            torso_joints = [self._nlf_prior[j] for j in (SPINE1, SPINE2, SPINE3, PELVIS)
+                            if not np.any(np.isnan(self._nlf_prior[j]))]
+            center = np.mean(torso_joints, axis=0) if torso_joints else target
+            wrist_step = 0.04
+            lateral_step = 0.06
+            grid_type = 'nlf'
         else:
-            self._pub_grid_type.publish(String(data='full'))
-            waypoints = [
-                (adv,       0,  0),    # HOME
-                (adv + s,  +s,  0),    # +X+Y
-                (adv,       0,  0),    # HOME transit
-                (adv + s,  -s,  0),    # +X-Y
-                (adv,       0,  0),    # HOME transit
-                (adv + s,   0, +s),    # +X+Z
-            ]
+            center = target
+            wrist_step = 0.12
+            lateral_step = 0.20
+            grid_type = 'yolo'
 
-        quat = compute_ee_orientation_minrot(x_desired, HOME_ORI.tolist())
-        poses = []
-        for dx, dy, dz in waypoints:
-            pos = p_ee + np.array([dx, dy, dz])
-            pos[2] = max(pos[2], HOME_POS[2])
-            clipped, _, _ = self._ws_checker.clip_target(pos)
-            poses.append(_make_pose_stamped(clipped, quat))
-        return poses
-
-    def _gen_reduced_grid_from_prior(self, nlf_prior: list) -> list[PoseStamped]:
-        wrist_ny = self.get_parameter('body_scan_reduced_wrist_ny').value
-        wrist_nz = self.get_parameter('body_scan_reduced_wrist_nz').value
-        lateral_offsets = self.get_parameter('body_scan_reduced_ny').value  # number of lateral pairs
-
-        from spot_perception.sml_pose_indices import SPINE1, SPINE2, SPINE3, PELVIS
-
-        torso_joints = [nlf_prior[j] for j in (SPINE1, SPINE2, SPINE3, PELVIS)
-                        if not np.any(np.isnan(nlf_prior[j]))]
-        if not torso_joints:
-            return []
-
-        center = np.mean(torso_joints, axis=0)
-        wrist_step = 0.08
-        lateral_step = 0.12  # Y offset per parallax laterale
+        self._pub_grid_type.publish(String(data=grid_type))
 
         poses: list[PoseStamped] = []
 
-        # Phase 1 — wrist sweep alla posizione centrale (wrist_ny × wrist_nz)
-        for wy in range(wrist_ny):
-            for wz in range(wrist_nz):
+        # Phase 1 — wrist sweep at center (2×2 = 4 poses)
+        for wy in range(2):
+            for wz in range(2):
                 pose = PoseStamped()
                 pose.header.frame_id = 'odom'
                 pose.pose.position.x = float(center[0])
@@ -623,20 +593,16 @@ class WBCQPControllerNode(Node):
                 pose.pose.orientation.w = 1.0
                 poses.append(pose)
 
-        # Phase 2 — offset laterali (±Y) per parallasse, senza wrist sweep
-        for idx in range(lateral_offsets):
-            offset = (idx - 0.5) * lateral_step
+        # Phase 2 — lateral parallax (±Y, 2 poses)
+        for sign in [-1.0, 1.0]:
             pose = PoseStamped()
             pose.header.frame_id = 'odom'
             pose.pose.position.x = float(center[0])
-            pose.pose.position.y = float(center[1]) + offset
+            pose.pose.position.y = float(center[1]) + sign * lateral_step
             pose.pose.position.z = float(center[2])
             pose.pose.orientation.w = 1.0
             poses.append(pose)
 
-        self.get_logger().info(
-            f'NLF reduced grid: {len(poses)} poses '
-            f'(wrist {wrist_ny}×{wrist_nz} + {lateral_offsets}×2 lateral)')
         return poses
 
     def _start_perceptual_scan(self) -> None:
@@ -659,7 +625,7 @@ class WBCQPControllerNode(Node):
         else:
             target = p_ee + np.array([0.35, 0, 0])
 
-        poses = self._gen_cartesian_scan_grid(p_ee, target)
+        poses = self._gen_cartesian_scan_grid(target)
         if not poses:
             self.get_logger().warn('No Cartesian scan poses generated')
             self._publish_fast_points()
@@ -680,8 +646,7 @@ class WBCQPControllerNode(Node):
         self._scan_scanner.reset()
         self._pub_tracker_scan.publish(Bool(data=True))
         self.get_logger().info(
-            f'PERCEPTUAL_SCAN: {len(poses)} Cartesian poses '
-            f'(step={self._cartesian_step:.2f}m)')
+            f'PERCEPTUAL_SCAN: {len(poses)} Cartesian poses')
 
     def _tick_perceptual_scan(self) -> None:
         if self._scan_scanner is None:
