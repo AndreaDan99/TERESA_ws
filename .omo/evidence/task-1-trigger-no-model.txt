@@ -1,0 +1,29 @@
+=== TASK 1 EVIDENCE: Trigger guard when model not ready ===
+
+File: src/spot_perception/spot_perception/nlf_skeleton.py
+
+1. LAZY-LOAD GUARD (lines 214-216):
+   if not self._nlf_ready:
+       self.get_logger().warn('NLF trigger received but model not ready')
+       return
+
+2. _nlf_ready INITIALIZATION (line 99):
+   self._nlf_ready = False
+   Set at TOP of __init__ before subscriber/publisher creation.
+
+3. _nlf_ready SET TO TRUE (line 191, in _init_model):
+   self._nlf_ready = True
+   self.get_logger().info("NLF model loaded successfully")
+   Set after model loads successfully in _init_model().
+
+4. MODEL LOADING FLOW:
+   - _init_model() is called lazily from _cb_color (line ~349)
+   - If model fails to load, _nlf_ready stays False
+   - Trigger arriving before model loads → warning logged, no publish
+   - After model loads, _nlf_ready = True → trigger publishes prior
+
+5. ADDITIONAL GUARD (lines 217-219):
+   if self._last_color_msg is None:
+       self.get_logger().warn('NLF trigger received but no image available')
+       return
+   Prevents publish if no image has been received yet.

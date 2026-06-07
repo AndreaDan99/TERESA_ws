@@ -42,6 +42,7 @@ from tf2_ros import Buffer, TransformListener, TransformException
 import tf2_geometry_msgs  # noqa: F401
 
 from teresa_utils.orientation import quat_to_rot, normalize_angle
+from spot_perception.sml_pose_indices import SPINE1, SPINE2, SPINE3, PELVIS
 
 
 class _QualityMonitor:
@@ -209,6 +210,8 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('navigator_timeout',        5.0)   # [s] max wait for Spot to reach WS_EXT goal
         self.declare_parameter('pre_approach_duration',        5.0)   # [s] arm look-at before Spot walks
         self.declare_parameter('step_mode',                   False)  # gate automatic FSM transitions
+        self.declare_parameter('nlf_coherence_threshold',     0.15)  # [m] YOLO−NLF delta for HIGH coherence
+        self.declare_parameter('nlf_divergence_threshold',    0.30)  # [m] YOLO−NLF delta for MEDIUM coherence
 
         p = lambda n: self.get_parameter(n).value
         self._handoff_dist    = float(p('handoff_distance'))
@@ -281,6 +284,7 @@ class WBCCoordinatorNode(Node):
         self._current_body_height: float = 0.0   # last applied body_pose height
         self._search_start: rclpy.time.Time | None = None     # SEARCHING entry time
         self._pre_approach_start: rclpy.time.Time | None = None  # PRE_APPROACH entry time
+        self._pre_approach_fast_start: rclpy.time.Time | None = None  # NLF fast-path safety gate timer
         self._approach_start: rclpy.time.Time | None = None      # APPROACHING entry time
         self._scan_start: rclpy.time.Time | None = None          # SCANNING entry time
         self._exposure_scan_start: rclpy.time.Time | None = None  # EXPOSURE_SCANNING entry time
@@ -325,6 +329,11 @@ class WBCCoordinatorNode(Node):
         self._ws_ext_drive_start: float | None = None # timestamp when drive started
         self._ws_ext_failed: set = set()              # point indices where WS_EXT failed
 
+        # NLF prior (from /exposure/nlf_prior, 24 SMPL joints in odom)
+        self._nlf_prior = None               # list[np.ndarray] | 'timeout' | None
+        self._nlf_trigger_time = None         # rclpy.time.Time or None
+        self._nlf_low_ticks = 0              # consecutive LOW-coherence ticks
+
         # Exposure body pose optimization (same grid search as FAST)
         self._exposure_grid_points: list | None = None  # list of np.ndarray in world frame
         self._exposure_optimal_poses: list = []         # [(h, p, dist), ...] per point
@@ -348,8 +357,11 @@ class WBCCoordinatorNode(Node):
         self.create_subscription(Bool,           '/exposure/terminate',      self._cb_terminate_exposure, 10)
         self.create_subscription(Bool,           '/wbc/set_manual_scan_gate', self._cb_manual_gate, 10)
         self.create_subscription(PoseArray,      '/exposure/grid_points',     self._cb_exposure_grid_points, 10)
+        self.create_subscription(PoseArray,      '/exposure/nlf_prior',       self._cb_nlf_prior,         10)
+        self.create_subscription(PoseArray,      '/human_pose/points_3d',     self._cb_skeleton_stream,   10)
 
         self._pub_goal     = self.create_publisher(PoseStamped, p('wbc_goal_topic'),        10)
+        self._pub_nlf_trigger = self.create_publisher(Bool, '/nlf/trigger', 10)
         self._pub_enable   = self.create_publisher(Bool,        p('wbc_enable_topic'),     10)
         self._pub_state    = self.create_publisher(String,      '/wbc/state',              10)
         self._pub_uncert   = self.create_publisher(Float32,     '/wbc/target_uncertainty', 10)
@@ -839,6 +851,13 @@ class WBCCoordinatorNode(Node):
             self._search_position_start = None  # riprendi dalla posizione corrente
             self._set_state(CoordState.SEARCHING)
 
+        # NLF prior timeout check (non-blocking — does not gate transition)
+        if self._nlf_prior is None and self._nlf_trigger_time is not None:
+            elapsed = (self.get_clock().now() - self._nlf_trigger_time).nanoseconds * 1e-9
+            if elapsed > 10.0:
+                self.get_logger().warn('NLF timeout (10s) — proceeding without prior')
+                self._nlf_prior = 'timeout'
+
     def _check_realsense_guidance(self) -> bool:
         """Ruota e inclina Spot verso il corpo rilevato dalla RealSense.
         Salva orientamento corrente e target per il TF-based settle in SEMI_LOCKING."""
@@ -1088,7 +1107,7 @@ class WBCCoordinatorNode(Node):
         except Exception:
             return None
 
-    def _tick_pre_approach(self) -> None:
+    def _tick_pre_approach_legacy(self) -> None:
         # Publish goal for WBC QP LOOKAT: prefer body_center (torso centroid),
         # fallback to filtered_goal + Z offset for supine torso height.
         if self._body_center_odom is not None:
@@ -1122,6 +1141,163 @@ class WBCCoordinatorNode(Node):
             self._pub_spot_ctrl.publish(Bool(data=False))
             self._set_state(CoordState.APPROACHING)
             return
+
+    def _tick_pre_approach(self) -> None:
+        """PRE_APPROACH: NLF fast-path (1s gate) or legacy sliding-window fallback."""
+        if self._nlf_prior_valid():
+            # ── FAST PATH: NLF prior available ──
+            # Publish LOOKAT goal from NLF prior immediately
+            if self._pre_approach_fast_start is None:
+                # First tick: publish blended NLF+YOLO goal and start safety gate timer
+                nlf_center = self._torso_center_from_prior()
+                target = nlf_center.copy()
+
+                if self._torso_tracker_state in ('ESTIMATING', 'LOCKED') \
+                        and self._torso_pos is not None:
+                    torso_yolo = np.array([self._torso_pos.pose.position.x,
+                                           self._torso_pos.pose.position.y,
+                                           self._torso_pos.pose.position.z])
+                    quality_label, delta = self._check_nlf_delta(torso_yolo)
+                    if quality_label == 'HIGH':
+                        target = 0.7 * nlf_center + 0.3 * torso_yolo
+                    elif quality_label == 'MEDIUM':
+                        target = 0.5 * nlf_center + 0.5 * torso_yolo
+                    else:  # LOW
+                        target = torso_yolo
+                    self.get_logger().info(
+                        f'PRE_APPROACH (NLF+YOLO): quality={quality_label} '
+                        f'δ={delta:.2f}m → goal published, waiting 1s safety gate')
+                else:
+                    self.get_logger().info(
+                        'PRE_APPROACH (NLF): no RealSense — goal published, waiting 1s safety gate')
+
+                goal = PoseStamped()
+                goal.header.frame_id = self._odom_frame
+                goal.header.stamp = self.get_clock().now().to_msg()
+                goal.pose.position.x = float(target[0])
+                goal.pose.position.y = float(target[1])
+                goal.pose.position.z = float(target[2])
+                goal.pose.orientation.w = 1.0
+                self._pub_goal.publish(goal)
+                self._pre_approach_fast_start = self.get_clock().now()
+                return  # stay in PRE_APPROACH for safety gate
+
+            elapsed = (self.get_clock().now() - self._pre_approach_fast_start).nanoseconds * 1e-9
+            if elapsed < 1.0:
+                return  # still in safety gate
+
+            # Safety gate complete — coherence check (non-blocking)
+            if self._torso_tracker_state in ('ESTIMATING', 'LOCKED') \
+                    and self._torso_pos is not None:
+                torso_yolo = np.array([self._torso_pos.pose.position.x,
+                                       self._torso_pos.pose.position.y,
+                                       self._torso_pos.pose.position.z])
+                quality_label, delta = self._check_nlf_delta(torso_yolo)
+                if quality_label == 'HIGH':
+                    self.get_logger().info(
+                        f'RealSense coherent with NLF prior: {delta:.2f}m')
+                elif quality_label == 'MEDIUM':
+                    self.get_logger().warn(
+                        f'RealSense partially diverging from NLF: {delta:.2f}m')
+                else:
+                    self.get_logger().warn(
+                        f'RealSense diverges from NLF: {delta:.2f}m')
+
+                if quality_label == 'LOW':
+                    self._nlf_low_ticks += 1
+                    if self._nlf_low_ticks > 30:
+                        self.get_logger().warn(
+                            'Possible patient movement: NLF prior diverging from YOLO for >3s')
+                else:
+                    self._nlf_low_ticks = 0
+
+            self._pub_spot_ctrl.publish(Bool(data=False))
+            self._set_state(CoordState.APPROACHING)
+            self._pre_approach_fast_start = None  # reset
+        else:
+            # ── FALLBACK: exact 6 June 2026 behavior ──
+            self._tick_pre_approach_legacy()
+
+    # ── NLF prior handlers ────────────────────────────────────────────
+
+    def _cb_nlf_prior(self, msg: PoseArray) -> None:
+        if self._nlf_prior == 'timeout':
+            return
+        if len(msg.poses) != 24:
+            self.get_logger().warn(
+                f'NLF prior: expected 24 joints, got {len(msg.poses)} → ignoring')
+            return
+
+        # Lookup TF: orbbec_color_optical_frame → odom
+        from geometry_msgs.msg import TransformStamped
+        transform: TransformStamped | None = None
+        try:
+            transform = self._tf.lookup_transform(
+                'odom', 'orbbec_color_optical_frame', msg.header.stamp,
+                timeout=Duration(seconds=0.5))
+        except TransformException:
+            self.get_logger().warn(
+                'NLF prior: TF at msg stamp failed, trying latest')
+            try:
+                transform = self._tf.lookup_transform(
+                    'odom', 'orbbec_color_optical_frame', rclpy.time.Time(),
+                    timeout=Duration(seconds=0.5))
+            except TransformException:
+                self.get_logger().warn(
+                    'NLF prior: TF odom←orbbec unavailable → cannot transform')
+
+        if transform is None:
+            return
+
+        R = quat_to_rot(transform.transform.rotation)
+        t = np.array([transform.transform.translation.x,
+                       transform.transform.translation.y,
+                       transform.transform.translation.z])
+
+        joints_odom = []
+        for pose in msg.poses:
+            p_cam = np.array([pose.position.x, pose.position.y, pose.position.z])
+            joints_odom.append(R @ p_cam + t)
+
+        self._nlf_prior = joints_odom
+        self.get_logger().info('NLF prior received: 24 joints in odom')
+
+    def _cb_skeleton_stream(self, msg: PoseArray) -> None:
+        pass  # stub: future Quality Monitor integration
+
+    def _nlf_prior_valid(self) -> bool:
+        if self._nlf_prior is None:
+            return False
+        if self._nlf_prior == 'timeout':
+            return False
+        if len(self._nlf_prior) != 24:
+            return False
+        valid_torso = sum(1 for j in [SPINE1, SPINE2, SPINE3, PELVIS]
+                          if not np.any(np.isnan(self._nlf_prior[j])))
+        return valid_torso >= 4
+
+    def _torso_center_from_prior(self) -> np.ndarray:
+        pts = [self._nlf_prior[j] for j in [SPINE1, SPINE2, SPINE3, PELVIS]
+               if not np.any(np.isnan(self._nlf_prior[j]))]
+        return np.mean(pts, axis=0) if pts else np.zeros(3)
+
+    def _check_nlf_delta(self, torso_yolo: np.ndarray) -> tuple:
+        """Compare YOLO torso position against NLF prior. Returns (label, delta_m)."""
+        if not self._nlf_prior_valid():
+            return ('HIGH', None)
+
+        nlf_center = self._torso_center_from_prior()
+        delta = float(np.linalg.norm(torso_yolo[:3] - nlf_center[:3]))
+
+        coherence = self.get_parameter('nlf_coherence_threshold').value
+        divergence = self.get_parameter('nlf_divergence_threshold').value
+
+        if delta < coherence:
+            return ('HIGH', delta)
+        elif delta < divergence:
+            return ('MEDIUM', delta)
+        else:
+            return ('LOW', delta)
 
     # ── Helpers ───────────────────────────────────────────────────────
 
@@ -1163,13 +1339,31 @@ class WBCCoordinatorNode(Node):
         return math.hypot(dx, dy)
 
     def _filtered_goal(self) -> PoseStamped:
-        """Return the fixed target position in odom frame."""
+        """Return the fixed target position in odom frame (NLF-blended when prior valid)."""
         msg = PoseStamped()
         msg.header.frame_id = self._odom_frame
         msg.header.stamp    = rclpy.time.Time().to_msg()
         msg.pose.orientation.w = 1.0  # identity — WBC QP recomputes orientation
         if self._quality.initialized:
             p = self._quality.get_position()
+            # ── NLF prior blending ──────────────────────────────
+            if self._nlf_prior_valid():
+                quality_label, delta = self._check_nlf_delta(p)
+                nlf_center = self._torso_center_from_prior()
+                if quality_label == 'HIGH':
+                    p = 0.7 * nlf_center + 0.3 * p
+                elif quality_label == 'MEDIUM':
+                    p = 0.5 * nlf_center + 0.5 * p
+                # LOW → keep p as-is (YOLO/Orbbec 100%)
+
+                if quality_label == 'LOW':
+                    self._nlf_low_ticks += 1
+                    if self._nlf_low_ticks > 30:
+                        self.get_logger().warn(
+                            'Possible patient movement: NLF prior diverging for >3s')
+                else:
+                    self._nlf_low_ticks = 0
+
             msg.pose.position.x = float(p[0])
             msg.pose.position.y = float(p[1])
             msg.pose.position.z = float(p[2])
@@ -1623,6 +1817,14 @@ class WBCCoordinatorNode(Node):
             self._search_rotating = False
             self._ik_done = False
             self._set_wbc_enabled(True)
+            # Trigger NLF prior if no valid prior already cached (debounce)
+            if not self._nlf_prior_valid():
+                self._nlf_prior = None
+                self._nlf_trigger_time = self.get_clock().now()
+                msg = Bool()
+                msg.data = True
+                self._pub_nlf_trigger.publish(msg)
+                self.get_logger().info('NLF trigger sent')
         if new_state == CoordState.APPROACHING:
             self._pub_cmd_vel.publish(Twist())
             self._pub_guidance.publish(Bool(data=False))
@@ -1633,6 +1835,7 @@ class WBCCoordinatorNode(Node):
             self._pub_guidance.publish(Bool(data=False))
             self._set_body_pose(0.0, 0.0)
             self._torso_detected_ticks = []
+            self._pre_approach_fast_start = None
         self._state = new_state
 
     def _set_body_pose(self, height: float, pitch: float = 0.0, yaw: float | None = None) -> None:

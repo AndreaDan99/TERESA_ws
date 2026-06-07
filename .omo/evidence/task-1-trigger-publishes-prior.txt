@@ -1,0 +1,28 @@
+=== TASK 1 EVIDENCE: Trigger publishes NLF prior ===
+
+File: src/spot_perception/spot_perception/nlf_skeleton.py
+
+1. SUBSCRIBER /nlf/trigger (line 140-141):
+   self.sub_trigger = self.create_subscription(
+       Bool, '/nlf/trigger', self._cb_trigger, 10)
+
+2. PUBLISHER /exposure/nlf_prior (line 151-152):
+   self.pub_nlf_prior = self.create_publisher(
+       PoseArray, '/exposure/nlf_prior', 10)
+
+3. CALLBACK _cb_trigger (lines 209-260):
+   - Checks msg.data is True (line 212)
+   - Checks _nlf_ready (line 214)
+   - Checks _last_color_msg is not None (line 217)
+   - Runs _run_nlf_inference() on stored image (line 222)
+   - Finds target person: closest lying person (lines 224-243)
+   - Builds PoseArray with 24 SMPL joints in orbbec_color_optical_frame (lines 245-256)
+   - Uses original frame timestamp: self._last_color_msg.header.stamp (line 247)
+   - Publishes on self.pub_nlf_prior (line 258)
+   - Logs: 'NLF prior published: 24 joints' (line 260)
+
+4. EXISTING STREAMING UNCHANGED:
+   - _cb_color (line 343) continues to publish to /human_pose/points_3d via pub_poses
+   - Only addition is self._last_color_msg = msg at line 349 (state capture, no pipeline change)
+
+5. FRAME: orbbec_color_optical_frame (line 246)

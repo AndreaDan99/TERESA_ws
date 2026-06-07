@@ -19,7 +19,7 @@ from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import PoseArray, Pose, Point
 from visualization_msgs.msg import Marker, MarkerArray
 from cv_bridge import CvBridge
-from std_msgs.msg import Header
+from std_msgs.msg import Bool, Header
 
 from spot_perception.sml_pose_indices import (
     PELVIS, HIP_LEFT, HIP_RIGHT,
@@ -95,6 +95,10 @@ class NLFSkeletonNode(Node):
     def __init__(self):
         super().__init__("nlf_skeleton_node")
 
+        # ── Early-init guards ──────────────────────────────────────────────────
+        self._nlf_ready = False
+        self._last_color_msg = None
+
         # ── Parameters (from nlf_params.yaml) ─────────────────────────────────
         self.declare_parameter("model_path",        "nlf_s_multi.torchscript")
         self.declare_parameter("model_url",         "https://github.com/isarandi/nlf/releases/download/v0.2.0/nlf_s_multi_multi.torchscript")
@@ -133,6 +137,8 @@ class NLFSkeletonNode(Node):
             Image, "/orbbec/color/image_raw", self._cb_color, 10)
         self.sub_info = self.create_subscription(
             CameraInfo, "/orbbec/color/camera_info", self._cb_caminfo, 10)
+        self.sub_trigger = self.create_subscription(
+            Bool, '/nlf/trigger', self._cb_trigger, 10)
 
         # Publishers
         self.pub_poses = self.create_publisher(
@@ -142,6 +148,8 @@ class NLFSkeletonNode(Node):
         if self._publish_mesh:
             self.pub_mesh = self.create_publisher(
                 PoseArray, self._mesh_topic, 10)
+        self.pub_nlf_prior = self.create_publisher(
+            PoseArray, '/exposure/nlf_prior', 10)
 
         # ── EMA smoothing state ────────────────────────────────────────────────
         self._smoothed_kp: dict = {}   # keyed by NLF box ID → list of 24 numpy arrays
@@ -156,7 +164,6 @@ class NLFSkeletonNode(Node):
 
         # NLF model (lazy init, stub until nlf_s_multi.torchscript is available)
         self._nlf_model = None
-        self._nlf_ready = False
         self._nlf_stub_warned = False
 
         self.get_logger().info(
@@ -196,6 +203,61 @@ class NLFSkeletonNode(Node):
 
     def _cb_caminfo(self, msg):
         self.cam_info = msg
+
+    # ── Trigger callback (one-shot NLF prior on /nlf/trigger) ───────────────────
+
+    def _cb_trigger(self, msg):
+        """One-shot: run NLF inference on last color frame, publish 24 joints
+        to /exposure/nlf_prior. Does not affect continuous /human_pose/points_3d."""
+        if not msg.data:
+            return
+        if not self._nlf_ready:
+            self.get_logger().warn('NLF trigger received but model not ready')
+            return
+        if self._last_color_msg is None:
+            self.get_logger().warn('NLF trigger received but no image available')
+            return
+
+        img = self.bridge.imgmsg_to_cv2(self._last_color_msg, "rgb8")
+        detections = self._run_nlf_inference(img)
+
+        # Find target: closest lying person (same logic as streaming pipeline)
+        lying = []
+        for det in detections:
+            joints = det['joints3d']
+            sh_l = joints[SHOULDER_LEFT]
+            sh_r = joints[SHOULDER_RIGHT]
+            hi_l = joints[HIP_LEFT]
+            hi_r = joints[HIP_RIGHT]
+            if all(x is not None and not np.isnan(x[0])
+                   for x in [sh_l, sh_r, hi_l, hi_r]):
+                sh_mid = (sh_l + sh_r) / 2.0
+                hi_mid = (hi_l + hi_r) / 2.0
+                torso_vec = sh_mid - hi_mid
+                angle = _angle_between(torso_vec, _UP)
+                if angle > self._lying_angle_min:
+                    depth = float(sh_mid[2])
+                    lying.append((depth, det))
+
+        target_det = lying[0][1] if lying else (
+            detections[0] if detections else None)
+
+        pa = PoseArray()
+        pa.header.frame_id = "orbbec_color_optical_frame"
+        pa.header.stamp = self._last_color_msg.header.stamp
+
+        if target_det is not None:
+            for j in range(NUM_JOINTS):
+                pose = Pose()
+                pose.position.x = float(target_det['joints3d'][j][0])
+                pose.position.y = float(target_det['joints3d'][j][1])
+                pose.position.z = float(target_det['joints3d'][j][2])
+                pose.orientation.w = 1.0
+                pa.poses.append(pose)
+
+        self.pub_nlf_prior.publish(pa)
+        if target_det is not None:
+            self.get_logger().info('NLF prior published: 24 joints')
 
     # ── NLF inference ──────────────────────────────────────────────────────────
 
@@ -283,6 +345,9 @@ class NLFSkeletonNode(Node):
         Inference → EMA smoothing → target selection → publish.
         Simple, direct pipeline — no Kalman filtering.
         """
+        # ── Store last frame for one-shot trigger inference ───────────────
+        self._last_color_msg = msg
+
         # ── Frame-skip: only run NLF every N frames ───────────────────────
         self._frame_count += 1
         if self._frame_count % self._process_every != 0:

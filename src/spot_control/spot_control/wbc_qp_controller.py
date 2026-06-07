@@ -96,6 +96,10 @@ class WBCQPControllerNode(Node):
         self.declare_parameter('pre_scan_conf_thr',      0.6)
         self.declare_parameter('update_period', 0.1)
         self.declare_parameter('workspace_safety_margin', 0.05)
+        self.declare_parameter('body_scan_reduced_ny', 2)
+        self.declare_parameter('body_scan_reduced_nx', 2)
+        self.declare_parameter('body_scan_reduced_wrist_ny', 2)
+        self.declare_parameter('body_scan_reduced_wrist_nz', 2)
         self.declare_parameter('ik_goal_topic',      '/wbc/ik_goal_pose')
         self.declare_parameter('ik_enable_topic',    '/wbc/ik_enable')
         self.declare_parameter('joint_states_topic', '/joint_states')
@@ -169,6 +173,7 @@ class WBCQPControllerNode(Node):
         self._scan_data_queue: list[list[float]] = []
         self._scan_torso_est: np.ndarray | None = None
         self._scan_poses: list[PoseStamped] = []
+        self._nlf_prior: list | None = None           # NLF prior from exposure scanner
 
         # ── Subscriptions ─────────────────────────────────────────────────
         self.create_subscription(Bool,        '/wbc/enable',          self._cb_enable,      10)
@@ -180,6 +185,8 @@ class WBCQPControllerNode(Node):
                                   self._cb_scan_data, 10)
         self.create_subscription(Float32MultiArray, '/torso_keypoint_conf',
                                   self._cb_kp_conf, 10)
+        self.create_subscription(PoseArray, '/exposure/nlf_prior',
+                                  self._cb_nlf_prior, 10)
 
         # ── Publishers ────────────────────────────────────────────────────
         if self._dry_run:
@@ -251,6 +258,28 @@ class WBCQPControllerNode(Node):
     def _cb_kp_conf(self, msg: Float32MultiArray) -> None:
         if len(msg.data) >= 4:
             self._pre_scan_kp_conf = list(msg.data[:4])
+
+    def _cb_nlf_prior(self, msg: PoseArray) -> None:
+        """Store NLF body prior (24 SMPL joints in odom frame)."""
+        joints_odom = []
+        for pose in msg.poses:
+            joints_odom.append(np.array([pose.position.x,
+                                          pose.position.y,
+                                          pose.position.z]))
+        self._nlf_prior = joints_odom
+
+    def _nlf_prior_valid(self) -> bool:
+        """Check whether the NLF prior is usable for reduced scan."""
+        if self._nlf_prior is None:
+            return False
+        if len(self._nlf_prior) != 24:
+            return False
+        from spot_perception.sml_pose_indices import SPINE1, SPINE2, SPINE3, PELVIS
+        # At least one torso joint must be non-NaN
+        for j in (SPINE1, SPINE2, SPINE3, PELVIS):
+            if not np.any(np.isnan(self._nlf_prior[j])):
+                return True
+        return False
 
     # ── TF helpers ────────────────────────────────────────────────────────
 
@@ -530,6 +559,9 @@ class WBCQPControllerNode(Node):
 
     def _gen_cartesian_scan_grid(self, p_ee: np.ndarray,
                                   target: np.ndarray) -> list[PoseStamped]:
+        if self._nlf_prior_valid():
+            return self._gen_reduced_grid_from_prior(self._nlf_prior)
+
         adv = self._cartesian_x_advance   # 0.10m forward
         s   = self._cartesian_step        # 0.12m
         x_desired = target - p_ee
@@ -560,6 +592,53 @@ class WBCQPControllerNode(Node):
             pos[2] = max(pos[2], HOME_POS[2])
             clipped, _, _ = self._ws_checker.clip_target(pos)
             poses.append(_make_pose_stamped(clipped, quat))
+        return poses
+
+    def _gen_reduced_grid_from_prior(self, nlf_prior: list) -> list[PoseStamped]:
+        ny = self.get_parameter('body_scan_reduced_ny').value
+        nx = self.get_parameter('body_scan_reduced_nx').value
+        wrist_ny = self.get_parameter('body_scan_reduced_wrist_ny').value
+        wrist_nz = self.get_parameter('body_scan_reduced_wrist_nz').value
+
+        from spot_perception.sml_pose_indices import SPINE1, SPINE2, SPINE3, PELVIS
+
+        torso_joints = [nlf_prior[j] for j in (SPINE1, SPINE2, SPINE3, PELVIS)
+                        if not np.any(np.isnan(nlf_prior[j]))]
+        if not torso_joints:
+            return []
+
+        center = np.mean(torso_joints, axis=0)
+
+        step_y = 0.12
+        step_x = 0.10
+        wrist_step = 0.08
+
+        poses: list[PoseStamped] = []
+
+        # Phase 1: home wrist sweep reduced (ny × nz)
+        for wy in range(wrist_ny):
+            for wz in range(wrist_nz):
+                pose = PoseStamped()
+                pose.header.frame_id = 'odom'
+                pose.pose.position.x = float(center[0])
+                pose.pose.position.y = float(center[1]) + (wy - 0.5) * wrist_step
+                pose.pose.position.z = float(center[2]) + (wz - 0.5) * wrist_step
+                pose.pose.orientation.w = 1.0
+                poses.append(pose)
+
+        # Phase 2: arc positions reduced (ny × nx × wrist_ny × wrist_nz)
+        for iy in range(ny):
+            for ix in range(nx):
+                for wy in range(wrist_ny):
+                    for wz in range(wrist_nz):
+                        pose = PoseStamped()
+                        pose.header.frame_id = 'odom'
+                        pose.pose.position.x = float(center[0]) + (ix - 0.5) * step_x
+                        pose.pose.position.y = float(center[1]) + (iy - 0.5) * step_y
+                        pose.pose.position.z = float(center[2]) + (wz - 0.5) * wrist_step
+                        pose.pose.orientation.w = 1.0
+                        poses.append(pose)
+
         return poses
 
     def _start_perceptual_scan(self) -> None:

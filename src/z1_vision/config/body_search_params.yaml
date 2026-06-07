@@ -144,3 +144,10 @@ z1_yolo_torso_tracker:
     # Numero di frame validi consecutivi per dichiarare SCAN_POINT_LOCKED
     # (stato interno del tracker in scan mode).
     scan_min_frames: 10
+
+    # ── NLF reduced scan grid (used only when NLF prior is valid) ────────────
+    body_scan_reduced_ny: 2
+    body_scan_reduced_nx: 2
+    body_scan_reduced_wrist_ny: 2
+    body_scan_reduced_wrist_nz: 2
+    body_scan_reduced_fuse: true
