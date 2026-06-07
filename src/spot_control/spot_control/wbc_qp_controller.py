@@ -595,10 +595,9 @@ class WBCQPControllerNode(Node):
         return poses
 
     def _gen_reduced_grid_from_prior(self, nlf_prior: list) -> list[PoseStamped]:
-        ny = self.get_parameter('body_scan_reduced_ny').value
-        nx = self.get_parameter('body_scan_reduced_nx').value
         wrist_ny = self.get_parameter('body_scan_reduced_wrist_ny').value
         wrist_nz = self.get_parameter('body_scan_reduced_wrist_nz').value
+        lateral_offsets = self.get_parameter('body_scan_reduced_ny').value  # number of lateral pairs
 
         from spot_perception.sml_pose_indices import SPINE1, SPINE2, SPINE3, PELVIS
 
@@ -608,14 +607,12 @@ class WBCQPControllerNode(Node):
             return []
 
         center = np.mean(torso_joints, axis=0)
-
-        step_y = 0.12
-        step_x = 0.10
         wrist_step = 0.08
+        lateral_step = 0.12  # Y offset per parallax laterale
 
         poses: list[PoseStamped] = []
 
-        # Phase 1: home wrist sweep reduced (ny × nz)
+        # Phase 1 — wrist sweep alla posizione centrale (wrist_ny × wrist_nz)
         for wy in range(wrist_ny):
             for wz in range(wrist_nz):
                 pose = PoseStamped()
@@ -626,19 +623,20 @@ class WBCQPControllerNode(Node):
                 pose.pose.orientation.w = 1.0
                 poses.append(pose)
 
-        # Phase 2: arc positions reduced (ny × nx × wrist_ny × wrist_nz)
-        for iy in range(ny):
-            for ix in range(nx):
-                for wy in range(wrist_ny):
-                    for wz in range(wrist_nz):
-                        pose = PoseStamped()
-                        pose.header.frame_id = 'odom'
-                        pose.pose.position.x = float(center[0]) + (ix - 0.5) * step_x
-                        pose.pose.position.y = float(center[1]) + (iy - 0.5) * step_y
-                        pose.pose.position.z = float(center[2]) + (wz - 0.5) * wrist_step
-                        pose.pose.orientation.w = 1.0
-                        poses.append(pose)
+        # Phase 2 — offset laterali (±Y) per parallasse, senza wrist sweep
+        for idx in range(lateral_offsets):
+            offset = (idx - 0.5) * lateral_step
+            pose = PoseStamped()
+            pose.header.frame_id = 'odom'
+            pose.pose.position.x = float(center[0])
+            pose.pose.position.y = float(center[1]) + offset
+            pose.pose.position.z = float(center[2])
+            pose.pose.orientation.w = 1.0
+            poses.append(pose)
 
+        self.get_logger().info(
+            f'NLF reduced grid: {len(poses)} poses '
+            f'(wrist {wrist_ny}×{wrist_nz} + {lateral_offsets}×2 lateral)')
         return poses
 
     def _start_perceptual_scan(self) -> None:
