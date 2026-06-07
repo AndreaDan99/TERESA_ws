@@ -858,6 +858,12 @@ class WBCCoordinatorNode(Node):
                 self.get_logger().warn('NLF timeout (10s) — proceeding without prior')
                 self._nlf_prior = 'timeout'
 
+                # Pause NLF streaming on timeout (no point keeping it running)
+                msg = Bool()
+                msg.data = False
+                self._pub_nlf_trigger.publish(msg)
+                self.get_logger().info('NLF streaming paused after timeout')
+
     def _check_realsense_guidance(self) -> bool:
         """Ruota e inclina Spot verso il corpo rilevato dalla RealSense.
         Salva orientamento corrente e target per il TF-based settle in SEMI_LOCKING."""
@@ -1261,6 +1267,12 @@ class WBCCoordinatorNode(Node):
 
         self._nlf_prior = joints_odom
         self.get_logger().info('NLF prior received: 24 joints in odom')
+
+        # Pause NLF streaming now that prior is captured
+        msg = Bool()
+        msg.data = False
+        self._pub_nlf_trigger.publish(msg)
+        self.get_logger().info('NLF streaming paused after prior capture')
 
     def _cb_skeleton_stream(self, msg: PoseArray) -> None:
         pass  # stub: future Quality Monitor integration

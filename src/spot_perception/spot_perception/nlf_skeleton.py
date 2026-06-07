@@ -98,6 +98,7 @@ class NLFSkeletonNode(Node):
         # ── Early-init guards ──────────────────────────────────────────────────
         self._nlf_ready = False
         self._last_color_msg = None
+        self._streaming_paused = False
 
         # ── Parameters (from nlf_params.yaml) ─────────────────────────────────
         self.declare_parameter("model_path",        "nlf_s_multi.torchscript")
@@ -208,8 +209,11 @@ class NLFSkeletonNode(Node):
 
     def _cb_trigger(self, msg):
         """One-shot: run NLF inference on last color frame, publish 24 joints
-        to /exposure/nlf_prior. Does not affect continuous /human_pose/points_3d."""
+        to /exposure/nlf_prior. Does not affect continuous /human_pose/points_3d.
+        Bool(False) pauses continuous streaming; Bool(True) triggers prior."""
         if not msg.data:
+            self._streaming_paused = True
+            self.get_logger().info('NLF streaming paused')
             return
         if not self._nlf_ready:
             self.get_logger().warn('NLF trigger received but model not ready')
@@ -347,6 +351,10 @@ class NLFSkeletonNode(Node):
         """
         # ── Store last frame for one-shot trigger inference ───────────────
         self._last_color_msg = msg
+
+        # ── Pause guard: skip inference when streaming is paused ──────────
+        if self._streaming_paused:
+            return
 
         # ── Frame-skip: only run NLF every N frames ───────────────────────
         self._frame_count += 1
