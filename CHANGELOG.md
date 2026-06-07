@@ -5,6 +5,31 @@ Per la descrizione del sistema corrente vedi [`DESCRIPTION.md`](DESCRIPTION.md).
 
 ---
 
+## 7 June 2026 — NLF Prior at LOCKING (single-frame, binary fallback)
+
+### Overview
+- **NLF single-frame prior** triggered at LOCKING entry, 10s timeout for NLF to produce a valid prior
+- **Binary fallback**: if NLF prior fails → entire system reverts to 6 June 2026 behavior (YOLO-only)
+- **Gate**: `_nlf_prior_valid()` controls all downstream branches
+- **PRE_APPROACH**: 1s safety gate with NLF prior active; legacy sliding window fallback without
+- **APPROACHING**: unified 6-pose Cartesian grid centered on torso. Tight offsets with NLF prior, wide offsets with YOLO-only
+- **LOOKAT**: blended NLF(70%) + YOLO(30%) when HIGH coherence; YOLO 100% when LOW coherence
+- **CPU saving**: NLF streaming paused after prior capture
+
+### Modified files
+| File | +/− | Changes |
+|------|-----|---------|
+| `nlf_skeleton.py` | +76 | Single-frame prior capture at LOCKING, `_nlf_prior_valid()` gate, streaming pause |
+| `wbc_coordinator.py` | +217 | NLF prior FSM integration: PRE_APPROACH safety gate, APPROACHING grid selection, LOOKAT blend, binary fallback |
+| `wbc_qp_controller.py` | +44 | Unified 6-pose grid centered on torso, tight/wide offset selection based on NLF prior validity |
+| `wbc_params.yaml` | +7 | NLF prior params: timeout, coherence thresholds, blend ratios |
+| `body_search_params.yaml` | +7 | Grid offset parameters for NLF-prior vs YOLO-only modes |
+
+### Tests
+- 24 pytest tests, 3 new test files covering NLF prior capture, binary fallback, and blended LOOKAT
+
+---
+
 ## 6 June 2026 — NLF Integration (24 SMPL Joints)
 
 ### Overview

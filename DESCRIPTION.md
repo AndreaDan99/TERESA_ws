@@ -149,6 +149,17 @@ In guidance mode (attivo durante SEARCHING via `/tracker_guidance_mode`), qualsi
 - 5 campioni raccolti + braccio in home (`/ik_done`) → media → target fissato → `PRE_APPROACH`
 - Se Orbbec persa per >1s → riprende ricerca dalla posizione corrente (non da zero)
 
+### NLF Prior at LOCKING (single-frame, binary fallback)
+- **Trigger**: at LOCKING entry, coordinator fires a single NLF inference via `nlf_skeleton.py`
+- **Timeout**: 10s for NLF to produce a valid prior (`_nlf_prior_valid()`)
+- **Gate**: `_nlf_prior_valid()` controls all downstream branches:
+  - **PRE_APPROACH** (1s safety gate): NLF prior active → uses NLF for LOOKAT target; legacy sliding window fallback if NLF fails
+  - **APPROACHING**: unified 6-pose Cartesian grid centered on torso. Tight offsets with NLF prior, wide offsets with YOLO-only
+  - **LOOKAT**: blended NLF(70%) + YOLO(30%) when HIGH coherence; YOLO 100% when LOW coherence
+- **Binary fallback**: if NLF prior fails entirely → whole system reverts to 6 June 2026 behavior (YOLO-only)
+- **CPU saving**: NLF streaming paused after prior capture
+- **Files**: `nlf_skeleton.py` (+76), `wbc_coordinator.py` (+217), `wbc_qp_controller.py` (+44), `wbc_params.yaml` (+7), `body_search_params.yaml` (+7)
+
 ### Sensori coinvolti
 - **Orbbec** (su Spot): YOLO11 → posture classifier → `approach_point` laterale in odom
 - **RealSense** (sul polso): YOLO torso tracker → posizione 3D del torso (GUIDING/ESTIMATING/LOCKED)

@@ -25,7 +25,19 @@ git status --short
 
 ---
 
-## Current State (6 June 2026)
+## Current State (7 June 2026)
+
+### NLF Prior at LOCKING — single-frame prior with binary fallback
+
+- **NLF single-frame prior** triggered at LOCKING, 10s timeout
+- **Binary fallback**: if NLF fails → entire system = 6 June 2026 behavior (YOLO-only)
+- **Gate**: `_nlf_prior_valid()` controls all branches (PRE_APPROACH, APPROACHING, LOOKAT)
+- **PRE_APPROACH**: 1s safety gate with NLF, legacy sliding window without
+- **APPROACHING**: unified 6-pose grid centered on torso, tight offsets with NLF, wide with YOLO
+- **LOOKAT**: blended NLF(70%)+YOLO(30%) when HIGH coherence, YOLO 100% when LOW
+- **CPU saving**: NLF streaming paused after prior capture
+- **24 pytest tests**, 3 new test files
+- Files: `nlf_skeleton.py` (+76), `wbc_coordinator.py` (+217), `wbc_qp_controller.py` (+44), `wbc_params.yaml` (+7), `body_search_params.yaml` (+7)
 
 ### Exposure Body Scanning — full-body + simultaneous skeleton refinement
 
