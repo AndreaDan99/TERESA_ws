@@ -25,45 +25,39 @@ git status --short
 
 ---
 
-## Current State (7 June 2026)
+## Current State (8 June 2026)
 
-### NLF Prior at LOCKING — single-frame prior with binary fallback
+### Web Joystick Control Panel
+- Two-panel layout: left log terminal, right joystick D-pad (↑↓←→)
+- Drive mode: arrow buttons for cmd_vel (forward/back/strafe)
+- Body mode: ↑↓ for height (±5cm), ←→ for pitch (±5°)
+- Speed +/- buttons (0.1 to 1.0 m/s)
+- Height slider (0-20cm, 5cm steps) and pitch slider (0°-15°, 5° steps)
+- 🏠 HOME and 🔌 PARK buttons for arm presets
+- STOP now also disables IK (stops arm)
+- Joystick auto-disabled during autonomous WBC mission
 
-- **NLF single-frame prior** triggered at LOCKING, 10s timeout
-- **Binary fallback**: if NLF fails → entire system = 6 June 2026 behavior (YOLO-only)
-- **Gate**: `_nlf_prior_valid()` controls all branches (PRE_APPROACH, APPROACHING, LOOKAT)
-- **PRE_APPROACH**: 1s safety gate with NLF, legacy sliding window without
-- **APPROACHING**: unified 6-pose grid centered on torso, tight offsets with NLF, wide with YOLO
-- **LOOKAT**: blended NLF(70%)+YOLO(30%) when HIGH coherence, YOLO 100% when LOW
-- **CPU saving**: NLF streaming paused after prior capture
-- **24 pytest tests**, 3 new test files
-- Files: `nlf_skeleton.py` (+76), `wbc_coordinator.py` (+217), `wbc_qp_controller.py` (+44), `wbc_params.yaml` (+7), `body_search_params.yaml` (+7)
+### SEARCHING — Timed Open-Loop 7-Pose Search
+- 7 hardcoded manual poses (3 forward + 4 look-behind from FK reader)
+- Spot: ±30° yaw rotation (timed open-loop, no TF needed)
+- Sequential: rotate → wait for 7 arm poses → rotate other way → HOME → step 20cm forward → repeat
+- Rotation speed: 0.2 rad/s (gentle). Each 30° step = ~2.6s
+- Arm speed: max_joint_vel 0.4 rad/s
+- Dwell replaced by ik_done count (wait for all 7 poses, not timer)
+- `_search_ik_done_count` tracks per-position completions
 
-### Exposure Body Scanning — full-body + simultaneous skeleton refinement
+### Perception Pipeline — YOLO Default, NLF Idle
+- Default perception_backend changed from `nlf` to `yolo` (40 FPS vs 2.5 FPS)
+- YOLO on both cameras during SEARCHING
+- NLF skeleton always runs but starts in paused mode (`_streaming_paused = True`)
+- NLF triggered at LOCKING with 3s delay for model loading
+- NLF publishes to `/exposure/nlf_prior` (different topic, no conflict with YOLO)
+- Both YOLO and NLF can coexist without conflicts
 
-- **exposure_scanner.py** (650 righe, riscritto): full-body grid 14 punti su 7 regioni (HEAD, TORSO, L/R ARM, L/R LEG, FEET). Look-at dinamico EE X verso corpo. Standoff orizzontale 0.50m. TF Orbbec→world. Running-average scheletro raffinato su `/exposure/refined_skeleton`. Accumulo keypoint RealSense da `/exposure/body_keypoints` durante dwell. JSON output. Head stima da spalle se naso occluso.
-- **z1_yolo_torso_tracker.py**: publisher `/exposure/body_keypoints` (PoseArray, 17 kp COCO in scan mode). Nuovo metodo `_extract_all_body_keypoints`.
-- **wbc_coordinator.py**: `_cb_next_point` esteso a EXPOSURE_SCANNING, `_apply_exposure_body_pose`. PRE_APPROACH: Z offset +0.40m su fallback goal, sliding window ≥1/5 ESTIMATING/LOCKED tick.
-- **exposure_snapshot.py** (nuovo, 128 righe): snapshot RealSense in EXPOSURE_REVIEW. Trigger `/exposure/goto_point` + `/ik_done`, delay 1s, pubblica `/exposure/snapshot`, salva JPEG.
-- **Web UI**: Grid toggle + legenda 7 colori, click-to-revisit, Body Map (🗺 / tasto `m`), snapshot freeze + badge "📸" + Close button, gate toggle sempre visibile.
-- **Grid generation**: i keypoint Orbbec vengono pubblicati già dall'inizio (SEARCHING) su `/human_pose/points_3d`, quindi quando si entra in EXPOSURE_SCANNING il buffer `_keypoints` è già popolato. Stima per keypoint mancanti (es. head da spalle).
-
-### FSM States (11 total)
-- `EXPOSURE_SCANNING`: body scan full-body, per-point Spot reconfiguration
-- `EXPOSURE_REVIEW`: click-to-revisit interattivo
-- `WAITING_EXPOSURE`: manual gate
-- `WAITING_FAST`: manual gate
-- 7 stati esistenti invariati
-
-### Web Interface
-- **teresa_control.html**: Grid toggle su RealSense con legenda colori (7 regioni). Click su marker → `/exposure/goto_point`. Body Map panel (🗺 o tasto `m`): canvas top-down con scheletro progressivo (17 kp + linee COCO) + griglia exposure.
-- **camera_view.html** invariato
-
-### Nuovi topic
-| Topic | Publisher | Subscriber | Type |
-|-------|-----------|------------|------|
-| `/exposure/body_keypoints` | z1_yolo_torso_tracker | exposure_scanner | PoseArray (17 kp) |
-| `/exposure/refined_skeleton` | exposure_scanner | web UI (Body Map) | PoseArray (17 kp, running avg) |
+### Other Fixes
+- Removed dead `/torso_sm_state` subscription from both trackers
+- Fixed missing closing brace in `camera_view.html` drawRealSenseOverlay
+- LOCKING home now uses search pose 1 instead of raised Z position
 
 ---
 

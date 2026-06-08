@@ -19,16 +19,16 @@ Due pipeline coesistono:
 
 Two perception backends are available, selectable via the `perception_backend` launch parameter:
 
-- **`nlf` (default)**: NLF (Neural Localizer Fields) — direct 3D SMPL joints from RGB, no depth back-projection needed. 24 joints published.
-- **`yolo`**: YOLO11n-pose — 2D keypoints + depth back-projection + Kalman filtering. 24 joints published (17 COCO mapped + 7 NaN for SMPL-only joints).
+- **`yolo` (default since 8 June 2026)**: YOLO11n-pose — 2D keypoints + depth back-projection + Kalman filtering. 24 joints published (17 COCO mapped + 7 NaN for SMPL-only joints). Runs at ~40 FPS, used during SEARCHING.
+- **`nlf`**: NLF (Neural Localizer Fields) — direct 3D SMPL joints from RGB, no depth back-projection needed. 24 joints published. Runs at ~2.5 FPS. Starts in paused mode (`_streaming_paused = True`), triggered at LOCKING with 3s delay for model loading. Publishes to `/exposure/nlf_prior` (separate topic, no conflict with YOLO).
 
 Switch at launch:
 ```bash
-ros2 launch spot_control teresa_perception.launch.py perception_backend:=nlf
 ros2 launch spot_control teresa_perception.launch.py perception_backend:=yolo
+ros2 launch spot_control teresa_perception.launch.py perception_backend:=nlf
 ```
 
-The `/human_pose/points_3d` topic always carries 24 SMPL joints regardless of backend.
+The `/human_pose/points_3d` topic always carries 24 SMPL joints regardless of backend. Both YOLO and NLF can coexist without conflicts — YOLO handles SEARCHING at high FPS, NLF provides refined priors at LOCKING.
 
 ---
 
@@ -100,69 +100,24 @@ HOMING → WAITING (aspetta segnale WBC + FAST points pre-calcolati dal QP)
 
 ---
 
-## Fase 1 — SEARCHING (ricerca adattiva coarse + refinement, 360°)
+## Fase 1 — SEARCHING (rewritten 8 June 2026)
 
 `IDLE → SEARCHING` (premi `s` sulla tastiera)
 
-Ricerca a due livelli: scansione **coarse** 360° con rotazione cmd_vel, e **refinement** locale (sweep pitch) trigger-based appena una camera vede qualcosa.
+### SEARCHING (rewritten 8 June 2026)
 
-### Spot: coarse rotation via cmd_vel
-- Altezza nominale (`search_body_height=0m`)
-- 6 posizioni coarse: yaw step ≈60° (`search_yaw_increment=1.05`, `search_yaw_steps=6`) → 360°
-- Rotazione con `cmd_vel.angular.z` P-control (`search_yaw_kp=0.8`, max `search_max_angular_vel=0.5 rad/s`) — **non** body_pose yaw
-- Target yaw assoluto in odom via TF `odom→body`, tolleranza `search_yaw_tolerance=0.08` (~4.6°)
-- Fallback su `_last_yaw_error` se TF non disponibile durante la rotazione
-- A ogni posizione raggiunta: dwell `search_coarse_dwell=5s` fermo, le camere osservano
+**Coarse search**: Spot alternates ±30° yaw (timed open-loop, no TF dependency). Each yaw position: arm cycles through 7 hardcoded manual poses (3 forward + 4 look-behind, captured via FK reader). After both yaws complete: arm returns HOME, Spot steps forward 20cm, cycle repeats.
 
-### Refinement: pitch sweep adattivo (trigger-based)
-Durante il dwell coarse, `_should_refine()` controlla se una camera vede qualcosa:
-- **Trigger**: RealSense tracker `== GUIDING` (qualsiasi keypoint) **oppure** Orbbec conf `≥ search_refine_trigger_orb_conf=0.30`
-- Entra in refinement (`_tick_refinement`): sweep pitch `search_pitch_angles=[0°, 5°, 10°]`, dwell `search_refine_dwell=4s` per pitch
-- Traccia la migliore Orbbec conf + relativo `approach_point`
-- `best_conf ≥ search_lock_confidence=0.70` → `_finish_refinement_lock` → **LOCKING** (fornisce già 1 campione)
-- altrimenti → `_finish_refinement_fail` → resume coarse dal prossimo yaw
-- Sequenza coarse esaurita senza lock → `IDLE`
-
-### Braccio: QP Controller — ACTIVE_SEARCH mode
-- `_gen_cartesian_search_grid()`: **3 pose wide** attorno alla home — HOME, LEFT, RIGHT
-- Tilt fisso **-15°** pitch down (no wrist sweep), sweep Y ±0.28m, X +0.20m, Z=0.42m
-- Z mai sotto la home (0.44m), workspace clipping automatico
-- BodySearchScanner in loop infinito: per ogni posa → raccolta dati → prossima
-
-### Tracker state GUIDING
-Il torso tracker RealSense ha 4 stati: `IDLE → ESTIMATING → LOCKED` + **GUIDING** (giallo).
-In guidance mode (attivo durante SEARCHING via `/tracker_guidance_mode`), qualsiasi keypoint valido → `GUIDING`. Serve a triggerare il refinement e a guidare il SEMI_LOCKING.
-
-### SEMI_LOCKING (RealSense guida Spot)
-- Trigger: tracker in `GUIDING`/`ESTIMATING`/`LOCKED` (`_check_realsense_guidance`)
-- **GUIDING**: richiede ≥2 keypoint con conf ≥ 0.5 (rafforzato per ridurre falsi positivi)
-- Coordinator calcola yaw e pitch ottimali per puntare l'Orbbec al torso, Spot ruota+inclina
-- Braccio in LOOKAT mode attivo (IK acceso subito, `_end_search(re_enable=True)`)
-- Settle TF-based (tolleranza yaw 0.05, pitch 0.03). Pitch riceve flush cmd_vel per applicazione body_pose
-- Dwell `search_semi_lock_dwell=3s` di finestra pulita per l'Orbbec, timeout settle 5s
-- Se Orbbec conferma → `LOCKING`; se dwell timeout → riprende ricerca dalla posizione corrente
-
-### Lock: raccolta e conferma
-- **LOCKING**: braccio torna in home rialzata (`home_lock_z=0.60`, vista migliore per RealSense)
-- Coordinator raccoglie `search_lock_samples=5` campioni `approach_point` in odom (10 Hz)
-- Tolleranza 1s se Orbbec perde momentaneamente LYING
-- 5 campioni raccolti + braccio in home (`/ik_done`) → media → target fissato → `PRE_APPROACH`
-- Se Orbbec persa per >1s → riprende ricerca dalla posizione corrente (non da zero)
-
-### NLF Prior at LOCKING (single-frame, binary fallback)
-- **Trigger**: at LOCKING entry, coordinator fires a single NLF inference via `nlf_skeleton.py`
-- **Timeout**: 10s for NLF to produce a valid prior (`_nlf_prior_valid()`)
-- **Gate**: `_nlf_prior_valid()` controls all downstream branches:
-  - **PRE_APPROACH** (1s safety gate): NLF prior active → uses NLF for LOOKAT target; legacy sliding window fallback if NLF fails
-  - **APPROACHING**: unified 6-pose Cartesian grid centered on torso. Tight offsets with NLF prior, wide offsets with YOLO-only
-  - **LOOKAT**: blended NLF(70%) + YOLO(30%) when HIGH coherence; YOLO 100% when LOW coherence
-- **Binary fallback**: if NLF prior fails entirely → whole system reverts to 6 June 2026 behavior (YOLO-only)
-- **CPU saving**: NLF streaming paused after prior capture
-- **Files**: `nlf_skeleton.py` (+76), `wbc_coordinator.py` (+217), `wbc_qp_controller.py` (+44), `wbc_params.yaml` (+7), `body_search_params.yaml` (+7)
+- **Rotation**: timed `cmd_vel.angular.z = 0.2 rad/s` for ~2.6s per 30° step — no TF `odom→body` required
+- **Arm poses**: 7 positions hardcoded from FK reader (manual capture)
+- **Wait logic**: coordinator counts 7 `ik_done` events before advancing to next yaw
+- **Step forward**: 20cm at 0.3 m/s (~0.67s) after each full cycle
+- **Refinement**: triggers when Orbbec posture confidence ≥ 0.30 during arm wait
+- **Lock**: confidence ≥ 0.70 → direct LOCKING (no SEMI_LOCKING needed)
 
 ### Sensori coinvolti
 - **Orbbec** (su Spot): YOLO11 → posture classifier → `approach_point` laterale in odom
-- **RealSense** (sul polso): YOLO torso tracker → posizione 3D del torso (GUIDING/ESTIMATING/LOCKED)
+- **RealSense** (sul polso): YOLO torso tracker → posizione 3D del torso
 
 ---
 

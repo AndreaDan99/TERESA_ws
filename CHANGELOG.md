@@ -5,6 +5,44 @@ Per la descrizione del sistema corrente vedi [`DESCRIPTION.md`](DESCRIPTION.md).
 
 ---
 
+## 8 June 2026 — Web Joystick, Timed Search, YOLO Default
+
+### Overview
+- **Web Joystick Control Panel**: D-pad with 5 buttons, two modes (Drive/Body), speed control, height/pitch sliders, HOME/PARK arm buttons
+- **SEARCHING rewrite**: timed open-loop rotation (no TF), 7 hardcoded manual poses, ±30° yaw, step forward after cycle
+- **Perception defaults**: YOLO (40 FPS) for SEARCHING, NLF idle until LOCKING trigger with 3s delay
+- **Multiple fixes**: dead code removal, IK stability tuning, arm wait logic, rotation speed
+
+### SEARCHING changes
+| File | +/− | Changes |
+|------|-----|---------|
+| `wbc_coordinator.py` | +114/−66 | Timed rotation, 7-pose wait, HOME+step forward cycle, NLF trigger delay, refinement trigger |
+| `wbc_qp_controller.py` | +15/−20 | 7 hardcoded manual poses (FK reader), LOCKING home to search pose 1 |
+| `wbc_params.yaml` | +4/−7 | search_yaw_angles [30,-30], step_forward 0.20m, step_speed 0.3m/s |
+| `z1_ik_jtc_params.yaml` | +2/−2 | ik_damping 1e-2, max_joint_vel 0.4 |
+
+### Web interface
+| File | +/− | Changes |
+|------|-----|---------|
+| `teresa_control.html` | +240/−6 | D-pad, mode toggle, speed control, sliders, HOME/PARK buttons, ik_enable on STOP, joystick always enabled |
+
+### Perception
+| File | +/− | Changes |
+|------|-----|---------|
+| `nlf_skeleton.py` | +1/−1 | _streaming_paused = True by default |
+| `spot_perception.launch.py` | +2/−3 | NLF always runs (no condition), YOLO default |
+| `z1_perception.launch.py` | +1/−1 | default yolo |
+| `teresa_perception.launch.py` | +1/−1 | default yolo |
+
+### Fixes
+| File | +/− | Changes |
+|------|-----|---------|
+| `z1_yolo_torso_tracker.py` | −11 | Removed dead /torso_sm_state subscription |
+| `nlf_torso_tracker.py` | −11 | Removed dead /torso_sm_state subscription |
+| `camera_view.html` | +1 | Fixed missing closing brace |
+
+---
+
 ## 7 June 2026 — NLF Prior at LOCKING (single-frame, binary fallback)
 
 ### Overview
