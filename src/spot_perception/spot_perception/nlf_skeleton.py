@@ -98,7 +98,7 @@ class NLFSkeletonNode(Node):
         # ── Early-init guards ──────────────────────────────────────────────────
         self._nlf_ready = False
         self._last_color_msg = None
-        self._streaming_paused = False
+        self._streaming_paused = True
 
         # ── Parameters (from nlf_params.yaml) ─────────────────────────────────
         self.declare_parameter("model_path",        "nlf_s_multi.torchscript")
