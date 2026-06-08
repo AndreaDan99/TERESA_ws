@@ -286,6 +286,10 @@ body{
       <div class="slider-ticks" style="margin-left:52px">
         <span>0°</span><span>5°</span><span>10°</span><span>15°</span>
       </div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button id="arm-home-btn" style="flex:1;font-family:var(--font);font-size:12px;font-weight:600;padding:8px;border:1px solid var(--accent);border-radius:6px;background:rgba(80,200,120,.08);color:var(--accent);cursor:pointer">🏠 HOME</button>
+        <button id="arm-park-btn" style="flex:1;font-family:var(--font);font-size:12px;font-weight:600;padding:8px;border:1px solid var(--warning);border-radius:6px;background:rgba(224,176,64,.08);color:var(--warning);cursor:pointer">🔌 PARK</button>
+      </div>
     </div>
   </div>
 
@@ -494,6 +498,9 @@ class TeresaController{
       const qw=Math.cos(rad/2),qy=Math.sin(rad/2);
       this.bodyPosePub.publish({position:{x:0,y:0,z:this._joystickHeight},orientation:{x:0,y:qy,z:0,w:qw}});
     });
+    // arm presets
+    $('arm-home-btn').addEventListener('click',()=>this.armHome());
+    $('arm-park-btn').addEventListener('click',()=>this.armPark());
     setInterval(()=>this.pingCheck(),3000);
   }
 
@@ -533,6 +540,8 @@ class TeresaController{
     this.cmdVelPub=new ROSLIB.Topic({ros:this.ros,name:'/my_spot/cmd_vel',messageType:'geometry_msgs/Twist'});
     this.gotoPointPub=new ROSLIB.Topic({ros:this.ros,name:'/exposure/goto_point',messageType:'std_msgs/Int32'});
     this.bodyPosePub=new ROSLIB.Topic({ros:this.ros,name:'/my_spot/body_pose',messageType:'geometry_msgs/Pose'});
+    this.ikGoalPub=new ROSLIB.Topic({ros:this.ros,name:'/ik_goal_pose',messageType:'geometry_msgs/PoseStamped'});
+    this.ikEnablePub=new ROSLIB.Topic({ros:this.ros,name:'/ik_enable',messageType:'std_msgs/Bool'});
 
     /* control subscribers */
     this.wbcStateSub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/state',messageType:'std_msgs/String'});
@@ -1100,6 +1109,24 @@ class TeresaController{
   stopAll(){
     this.joystickActive=false;
     this.cmdVelPub.publish({linear:{x:0,y:0,z:0},angular:{x:0,y:0,z:0}});
+  }
+
+  /* ── Arm presets ──────────────────────────── */
+  armHome(){
+    this.log('🏠 Arm → HOME','info');
+    this.ikGoalPub.publish({
+      header:{frame_id:'world'},
+      pose:{position:{x:0.077,y:0.001,z:0.313},orientation:{x:-0.0062,y:0.4107,z:0.0021,w:0.9118}}
+    });
+    this.ikEnablePub.publish({data:true});
+  }
+  armPark(){
+    this.log('🔌 Arm → PARK (45°)','info');
+    this.ikGoalPub.publish({
+      header:{frame_id:'world'},
+      pose:{position:{x:0.064,y:-0.001,z:0.160},orientation:{x:-0.0065,y:0.3179,z:-0.0002,w:0.9481}}
+    });
+    this.ikEnablePub.publish({data:true});
   }
 
   async onStart(){
