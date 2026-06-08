@@ -483,8 +483,8 @@ class WBCQPControllerNode(Node):
 
         offsets = [
             (np.array([-0.09,  0.00,  0.55]), tilted_quat),    # HOME:  tilt -15°
-            (np.array([+0.20, -0.28,  0.42]), tilted_quat),    # LEFT:  tilt -15°
-            (np.array([+0.20, +0.28,  0.42]), tilted_quat),    # RIGHT: tilt -15°
+            (np.array([+0.10, -0.15,  0.42]), tilted_quat),    # LEFT:  tilt -15°
+            (np.array([+0.10, +0.15,  0.42]), tilted_quat),    # RIGHT: tilt -15°
         ]
 
         poses = []

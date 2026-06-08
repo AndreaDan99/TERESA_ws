@@ -14,12 +14,12 @@ z1_ik_to_jtc:
     # ── IK solver (damped pseudo-inverse Jacobian) ─────────────────
     ik_max_iter:    800
     ik_tol:         5.0e-3      # ~5mm tolerance
-    ik_damping:     5.0e-4
+    ik_damping:     1.0e-2
     ik_alpha:       0.5         # step size dell'integrazione
     ik_rot_weight:  1.0         # posizione e orientamento stesso peso
 
     # ── Traiettoria JTC (smoothstep quintica) ──────────────────────
-    max_joint_vel: 0.3          # [rad/s] velocità massima joint (bilanciato: smooth ma non lento)
+    max_joint_vel: 0.2          # [rad/s] velocità massima joint (ridotta per stabilità)
     traj_min_time: 1.0          # [s]    durata minima traiettoria
     traj_max_time: 10.0         # [s]    durata massima traiettoria
     traj_points:   25           # numero di waypoint (>= 3)
