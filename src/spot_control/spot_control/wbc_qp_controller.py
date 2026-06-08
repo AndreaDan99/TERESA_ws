@@ -474,17 +474,14 @@ class WBCQPControllerNode(Node):
 
     def _gen_cartesian_search_grid(self) -> list[PoseStamped]:
         """
-        3 pose wide: HOME centrale, LEFT-REACH e RIGHT-REACH, tutte con tilt -15°.
-        Sweep Y ±0.28m, X avanza +0.20m, Z scende verso il paziente a terra.
+        3 pose wide: HOME centrale, LEFT-REACH e RIGHT-REACH, senza tilt (guarda avanti).
+        Sweep Y ±0.15m, X avanza +0.10m.
         """
-        tilt_rad = -0.2618   # -15° pitch down
-        x_tilted = np.array([np.cos(tilt_rad), 0.0, np.sin(tilt_rad)])
-        tilted_quat = compute_ee_orientation_minrot(x_tilted, HOME_ORI.tolist())
-
+        # Nessun tilt — usa orientamento HOME direttamente
         offsets = [
-            (np.array([-0.09,  0.00,  0.55]), tilted_quat),    # HOME:  tilt -15°
-            (np.array([+0.10, -0.15,  0.42]), tilted_quat),    # LEFT:  tilt -15°
-            (np.array([+0.10, +0.15,  0.42]), tilted_quat),    # RIGHT: tilt -15°
+            (np.array([-0.09,  0.00,  0.55]), HOME_ORI),    # HOME
+            (np.array([+0.10, -0.15,  0.42]), HOME_ORI),    # LEFT
+            (np.array([+0.10, +0.15,  0.42]), HOME_ORI),    # RIGHT
         ]
 
         poses = []
