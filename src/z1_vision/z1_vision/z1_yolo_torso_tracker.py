@@ -161,10 +161,6 @@ class Z1YoloTorsoTracker(Node):
         self.sub_info = self.create_subscription(
             CameraInfo, '/camera/camera/color/camera_info', self.cb_info, 1)
 
-        # FSM esterna (solo per label/colore se vuoi, qui lo pubblichiamo solo come testo marker)
-        self.sub_fsm_state = self.create_subscription(
-            String, '/torso_sm_state', self.cb_fsm_state, 10)
-
         # Reset tracker: riceve True dalla FSM quando torna in HOME → forza IDLE
         self.sub_tracker_reset = self.create_subscription(
             Bool, '/tracker_reset', self.cb_tracker_reset, 10)
@@ -244,17 +240,11 @@ class Z1YoloTorsoTracker(Node):
         self.last_kp_3d = {}
         self.last_stamp = None
 
-        # FSM esterna (solo label)
-        self.fsm_state_external = 'WAITING'
-
         self.get_logger().info('🚀 Z1 YOLO Torso Tracker pronto (I/O nuova FSM, no RETURNING).')
 
     # ──────────────────────────────────────────────────────────────
     def cb_info(self, msg):
         self.cam_info = msg
-
-    def cb_fsm_state(self, msg: String):
-        self.fsm_state_external = msg.data
 
     def cb_tracker_reset(self, msg: Bool):
         if not msg.data:
@@ -1050,7 +1040,7 @@ class Z1YoloTorsoTracker(Node):
         tm.pose.orientation.w = 1.0
         tm.scale.z            = 0.05
         tm.color              = color
-        tm.text               = f"INT:{self.state} | EXT:{self.fsm_state_external}"
+        tm.text               = f"INT:{self.state}"
         tm.lifetime.nanosec   = 200_000_000
         markers.markers.append(tm)
 

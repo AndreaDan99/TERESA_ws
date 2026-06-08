@@ -180,10 +180,6 @@ class NLFTorsoTrackerNode(Node):
         self.sub_info = self.create_subscription(
             CameraInfo, '/camera/camera/color/camera_info', self._cb_info, 1)
 
-        # FSM external state (label/color — read-only)
-        self.sub_fsm_state = self.create_subscription(
-            String, '/torso_sm_state', self._cb_fsm_state, 10)
-
         # Reset tracker
         self.sub_tracker_reset = self.create_subscription(
             Bool, '/tracker_reset', self._cb_tracker_reset, 10)
@@ -249,9 +245,6 @@ class NLFTorsoTrackerNode(Node):
         tick_period = 1.0 / tick_rate_hz
         self._timer = self.create_timer(tick_period, self._tick)
 
-        # FSM external label
-        self.fsm_state_external = 'WAITING'
-
         self.get_logger().info(
             f'🚀 NLF Torso Tracker ready '
             f'(tick={tick_rate_hz:.0f}Hz, frame={self._camera_frame}, NLF=STUB).'
@@ -263,9 +256,6 @@ class NLFTorsoTrackerNode(Node):
 
     def _cb_info(self, msg: CameraInfo):
         self.cam_info = msg
-
-    def _cb_fsm_state(self, msg: String):
-        self.fsm_state_external = msg.data
 
     def _cb_tracker_reset(self, msg: Bool):
         if not msg.data:
@@ -1048,7 +1038,7 @@ class NLFTorsoTrackerNode(Node):
         tm.pose.orientation.w = 1.0
         tm.scale.z            = 0.05
         tm.color              = color
-        tm.text               = f"INT:{self.state} | EXT:{self.fsm_state_external}"
+        tm.text               = f"INT:{self.state}"
         tm.lifetime.nanosec   = 200_000_000
         markers.markers.append(tm)
 
