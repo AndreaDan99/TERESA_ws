@@ -611,7 +611,7 @@
       const rowBytes = step || width * 3;
       const bpp = 3;
 
-      if (encoding === 'rgb8' || encoding === 'rgb8' || !encoding) {
+      if (encoding === 'rgb8' || !encoding) {
         for (let y = 0; y < height; y++) {
           const rowOff = y * rowBytes;
           const dstRow = y * width * 4;
@@ -839,6 +839,7 @@
           }
         }
       }
+    }
 
       /* ── Orbbec overlay toggles ────────────── */
     toggleOrbbecSkel() {
