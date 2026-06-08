@@ -341,6 +341,7 @@ class WBCCoordinatorNode(Node):
         # NLF prior (from /exposure/nlf_prior, 24 SMPL joints in odom)
         self._nlf_prior = None               # list[np.ndarray] | 'timeout' | None
         self._nlf_trigger_time = None         # rclpy.time.Time or None
+        self._nlf_trigger_pending: bool = False  # True = trigger queued, waiting for 3s delay
         self._nlf_low_ticks = 0              # consecutive LOW-coherence ticks
 
         # Exposure body pose optimization (same grid search as FAST)
@@ -860,6 +861,17 @@ class WBCCoordinatorNode(Node):
             self._lock_lost_ticks = 0
             self._search_position_start = None  # riprendi dalla posizione corrente
             self._set_state(CoordState.SEARCHING)
+
+        # Send pending NLF trigger after 3s delay (model loading time)
+        if self._nlf_trigger_pending:
+            elapsed = (self.get_clock().now() - self._nlf_trigger_time).nanoseconds * 1e-9
+            if elapsed >= 3.0:
+                msg = Bool()
+                msg.data = True
+                self._pub_nlf_trigger.publish(msg)
+                self._nlf_trigger_time = self.get_clock().now()
+                self._nlf_trigger_pending = False
+                self.get_logger().info('NLF trigger sent (after 3s delay)')
 
         # NLF prior timeout check (non-blocking — does not gate transition)
         if self._nlf_prior is None and self._nlf_trigger_time is not None:
@@ -1879,10 +1891,8 @@ class WBCCoordinatorNode(Node):
             if not self._nlf_prior_valid():
                 self._nlf_prior = None
                 self._nlf_trigger_time = self.get_clock().now()
-                msg = Bool()
-                msg.data = True
-                self._pub_nlf_trigger.publish(msg)
-                self.get_logger().info('NLF trigger sent')
+                self._nlf_trigger_pending = True
+                self.get_logger().info('NLF trigger queued (3s delay for model loading)')
         if new_state == CoordState.APPROACHING:
             self._pub_cmd_vel.publish(Twist())
             self._pub_guidance.publish(Bool(data=False))
