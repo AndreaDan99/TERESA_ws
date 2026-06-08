@@ -969,7 +969,8 @@ class WBCCoordinatorNode(Node):
                     f'({elapsed:.1f}s) → dwell {self._search_coarse_dwell:.0f}s')
                 return
             t = Twist()
-            t.angular.z = float(self._search_max_angular_vel)
+            sign = 1.0 if (self._search_position_idx % 2 == 0) else -1.0
+            t.angular.z = float(self._search_max_angular_vel) * sign
             self._pub_cmd_vel.publish(t)
             return
 

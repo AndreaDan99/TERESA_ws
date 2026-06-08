@@ -484,9 +484,9 @@ class WBCQPControllerNode(Node):
 
         # Pose vicine alla home, Z entro workspace Z1 (~0.60m max)
         offsets = [
-            (np.array([0.00,  0.00,  0.00]), tilted_quat),    # HOME esatta
-            (np.array([0.05, -0.08, -0.02]), tilted_quat),    # LEFT  (piccolo sweep)
-            (np.array([0.05, +0.08, -0.02]), tilted_quat),    # RIGHT (piccolo sweep)
+            (np.array([0.00,  0.00,  0.10]), tilted_quat),    # HOME (EE up)
+            (np.array([0.05, -0.15, -0.05]), tilted_quat),    # LEFT  (left-down)
+            (np.array([0.05,  0.15, -0.05]), tilted_quat),    # RIGHT (right-down)
         ]
 
         poses = []

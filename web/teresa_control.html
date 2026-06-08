@@ -1156,7 +1156,7 @@ class TeresaController{
   onSit(){this.sitSrv.callService(new ROSLIB.ServiceRequest(),r=>{this.log('Sit: '+(r&&r.success?'OK':'FAILED'),r&&r.success?'info':'error');});}
   onPowerOn(){this.powerOnSrv.callService(new ROSLIB.ServiceRequest(),r=>{this.log('Power ON: '+(r&&r.success?'OK':'FAILED'),r&&r.success?'info':'error');});}
   onPowerOff(){this.powerOffSrv.callService(new ROSLIB.ServiceRequest(),r=>{this.log('Power OFF: '+(r&&r.success?'OK':'FAILED'),r&&r.success?'info':'error');});}
-  onStop(){this.log('EMERGENCY STOP','error');this.restartPub.publish({data:false});this.cmdVelPub.publish({linear:{x:0,y:0,z:0},angular:{x:0,y:0,z:0}});this.stopNavLoop();this.kcState='IDLE';this.goalPose=null;this.isReturning=false;$('step-banner').classList.remove('visible');}
+  onStop(){this.log('EMERGENCY STOP','error');this.restartPub.publish({data:false});this.cmdVelPub.publish({linear:{x:0,y:0,z:0},angular:{x:0,y:0,z:0}});this.ikEnablePub.publish({data:false});this.stopNavLoop();this.kcState='IDLE';this.goalPose=null;this.isReturning=false;$('step-banner').classList.remove('visible');}
 
   /* ── Navigation P-controller ──────────────── */
   startNavLoop(){this.stopNavLoop();this._navTimer=setInterval(()=>this.navTick(),1000/this.updateRate);}
