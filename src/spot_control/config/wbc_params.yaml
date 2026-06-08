@@ -83,12 +83,11 @@ wbc_coordinator:
     max_body_height:      0.0    # altezza nominale
 
     # SEARCHING — ricerca adattiva coarse + refinement
-    # Coarse: Spot ruota 6 yaw × 1 pitch (0°) a step di 60°, dwell 5s.
-    # Se Orbbec conf ≥ trigger_orb_conf O RealSense GUIDING → refinement:
-    #   Spot fermo al yaw corrente, sweep dei 3 pitch per massimizzare conf Orbbec.
-    #   Se best_conf ≥ lock_confidence → LOCKING, altrimenti prossimo yaw coarse.
+    # Coarse: Spot alterna ±30° yaw, arm 7 poses per yaw; dopo entrambi: HOME + step forward 20cm, repeat.
     search_body_height: 0.0                       # [m] altezza nominale
-    search_yaw_angles: [30.0, -60.0, 90.0, -120.0, 150.0, -180.0]  # degrees, relative steps
+    search_yaw_angles: [30.0, -30.0]  # degrees, relative steps
+    search_step_forward: 0.20  # [m] forward step after each arm cycle
+    search_step_speed: 0.3     # [m/s] forward step speed
     search_pitch_angles: [0.0, 0.087, 0.17]       # [rad] 0°, 5°, 10° — usati nel refinement
     search_refine_dwell: 4.0                      # [s] dwell per pitch durante refinement
     search_yaw_kp: 0.8                            # P-gain for yaw rotation via cmd_vel.angular.z

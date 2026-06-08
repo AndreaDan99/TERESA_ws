@@ -4,7 +4,8 @@ WBC Coordinator — phase FSM (WBC is master, Z1 FSM waits for SCANNING)
 
 States:
   WAITING_TF    waits for tf_monitor to confirm TF chains ready
-  SEARCHING     Spot rotates + arm explores (QP SEARCH_GRID). Hybrid lock: Orbbec (full) + RealSense (semi-lock guidance)
+  SEARCHING     Spot alternates ±30° yaw, arm 7 poses each; after both: HOME + step forward,
+               repeat. Hybrid lock: Orbbec (full) + RealSense (semi-lock guidance)
   SEMI_LOCKING  RealSense found torso → Spot rotates+tilts toward it, arm freezes, Orbbec gets 3s clean window
   LOCKING       Orbbec confirmed LYING → arm goes home, collect 5 approach_point samples
   PRE_APPROACH  Spot upright, QP LOOKAT: arm points X_ee toward target
@@ -19,7 +20,7 @@ Transitions:
   SEARCHING     → LOCKING        Orbbec detects LYING directly (full lock)
   LOCKING       → PRE_APPROACH   5 approach_point samples collected
   LOCKING       → SEARCHING      lock lost during collection
-  SEARCHING     → IDLE           search sequence exhausted
+  SEARCHING     → IDLE           emergency / keyboard stop (otherwise loops ±30°)
   IDLE          → SEARCHING      external restart (keyboard)
   PRE_APPROACH  → APPROACHING    RealSense LOCKED ×5 or 5s timeout
   APPROACHING   → SCANNING       Spot within handoff_distance of approach_point
@@ -43,6 +44,10 @@ import tf2_geometry_msgs  # noqa: F401
 
 from teresa_utils.orientation import quat_to_rot, normalize_angle
 from spot_perception.sml_pose_indices import SPINE1, SPINE2, SPINE3, PELVIS
+
+# ── Arm HOME pose (link00 frame) ──────────────────────────────────
+SEARCH_HOME_POS = [-0.09, 0.0, 0.44]                               # [m]
+SEARCH_HOME_ORI = [-0.0062, 0.4107, 0.0021, 0.9118]                # quaternion
 
 
 class _QualityMonitor:
@@ -178,7 +183,9 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('min_body_height',             -0.20)
         self.declare_parameter('max_body_height',              0.0)
         self.declare_parameter('search_body_height',           0.0)   # [m] altezza nominale
-        self.declare_parameter('search_yaw_angles',         [30.0, -60.0, 90.0, -120.0, 150.0, -180.0])  # degrees, relative
+        self.declare_parameter('search_yaw_angles',         [30.0, -30.0])  # degrees, relative steps
+        self.declare_parameter('search_step_forward',          0.20)  # [m] forward step after each arm cycle
+        self.declare_parameter('search_step_speed',            0.3)   # [m/s] forward step speed
         self.declare_parameter('search_pitch_angles',       [0.0, 0.087, 0.17])  # 0°,5°,10°
         self.declare_parameter('search_refine_dwell',           4.0)   # [s] dwell per pitch in refinement
         self.declare_parameter('search_yaw_kp',                    0.8)   # P-gain per rotazione yaw
@@ -229,6 +236,8 @@ class WBCCoordinatorNode(Node):
         self._body_grid_pitches = self._read_float_array('body_grid_pitches')
         self._body_sweet_spot   = self._read_float_array('body_sweet_spot')
         self._search_yaw_angles     = self._read_float_array('search_yaw_angles')  # degrees
+        self._search_step_forward   = float(p('search_step_forward'))
+        self._search_step_speed     = float(p('search_step_speed'))
         self._search_pitch_angles   = self._read_float_array('search_pitch_angles')
         self._search_refine_dwell      = float(p('search_refine_dwell'))
         self._search_yaw_kp         = float(p('search_yaw_kp'))
@@ -296,6 +305,9 @@ class WBCCoordinatorNode(Node):
         self._lock_lost_ticks: int = 0                # tick consecutivi senza Orbbec in LOCKING
         self._ik_done: bool = False                    # IK trajectory completion status
         self._search_ik_done_count: int = 0  # count ik_done events per search position
+        self._search_home_phase: bool = False    # True while sending arm HOME between cycles
+        self._search_step_phase: bool = False    # True while stepping Spot forward
+        self._search_step_start: rclpy.time.Time | None = None  # forward step start time
         self._torso_tracker_state: str = ''           # LOCKED / TRACKING / IDLE
         self._torso_detected_ticks: list[bool] = []      # sliding window of recent (5) LOCKED/ESTIMATING ticks
         self._torso_pos: PoseStamped | None = None    # ultima posa torso da RealSense
@@ -360,6 +372,7 @@ class WBCCoordinatorNode(Node):
         self._pub_goal     = self.create_publisher(PoseStamped, p('wbc_goal_topic'),        10)
         self._pub_nlf_trigger = self.create_publisher(Bool, '/nlf/trigger', 10)
         self._pub_enable   = self.create_publisher(Bool,        p('wbc_enable_topic'),     10)
+        self._pub_ik_goal  = self.create_publisher(PoseStamped, '/wbc/ik_goal_pose',       10)
         self._pub_state    = self.create_publisher(String,      '/wbc/state',              10)
         self._pub_uncert   = self.create_publisher(Float32,     '/wbc/target_uncertainty', 10)
         self._pub_yaw      = self.create_publisher(Float32,     '/wbc/desired_yaw',        10)
@@ -378,7 +391,7 @@ class WBCCoordinatorNode(Node):
         self.get_logger().info(
             f'WBC Coordinator ready — in attesa TF da SpotCore.\n'
             f'  Attendo {self._odom_frame} → {self._body_frame} ...\n'
-            f'  FSM: 10 Hz  |  Search: 6 yaw × refinement\n'
+            f'  FSM: 10 Hz  |  Search: ±30° yaw × 7 arm poses × step forward\n'
             f'  Lock: conf≥{self._search_lock_confidence}  |  samples: {self._search_lock_samples}')
 
     # ── Callbacks ─────────────────────────────────────────────────────
@@ -915,21 +928,66 @@ class WBCCoordinatorNode(Node):
             self._tick_refinement()
             return
 
-        # ── Griglia esaurita ─────────────────────────────────────────
-        if self._search_position_idx >= len(self._search_positions):
-            self.get_logger().warn('Search sequence complete → IDLE')
-            self._set_wbc_enabled(False)
-            self._set_state(CoordState.IDLE, force=True)
+        # ── HOME phase: waiting for arm to reach HOME after both yaws ─
+        if self._search_home_phase:
+            if self._ik_done:
+                self._ik_done = False
+                self.get_logger().info('HOME ik_done → stepping forward')
+                self._search_home_phase = False
+                self._search_step_phase = True
+                self._search_step_start = self.get_clock().now()
+                t = Twist()
+                t.linear.x = float(self._search_step_speed)
+                self._pub_cmd_vel.publish(t)
             return
 
-        # ── Waiting for arm to finish 3 poses after rotation ─────────
+        # ── STEP phase: Spot moving forward timed ─────────────────────
+        if self._search_step_phase:
+            elapsed = (self.get_clock().now() - self._search_step_start).nanoseconds / 1e9
+            step_duration = self._search_step_forward / self._search_step_speed
+            if elapsed >= step_duration:
+                self._pub_cmd_vel.publish(Twist())
+                self._search_step_phase = False
+                self._search_step_start = None
+                # Reset cycle: back to yaw +30°
+                self._search_position_idx = 0
+                self._search_position_start = None
+                self._search_ik_done_count = 0
+                self._search_rotating = False
+                self._set_wbc_enabled(True)
+                self.get_logger().info(
+                    f'Step done ({elapsed:.1f}s) → new search cycle')
+            return
+
+        # ── Both yaws complete → start HOME sequence ──────────────────
+        if self._search_position_idx >= len(self._search_positions):
+            self.get_logger().info('Both yaws complete → sending arm HOME')
+            self._set_wbc_enabled(False)
+            self._search_home_phase = True
+            self._search_ik_done_count = 0
+            self._search_position_start = None
+            self._search_rotating = False
+            # Publish HOME pose via ik_goal_mux path
+            home_pose = PoseStamped()
+            home_pose.header.frame_id = 'world'
+            home_pose.pose.position.x = float(SEARCH_HOME_POS[0])
+            home_pose.pose.position.y = float(SEARCH_HOME_POS[1])
+            home_pose.pose.position.z = float(SEARCH_HOME_POS[2])
+            home_pose.pose.orientation.x = float(SEARCH_HOME_ORI[0])
+            home_pose.pose.orientation.y = float(SEARCH_HOME_ORI[1])
+            home_pose.pose.orientation.z = float(SEARCH_HOME_ORI[2])
+            home_pose.pose.orientation.w = float(SEARCH_HOME_ORI[3])
+            self._pub_ik_goal.publish(home_pose)
+            return
+
+        # ── Waiting for arm to finish 7 poses after rotation ──────────
         if not self._search_rotating and self._search_position_start is not None:
             if self._ik_done:
                 self._search_ik_done_count += 1
                 self._ik_done = False
-                if self._search_ik_done_count >= 3:
+                if self._search_ik_done_count >= 7:
                     self.get_logger().info(
-                        f'Search pos {self._search_position_idx+1}: arm 3 poses done → next rotation')
+                        f'Search pos {self._search_position_idx+1}: arm 7 poses done → next')
                     self._search_position_idx += 1
                     self._search_position_start = None
                     self._search_ik_done_count = 0
@@ -966,11 +1024,11 @@ class WBCCoordinatorNode(Node):
                 self._pub_cmd_vel.publish(Twist())
                 self._search_rotating = False
                 self._search_position_start = self.get_clock().now()
-                self._ik_done = False  # reset for arm to start 3 poses
+                self._ik_done = False  # reset for arm to start 7 poses
                 self._search_ik_done_count = 0
                 self.get_logger().info(
                     f'Search pos {self._search_position_idx+1}: rotation done '
-                    f'({elapsed:.1f}s) → arm 3 poses')
+                    f'({elapsed:.1f}s) → arm 7 poses')
                 return
             t = Twist()
             t.angular.z = float(math.copysign(self._search_max_angular_vel, pos['yaw']))
@@ -1783,9 +1841,15 @@ class WBCCoordinatorNode(Node):
                 self._search_position_start = None
                 self._search_saved_idx = 0
                 self._search_rotating = False
+                self._search_home_phase = False
+                self._search_step_phase = False
+                self._search_step_start = None
             else:
-                # Re-entry: stop residual cmd_vel, resume from current position
+                # Re-entry: stop residual cmd_vel, reset phases, resume from current position
                 self._pub_cmd_vel.publish(Twist())
+                self._search_home_phase = False
+                self._search_step_phase = False
+                self._search_step_start = None
             # else: re-entry from LOCKING or SEMI_LOCKING — resume, don't rebuild
         if new_state == CoordState.SCANNING:
             self._set_body_pose(self._handoff_body_height)
@@ -1858,7 +1922,7 @@ class WBCCoordinatorNode(Node):
 
     def _build_search_sequence(self) -> list:
         """Build search sequence from yaw_angles list (degrees, relative).
-        Each step: rotate by angle degrees, then arm does 3 poses.
+        Each step: rotate by angle degrees, then arm does 7 poses.
         Pitch sweep is handled by refinement mode when a detection triggers."""
         yaw_list = [math.radians(a) for a in self._search_yaw_angles]
         return [{'yaw': y, 'pitch': 0.0} for y in yaw_list]
