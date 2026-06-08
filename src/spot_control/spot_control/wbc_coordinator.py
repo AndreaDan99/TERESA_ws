@@ -295,6 +295,7 @@ class WBCCoordinatorNode(Node):
         self._search_rotation_start: rclpy.time.Time | None = None  # timed open-loop rotation start
         self._lock_lost_ticks: int = 0                # tick consecutivi senza Orbbec in LOCKING
         self._ik_done: bool = False                    # IK trajectory completion status
+        self._search_ik_done_count: int = 0  # count ik_done events per search position
         self._torso_tracker_state: str = ''           # LOCKED / TRACKING / IDLE
         self._torso_detected_ticks: list[bool] = []      # sliding window of recent (5) LOCKED/ESTIMATING ticks
         self._torso_pos: PoseStamped | None = None    # ultima posa torso da RealSense
@@ -924,12 +925,15 @@ class WBCCoordinatorNode(Node):
         # ── Waiting for arm to finish 3 poses after rotation ─────────
         if not self._search_rotating and self._search_position_start is not None:
             if self._ik_done:
-                self.get_logger().info(
-                    f'Search pos {self._search_position_idx+1}: arm done → next rotation')
-                self._search_position_idx += 1
-                self._search_position_start = None
+                self._search_ik_done_count += 1
                 self._ik_done = False
-                return
+                if self._search_ik_done_count >= 3:
+                    self.get_logger().info(
+                        f'Search pos {self._search_position_idx+1}: arm 3 poses done → next rotation')
+                    self._search_position_idx += 1
+                    self._search_position_start = None
+                    self._search_ik_done_count = 0
+                    return
             # Still waiting for arm — check refinement trigger
             if self._should_refine():
                 self._start_refinement()
@@ -963,6 +967,7 @@ class WBCCoordinatorNode(Node):
                 self._search_rotating = False
                 self._search_position_start = self.get_clock().now()
                 self._ik_done = False  # reset for arm to start 3 poses
+                self._search_ik_done_count = 0
                 self.get_logger().info(
                     f'Search pos {self._search_position_idx+1}: rotation done '
                     f'({elapsed:.1f}s) → arm 3 poses')
