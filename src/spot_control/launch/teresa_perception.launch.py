@@ -32,7 +32,7 @@ def generate_launch_description():
         'use_surface', default_value='true',
         description='Avvia realsense_surface_node')
     perception_backend_arg = DeclareLaunchArgument(
-        'perception_backend', default_value='nlf',
+        'perception_backend', default_value='yolo',
         description='Perception backend: nlf or yolo')
 
     test_mode = LaunchConfiguration('test_mode')

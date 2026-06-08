@@ -47,7 +47,7 @@ def generate_launch_description():
 
     perception_backend_arg = DeclareLaunchArgument(
         'perception_backend',
-        default_value='nlf',
+        default_value='yolo',
         description='Perception backend: nlf or yolo'
     )
     perception_backend = LaunchConfiguration('perception_backend')
