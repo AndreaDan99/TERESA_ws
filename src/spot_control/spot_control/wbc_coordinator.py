@@ -296,7 +296,7 @@ class WBCCoordinatorNode(Node):
         self._search_initial_yaw: float | None = None  # yaw Spot all'ingresso in SEARCHING [rad, odom]
         self._search_rotating: bool = False           # True mentre ruota verso il target yaw
         self._search_target_yaw: float = 0.0          # yaw assoluto desiderato [rad, odom]
-        self._last_yaw_error: float = 0.0             # ultimo errore yaw per fallback TF
+        self._search_rotation_start: rclpy.time.Time | None = None  # timed open-loop rotation start
         self._lock_lost_ticks: int = 0                # tick consecutivi senza Orbbec in LOCKING
         self._ik_done: bool = False                    # IK trajectory completion status
         self._torso_tracker_state: str = ''           # LOCKED / TRACKING / IDLE
@@ -948,7 +948,7 @@ class WBCCoordinatorNode(Node):
             self._search_target_yaw = normalize_angle(
                 self._search_initial_yaw + pos['yaw'])
             self._search_rotating = True
-            self._last_yaw_error = 0.0
+            self._search_rotation_start = self.get_clock().now()
             self.get_logger().info(
                 f'Search pos {self._search_position_idx+1}/{len(self._search_positions)}: '
                 f'yaw={math.degrees(pos["yaw"]):.0f}° '
@@ -956,42 +956,20 @@ class WBCCoordinatorNode(Node):
                 f'(abs target={math.degrees(self._search_target_yaw):.0f}°)')
             return
 
-        # ── Rotating: P-control yaw via cmd_vel.angular.z ──
+        # ── Rotating: timed open-loop (no TF needed) ──
         if self._search_rotating:
-            cur_yaw = self._get_current_yaw()
-            if cur_yaw is None:
-                self.get_logger().warn(
-                    'cmd_vel rotation: TF odom→body non disponibile, '
-                    f'fallback _last_yaw_error={self._last_yaw_error:.3f}',
-                    throttle_duration_sec=5.0)
-                if self._last_yaw_error is not None:
-                    t = Twist()
-                    t.angular.z = float(np.clip(
-                        self._search_yaw_kp * self._last_yaw_error,
-                        -self._search_max_angular_vel, self._search_max_angular_vel))
-                    self._pub_cmd_vel.publish(t)
-                return
-            error = normalize_angle(self._search_target_yaw - cur_yaw)
-            self._last_yaw_error = error
-            if abs(error) < self._search_yaw_tolerance:
+            elapsed = (self.get_clock().now() - self._search_rotation_start).nanoseconds / 1e9
+            expected = self._search_yaw_increment / self._search_max_angular_vel
+            if elapsed >= expected:
                 self._pub_cmd_vel.publish(Twist())
                 self._search_rotating = False
                 self._search_position_start = self.get_clock().now()
                 self.get_logger().info(
-                    f'Search pos {self._search_position_idx+1}: yaw reached '
-                    f'(error={math.degrees(error):.1f}°) → dwell {self._search_coarse_dwell:.0f}s')
+                    f'Search pos {self._search_position_idx+1}: rotation done '
+                    f'({elapsed:.1f}s) → dwell {self._search_coarse_dwell:.0f}s')
                 return
-
             t = Twist()
-            t.angular.z = float(np.clip(
-                self._search_yaw_kp * error,
-                -self._search_max_angular_vel, self._search_max_angular_vel))
-            self.get_logger().info(
-                f'cmd_vel.angular.z={t.angular.z:.3f} rad/s  '
-                f'error={math.degrees(error):.1f}°  '
-                f'target={math.degrees(self._search_target_yaw):.1f}°  '
-                f'cur={math.degrees(cur_yaw):.1f}°',
-                throttle_duration_sec=3.0)
+            t.angular.z = float(self._search_max_angular_vel)
             self._pub_cmd_vel.publish(t)
             return
 
