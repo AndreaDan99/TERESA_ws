@@ -549,11 +549,12 @@ class WBCQPControllerNode(Node):
         self._pub_en.publish(Bool(data=re_enable))
 
     def _send_home(self) -> None:
-        home_pos = np.array([HOME_POS[0], HOME_POS[1], self._home_lock_z])
-        home_pose = _make_pose_stamped(home_pos, HOME_ORI)
+        home_pos = np.array([0.144, -0.005, 0.530])
+        home_quat = np.array([0.0182, 0.1521, -0.0217, 0.9880])
+        home_pose = _make_pose_stamped(home_pos, home_quat)
         self._pub_ik.publish(home_pose)
         self._pub_en.publish(Bool(data=True))
-        self.get_logger().info(f'Lock home sent: Z={self._home_lock_z:.2f}m')
+        self.get_logger().info('Lock home sent: search pose 1')
 
     # ── PERCEPTUAL_SCAN mode (APPROACHING) ───────────────────────────────
 
