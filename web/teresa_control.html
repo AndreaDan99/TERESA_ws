@@ -47,8 +47,9 @@ body{
 /* main area */
 #main{flex:1;overflow:auto;display:flex;flex-direction:column}
 
-/* default view */
-#state-view{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:30px;gap:16px;flex:1}
+/* default view — split layout */
+#state-view{display:flex;flex-direction:row;align-items:stretch;padding:30px;gap:16px;flex:1;min-height:0;overflow:auto}
+#log-panel{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;min-width:0}
 #state-big{font-size:28px;font-weight:700;letter-spacing:2px;text-transform:uppercase}
 #state-detail{font-size:12px;color:var(--text-dim);text-align:center;line-height:1.6}
 #log-area{
@@ -59,6 +60,82 @@ body{
 #log-area .entry.step{color:var(--warning)}#log-area .entry.error{color:var(--danger)}#log-area .entry.info{color:var(--accent)}
 #log-area::-webkit-scrollbar{width:6px}#log-area::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 #start-indicator{font-size:11px;color:var(--text-dim)}
+
+/* joystick panel */
+#joystick-panel{
+  flex:0 0 320px;display:flex;flex-direction:column;gap:14px;
+  background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:16px;
+  min-width:280px;
+}
+#joystick-panel h3{margin:0;font-size:13px;font-weight:600;color:var(--text-dim);padding-bottom:6px;border-bottom:1px solid var(--border)}
+#joystick-panel.disabled{opacity:.35;pointer-events:none}
+
+/* d-pad grid */
+#dpad-grid{
+  display:grid;grid-template-columns:1fr 1fr 1fr;grid-template-rows:1fr 1fr 1fr;
+  grid-template-areas:". up ." "left center right" ". down .";gap:6px;width:fit-content;margin:0 auto;
+}
+.dpad-btn{
+  width:56px;height:56px;font-family:var(--font);font-size:20px;font-weight:700;
+  border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);
+  cursor:pointer;transition:all .12s;display:flex;align-items:center;justify-content:center;
+  user-select:none;-webkit-user-select:none;
+}
+.dpad-btn:hover:not(:disabled){background:rgba(255,255,255,.1);border-color:var(--accent);color:var(--accent)}
+.dpad-btn:active:not(:disabled){background:var(--accent);color:var(--btn-text,var(--bg));box-shadow:0 0 12px rgba(80,200,120,.2);transform:scale(.95)}
+.dpad-btn:disabled{opacity:.3;cursor:not-allowed}
+#dpad-up{grid-area:up}#dpad-down{grid-area:down}#dpad-left{grid-area:left}#dpad-right{grid-area:right}
+#dpad-center{
+  grid-area:center;width:56px;height:56px;font-family:var(--font);font-size:13px;font-weight:700;
+  border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--accent);
+  cursor:default;display:flex;align-items:center;justify-content:center;
+}
+
+/* mode toggle */
+#mode-toggle{
+  display:flex;align-items:center;justify-content:center;gap:8px;font-size:11px;
+}
+#mode-toggle button{
+  font-family:var(--font);font-size:11px;font-weight:600;padding:4px 12px;
+  border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);
+  cursor:pointer;transition:all .12s;
+}
+#mode-toggle button:hover{background:rgba(255,255,255,.08)}
+#mode-toggle button.active{border-color:var(--accent);color:var(--accent);background:rgba(80,200,120,.06)}
+#mode-toggle .mode-label{color:var(--text-dim);font-size:10px;text-transform:uppercase;letter-spacing:1px}
+
+/* speed control */
+#speed-row{
+  display:flex;align-items:center;justify-content:center;gap:8px;font-size:11px;
+}
+#speed-row button{
+  font-family:var(--font);font-size:14px;font-weight:700;width:28px;height:28px;
+  border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);
+  cursor:pointer;transition:all .12s;display:flex;align-items:center;justify-content:center;
+}
+#speed-row button:hover{background:rgba(255,255,255,.1);border-color:var(--accent);color:var(--accent)}
+#speed-val{color:var(--accent);font-weight:700;min-width:32px;text-align:center}
+#speed-label{color:var(--text-dim);font-size:10px;text-transform:uppercase;letter-spacing:1px}
+
+/* sliders */
+.slider-row{display:flex;align-items:center;gap:8px;font-size:11px}
+.slider-row label{color:var(--text-dim);font-size:11px;white-space:nowrap;min-width:44px}
+.slider-row input[type=range]{
+  -webkit-appearance:none;appearance:none;flex:1;height:6px;
+  background:var(--bg);border-radius:3px;outline:none;cursor:pointer;
+}
+.slider-row input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;width:16px;height:16px;border-radius:50%;
+  background:var(--accent);border:2px solid var(--bg-card);cursor:pointer;transition:transform .1s;
+}
+.slider-row input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.2)}
+.slider-row .slider-val{color:var(--accent);font-weight:700;min-width:38px;text-align:right;font-size:11px}
+.slider-ticks{display:flex;justify-content:space-between;font-size:9px;color:var(--text-dim);padding:0 2px;margin-top:-4px}
+
+@media(max-width:900px){
+  #state-view{flex-direction:column}
+  #joystick-panel{flex:0 0 auto;width:100%;min-width:auto}
+}
 
 /* camera view */
 #camera-view{display:none;flex:1;flex-direction:column;overflow:hidden}
@@ -170,9 +247,46 @@ body{
 
 <div id="main">
   <div id="state-view">
-    <div id="state-big">---</div>
-    <div id="state-detail">Connecting to rosbridge...</div>
-    <div id="log-area"><div class="entry" style="color:var(--text-dim)">---</div></div>
+    <div id="log-panel">
+      <div id="state-big">---</div>
+      <div id="state-detail">Connecting to rosbridge...</div>
+      <div id="log-area"><div class="entry" style="color:var(--text-dim)">---</div></div>
+    </div>
+    <div id="joystick-panel">
+      <h3>🕹 JOYSTICK</h3>
+      <div id="dpad-grid">
+        <button class="dpad-btn" id="dpad-up"    data-direction="up">↑</button>
+        <button class="dpad-btn" id="dpad-left"  data-direction="left">←</button>
+        <div id="dpad-center">DRV</div>
+        <button class="dpad-btn" id="dpad-right" data-direction="right">→</button>
+        <button class="dpad-btn" id="dpad-down"  data-direction="down">↓</button>
+      </div>
+      <div id="mode-toggle">
+        <span class="mode-label">MODE</span>
+        <button id="mode-drive-btn" class="active">DRIVE</button>
+        <span style="color:var(--text-dim)">◄►</span>
+        <button id="mode-body-btn">BODY</button>
+      </div>
+      <div id="speed-row">
+        <span id="speed-label">SPEED:</span>
+        <button id="speed-minus">−</button>
+        <span id="speed-val">0.5</span>
+        <button id="speed-plus">+</button>
+      </div>
+      <div class="slider-row">
+        <label>Height</label>
+        <input type="range" id="height-slider" min="0" max="20" step="5" value="10">
+        <span class="slider-val" id="height-val">0.10m</span>
+      </div>
+      <div class="slider-row">
+        <label>Pitch</label>
+        <input type="range" id="pitch-slider" min="0" max="15" step="5" value="0">
+        <span class="slider-val" id="pitch-val">0°</span>
+      </div>
+      <div class="slider-ticks" style="margin-left:52px">
+        <span>0°</span><span>5°</span><span>10°</span><span>15°</span>
+      </div>
+    </div>
   </div>
 
   <div id="camera-view">
@@ -317,6 +431,9 @@ class TeresaController{
     // ui
     this.logLines=[];this.maxLog=60;
     this._navTimer=null;
+    // joystick
+    this.joystickMode='drive';this.joystickSpeed=0.5;this.joystickActive=false;this.joystickEnabled=false;
+    this._joystickHeight=0.10;this._joystickPitch=0;
 
     this.connect();
     document.addEventListener('keydown',e=>{
@@ -336,6 +453,47 @@ class TeresaController{
     });
     $('ros-url').addEventListener('keydown',e=>{if(e.key==='Enter')this.connect();});
     window.addEventListener('beforeunload',()=>{this.stopNavLoop();if(this.restartPub)this.restartPub.publish({data:false});});
+    // joystick event bindings
+    const dpadBtns=['up','down','left','right'];
+    const startJoystick=(e,dir)=>{
+      e.preventDefault();
+      if(!this.joystickEnabled)return;
+      this.joystickActive=true;
+      if(this.joystickMode==='drive')this.sendDriveCommand(dir);
+      else this.sendBodyCommand(dir);
+    };
+    dpadBtns.forEach(dir=>{
+      const btn=$('dpad-'+dir);
+      btn.addEventListener('mousedown',e=>startJoystick(e,dir));
+      btn.addEventListener('mouseup',()=>this.stopAll());
+      btn.addEventListener('mouseleave',()=>{if(this.joystickActive)this.stopAll();});
+      btn.addEventListener('touchstart',e=>startJoystick(e,dir),{passive:false});
+      btn.addEventListener('touchend',e=>{e.preventDefault();this.stopAll();});
+    });
+    document.addEventListener('mouseup',()=>{if(this.joystickActive)this.stopAll();});
+    // mode toggle
+    $('mode-drive-btn').addEventListener('click',()=>this.setJoystickMode('drive'));
+    $('mode-body-btn').addEventListener('click',()=>this.setJoystickMode('body'));
+    // speed
+    $('speed-minus').addEventListener('click',()=>this.adjustSpeed(-0.1));
+    $('speed-plus').addEventListener('click',()=>this.adjustSpeed(0.1));
+    // sliders
+    $('height-slider').addEventListener('input',()=>{
+      const v=parseInt($('height-slider').value);
+      $('height-val').textContent=(v/100).toFixed(2)+'m';
+      this._joystickHeight=v/100;
+      const rad=this._joystickPitch*Math.PI/180;
+      const qw=Math.cos(rad/2),qy=Math.sin(rad/2);
+      this.bodyPosePub.publish({position:{x:0,y:0,z:this._joystickHeight},orientation:{x:0,y:qy,z:0,w:qw}});
+    });
+    $('pitch-slider').addEventListener('input',()=>{
+      const v=parseInt($('pitch-slider').value);
+      $('pitch-val').textContent=v+'°';
+      this._joystickPitch=v;
+      const rad=v*Math.PI/180;
+      const qw=Math.cos(rad/2),qy=Math.sin(rad/2);
+      this.bodyPosePub.publish({position:{x:0,y:0,z:this._joystickHeight},orientation:{x:0,y:qy,z:0,w:qw}});
+    });
     setInterval(()=>this.pingCheck(),3000);
   }
 
@@ -374,12 +532,14 @@ class TeresaController{
     this.manualGatePub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/set_manual_scan_gate',messageType:'std_msgs/Bool'});
     this.cmdVelPub=new ROSLIB.Topic({ros:this.ros,name:'/my_spot/cmd_vel',messageType:'geometry_msgs/Twist'});
     this.gotoPointPub=new ROSLIB.Topic({ros:this.ros,name:'/exposure/goto_point',messageType:'std_msgs/Int32'});
+    this.bodyPosePub=new ROSLIB.Topic({ros:this.ros,name:'/my_spot/body_pose',messageType:'geometry_msgs/Pose'});
 
     /* control subscribers */
     this.wbcStateSub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/state',messageType:'std_msgs/String'});
     this.wbcStateSub.subscribe(msg=>{
       const p=$('wbc-state').textContent;
       if(msg.data!==p){$('wbc-state').textContent=msg.data;$('state-big').textContent=msg.data;this.log('WBC state → '+msg.data,'info');}
+      this.updateJoystickEnabled();
     });
     this.stepPendingSub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/step_pending',messageType:'std_msgs/String'});
     this.stepPendingSub.subscribe(msg=>{
@@ -888,6 +1048,52 @@ class TeresaController{
   enableAlways(){$('btn-stop').disabled=false;$('btn-stand').disabled=false;$('btn-sit').disabled=false;$('btn-pon').disabled=false;$('btn-poff').disabled=false;$('pause-btn').disabled=false;}
 
   enableMissionButtons(){['btn-start','btn-return','btn-update','btn-step','btn-stop','btn-stand','btn-sit','btn-pon','btn-poff','pause-btn'].forEach(id=>$(id).disabled=false);$('btn-manual').disabled=false;$('btn-auto').disabled=false;}
+
+  /* ── Joystick ─────────────────────────────── */
+  setJoystickMode(m){
+    this.joystickMode=m;
+    $('dpad-center').textContent=m==='drive'?'DRV':'BDY';
+    $('mode-drive-btn').classList.toggle('active',m==='drive');
+    $('mode-body-btn').classList.toggle('active',m==='body');
+  }
+  adjustSpeed(d){
+    this.joystickSpeed=this.clamp(this.joystickSpeed+d,.1,1.0);
+    $('speed-val').textContent=this.joystickSpeed.toFixed(1);
+  }
+  updateJoystickEnabled(){
+    const wbc=$('wbc-state').textContent;
+    this.joystickEnabled=(wbc==='IDLE');
+    $('joystick-panel').classList.toggle('disabled',!this.joystickEnabled);
+    ['dpad-up','dpad-down','dpad-left','dpad-right'].forEach(id=>{$(id).disabled=!this.joystickEnabled;});
+  }
+  sendDriveCommand(dir){
+    const s=this.joystickSpeed;
+    let lx=0,ly=0;
+    if(dir==='up')lx=s;
+    else if(dir==='down')lx=-s;
+    else if(dir==='left')ly=s;
+    else if(dir==='right')ly=-s;
+    this.cmdVelPub.publish({linear:{x:lx,y:ly,z:0},angular:{x:0,y:0,z:0}});
+  }
+  sendBodyCommand(dir){
+    const hs=$('height-slider'),ps=$('pitch-slider');
+    let h=parseInt(hs.value), p=parseInt(ps.value);
+    if(dir==='up')h=Math.min(20,h+5);
+    else if(dir==='down')h=Math.max(0,h-5);
+    else if(dir==='left')p=Math.max(0,p-5);
+    else if(dir==='right')p=Math.min(15,p+5);
+    hs.value=h;ps.value=p;
+    $('height-val').textContent=(h/100).toFixed(2)+'m';
+    $('pitch-val').textContent=p+'°';
+    this._joystickHeight=h/100;this._joystickPitch=p;
+    const rad=p*Math.PI/180;
+    const qw=Math.cos(rad/2),qy=Math.sin(rad/2);
+    this.bodyPosePub.publish({position:{x:0,y:0,z:this._joystickHeight},orientation:{x:0,y:qy,z:0,w:qw}});
+  }
+  stopAll(){
+    this.joystickActive=false;
+    this.cmdVelPub.publish({linear:{x:0,y:0,z:0},angular:{x:0,y:0,z:0}});
+  }
 
   async onStart(){
     if(!this.tfSystemReady){this.log('TF not ready — waiting for SpotCore','error');return;}
