@@ -477,11 +477,16 @@ class WBCQPControllerNode(Node):
         3 pose wide: HOME centrale, LEFT-REACH e RIGHT-REACH, senza tilt (guarda avanti).
         Sweep Y ±0.15m, X avanza +0.10m.
         """
-        # Nessun tilt — usa orientamento HOME direttamente
+        # Tilt leggero (-8°) per puntare verso zona paziente
+        tilt_rad = -0.14    # -8° pitch
+        x_tilted = np.array([np.cos(tilt_rad), 0.0, np.sin(tilt_rad)])
+        tilted_quat = compute_ee_orientation_minrot(x_tilted, HOME_ORI.tolist())
+
+        # Pose vicine alla home, Z entro workspace Z1 (~0.60m max)
         offsets = [
-            (np.array([-0.09,  0.00,  0.55]), HOME_ORI),    # HOME
-            (np.array([+0.10, -0.15,  0.42]), HOME_ORI),    # LEFT
-            (np.array([+0.10, +0.15,  0.42]), HOME_ORI),    # RIGHT
+            (np.array([0.00,  0.00,  0.00]), tilted_quat),    # HOME esatta
+            (np.array([0.05, -0.08, -0.02]), tilted_quat),    # LEFT  (piccolo sweep)
+            (np.array([0.05, +0.08, -0.02]), tilted_quat),    # RIGHT (piccolo sweep)
         ]
 
         poses = []
