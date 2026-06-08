@@ -1,91 +1,67 @@
 {
   "schema_version": 2,
-  "active_work_id": "nlf-integration-a778254b",
+  "active_plan": "/Users/andrea/Documents/GIT_Repositories/TERESA_ws/.omo/plans/wbc-timed-rotation.md",
+  "started_at": "2026-06-08T15:03:05.440Z",
+  "status": "completed",
+  "session_ids": [
+    "opencode:ses_1598293c6ffe6pWP8aBXMUdbN3"
+  ],
+  "plan_name": "wbc-timed-rotation",
+  "agent": "atlas",
   "works": {
-    "nlf-integration-a778254b": {
-      "work_id": "nlf-integration-a778254b",
-      "active_plan": "/Users/andrea/Documents/GIT_Repositories/TERESA_ws/.omo/plans/nlf-integration.md",
-      "plan_name": "nlf-integration",
+    "wbc-timed-rotation": {
+      "work_id": "wbc-timed-rotation",
+      "active_plan": "/Users/andrea/Documents/GIT_Repositories/TERESA_ws/.omo/plans/wbc-timed-rotation.md",
+      "plan_name": "wbc-timed-rotation",
       "status": "completed",
-      "started_at": "2026-06-06T12:47:45.443Z",
-      "updated_at": "2026-06-06T16:49:19.392Z",
+      "started_at": "2026-06-08T15:03:05.440Z",
       "session_ids": [
-        "opencode:ses_1636631f9ffe30W2yttstqBoMu"
+        "opencode:ses_1598293c6ffe6pWP8aBXMUdbN3"
       ],
       "session_origins": {
-        "opencode:ses_1636631f9ffe30W2yttstqBoMu": "direct"
+        "opencode:ses_1598293c6ffe6pWP8aBXMUdbN3": "direct"
       },
       "agent": "atlas",
       "task_sessions": {
-        "final-wave:f1": {
-          "task_key": "final-wave:f1",
-          "task_label": "F1",
-          "task_title": "**Plan Compliance Audit** — `oracle`",
-          "session_id": "opencode:ses_162f1eb61ffeAmop9hD5plI7tT",
-          "agent": "oracle",
-          "started_at": "2026-06-06T12:49:12.697Z",
-          "status": "completed",
-          "updated_at": "2026-06-06T13:15:33.233Z",
-          "ended_at": "2026-06-06T13:15:33.233Z",
-          "elapsed_ms": 1580536
-        },
         "todo:1": {
           "task_key": "todo:1",
           "task_label": "1",
-          "task_title": "Read the current `yolo_skeleton_spot.py` on main branch to copy the ByteTrack structure. The main branch version is at commit `f62cfef` (check `git show f62cfef:src/spot_perception/spot_perception/yolo_skeleton_spot.py`).",
-          "session_id": "opencode:ses_1622a0d1dffeVDaQrHsSOfm2qZ",
+          "task_title": "Replace P-control rotation with timed open-loop in `_tick_search()`",
+          "session_id": "opencode:ses_1583d459cffe6hY7vAMzAKgzqk",
           "agent": "Sisyphus-Junior",
           "category": "quick",
-          "started_at": "2026-06-06T13:07:20.714Z",
-          "ended_at": "2026-06-06T16:49:19.392Z",
-          "elapsed_ms": 13318678,
+          "updated_at": "2026-06-08T15:04:31.776Z",
+          "started_at": "2026-06-08T15:04:13.898Z",
           "status": "completed",
-          "updated_at": "2026-06-06T16:49:19.392Z"
+          "ended_at": "2026-06-08T15:04:31.776Z",
+          "elapsed_ms": 17878
         }
       },
-      "ended_at": "2026-06-06T13:15:58.318Z",
-      "elapsed_ms": 1692875
+      "updated_at": "2026-06-08T15:05:03.663Z",
+      "ended_at": "2026-06-08T15:05:03.663Z",
+      "elapsed_ms": 118223
     }
   },
-  "active_plan": "/Users/andrea/Documents/GIT_Repositories/TERESA_ws/.omo/plans/nlf-integration.md",
-  "started_at": "2026-06-06T12:47:45.443Z",
-  "status": "completed",
-  "updated_at": "2026-06-06T16:49:19.392Z",
-  "session_ids": [
-    "opencode:ses_1636631f9ffe30W2yttstqBoMu"
-  ],
+  "active_work_id": "wbc-timed-rotation",
   "session_origins": {
-    "opencode:ses_1636631f9ffe30W2yttstqBoMu": "direct"
+    "opencode:ses_1598293c6ffe6pWP8aBXMUdbN3": "direct"
   },
-  "plan_name": "nlf-integration",
   "task_sessions": {
-    "final-wave:f1": {
-      "task_key": "final-wave:f1",
-      "task_label": "F1",
-      "task_title": "**Plan Compliance Audit** — `oracle`",
-      "session_id": "opencode:ses_162f1eb61ffeAmop9hD5plI7tT",
-      "agent": "oracle",
-      "started_at": "2026-06-06T12:49:12.697Z",
-      "status": "completed",
-      "updated_at": "2026-06-06T13:15:33.233Z",
-      "ended_at": "2026-06-06T13:15:33.233Z",
-      "elapsed_ms": 1580536
-    },
     "todo:1": {
       "task_key": "todo:1",
       "task_label": "1",
-      "task_title": "Read the current `yolo_skeleton_spot.py` on main branch to copy the ByteTrack structure. The main branch version is at commit `f62cfef` (check `git show f62cfef:src/spot_perception/spot_perception/yolo_skeleton_spot.py`).",
-      "session_id": "opencode:ses_1622a0d1dffeVDaQrHsSOfm2qZ",
+      "task_title": "Replace P-control rotation with timed open-loop in `_tick_search()`",
+      "session_id": "opencode:ses_1583d459cffe6hY7vAMzAKgzqk",
       "agent": "Sisyphus-Junior",
       "category": "quick",
-      "started_at": "2026-06-06T13:07:20.714Z",
-      "ended_at": "2026-06-06T16:49:19.392Z",
-      "elapsed_ms": 13318678,
+      "updated_at": "2026-06-08T15:04:31.776Z",
+      "started_at": "2026-06-08T15:04:13.898Z",
       "status": "completed",
-      "updated_at": "2026-06-06T16:49:19.392Z"
+      "ended_at": "2026-06-08T15:04:31.776Z",
+      "elapsed_ms": 17878
     }
   },
-  "agent": "atlas",
-  "ended_at": "2026-06-06T13:15:58.318Z",
-  "elapsed_ms": 1692875
+  "updated_at": "2026-06-08T15:05:03.663Z",
+  "ended_at": "2026-06-08T15:05:03.663Z",
+  "elapsed_ms": 118223
 }

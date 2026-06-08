@@ -88,10 +88,8 @@ wbc_coordinator:
     #   Spot fermo al yaw corrente, sweep dei 3 pitch per massimizzare conf Orbbec.
     #   Se best_conf ≥ lock_confidence → LOCKING, altrimenti prossimo yaw coarse.
     search_body_height: 0.0                       # [m] altezza nominale
-    search_yaw_increment: 1.05                    # [rad] ≈60° passo Spot
-    search_yaw_steps: 6                           # posizioni = 360° (6 × 60°)
+    search_yaw_angles: [30.0, -60.0, 90.0, -120.0, 150.0, -180.0]  # degrees, relative steps
     search_pitch_angles: [0.0, 0.087, 0.17]       # [rad] 0°, 5°, 10° — usati nel refinement
-    search_coarse_dwell: 5.0                      # [s] Spot fermo per posizione coarse
     search_refine_dwell: 4.0                      # [s] dwell per pitch durante refinement
     search_yaw_kp: 0.8                            # P-gain for yaw rotation via cmd_vel.angular.z
     search_yaw_tolerance: 0.08                    # [rad] ~4.6° tolleranza per yaw raggiunto

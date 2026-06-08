@@ -474,25 +474,19 @@ class WBCQPControllerNode(Node):
 
     def _gen_cartesian_search_grid(self) -> list[PoseStamped]:
         """
-        3 pose wide: HOME centrale, LEFT-REACH e RIGHT-REACH, senza tilt (guarda avanti).
-        Sweep Y ±0.15m, X avanza +0.10m.
+        3 hardcoded manual poses: position + quaternion.
+        No tilt computation, no HOME_POS offset.
         """
-        # Tilt leggero (-8°) per puntare verso zona paziente
-        tilt_rad = -0.14    # -8° pitch
-        x_tilted = np.array([np.cos(tilt_rad), 0.0, np.sin(tilt_rad)])
-        tilted_quat = compute_ee_orientation_minrot(x_tilted, HOME_ORI.tolist())
-
-        # Pose vicine alla home, Z entro workspace Z1 (~0.60m max)
-        offsets = [
-            (np.array([0.00,  0.00,  0.10]), tilted_quat),    # HOME (EE up)
-            (np.array([0.05, -0.15, -0.05]), tilted_quat),    # LEFT  (left-down)
-            (np.array([0.05,  0.15, -0.05]), tilted_quat),    # RIGHT (right-down)
+        SEARCH_POSES = [
+            ([0.144, -0.005,  0.530], [0.0182,  0.1521, -0.0217, 0.9880]),
+            ([0.067, -0.070,  0.540], [0.0906,  0.1890, -0.3976, 0.8932]),
+            ([0.057,  0.079,  0.538], [-0.0888, 0.1933,  0.4310, 0.8769]),
         ]
 
         poses = []
-        for offset, quat in offsets:
-            pos = HOME_POS + offset
-            clipped, _, _ = self._ws_checker.clip_target(pos)
+        for pos, quat in SEARCH_POSES:
+            pos_arr = np.array(pos)
+            clipped, _, _ = self._ws_checker.clip_target(pos_arr)
             poses.append(_make_pose_stamped(clipped, quat))
         return poses
 

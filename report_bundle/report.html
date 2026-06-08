@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wound/Injury Detection &amp; Pose — Spot + Jetson Orin</title>
+<style>
+:root{
+  --bg:#0d1017; --panel:#161b24; --panel2:#1b212c; --line:#2a313d;
+  --txt:#e8ecf2; --mut:#9aa6b6; --accent:#5ab0ff; --good:#4ed18a; --warn:#ffb454;
+}
+*{box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  margin:0;background:var(--bg);color:var(--txt);line-height:1.5}
+header{padding:30px 36px 26px;background:linear-gradient(135deg,#11151d 0%,#1a2230 100%);
+  border-bottom:1px solid var(--line)}
+header h1{margin:0 0 10px;font-size:25px;letter-spacing:-.3px}
+header .sum{margin:6px 0;color:var(--mut);font-size:14px;max-width:980px}
+header .sum b{color:var(--txt)}
+header .hl{color:var(--accent);font-weight:600}
+.tags{margin-top:14px}
+.tag{display:inline-block;background:#222b3a;border:1px solid var(--line);color:var(--mut);
+  font-size:11px;padding:3px 9px;border-radius:20px;margin:0 6px 6px 0}
+main{padding:24px 36px 8px;max-width:1560px;margin:auto}
+h2{font-size:18px;margin:38px 0 6px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h2 .lead{font-size:13px;color:var(--mut);font-weight:400;margin-left:8px}
+h3.sub{font-size:14px;margin:24px 0 12px;color:var(--accent);
+  border-left:3px solid var(--accent);padding-left:10px;font-weight:600}
+h3.sub .blurb{color:var(--mut);font-weight:400;font-size:12px;margin-left:8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  overflow:hidden;transition:transform .12s ease,border-color .12s ease}
+.card:hover{transform:translateY(-2px);border-color:#3a4a63}
+.card img{width:100%;display:block;background:#000;aspect-ratio:16/9;object-fit:cover}
+.card .noimg{width:100%;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;
+  background:#0a0d12;color:#566;font-size:12px}
+.meta{padding:9px 11px 11px}
+.name{font-weight:600;font-size:13px;display:flex;align-items:center;gap:6px}
+.out{color:var(--mut);font-size:11px;margin:3px 0 7px}
+.stats{display:flex;flex-wrap:wrap;gap:10px;font-size:11px;color:var(--mut)}
+.stats b{color:var(--txt)} .stats .g b{color:var(--good)}
+.badge{font-size:10px;padding:1px 6px;border-radius:10px;font-weight:600}
+.badge.warn{background:#3a2c12;color:var(--warn);border:1px solid #5a4320}
+.vidrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:16px;margin-top:6px}
+figure.vid{margin:14px 0 0;background:var(--panel);border:1px solid var(--line);
+  border-radius:10px;overflow:hidden}
+figure.vid video{width:100%;display:block;background:#000}
+figure.vid figcaption{padding:8px 12px;font-size:12px;color:var(--mut)}
+figure.vid.missing .vidstub{padding:34px 18px;text-align:center;color:var(--mut);
+  font-size:13px;background:repeating-linear-gradient(45deg,#11151d,#11151d 10px,#141922 10px,#141922 20px)}
+.vidstub code{color:var(--accent)}
+p.posture{font-size:14px;margin:16px 0 6px;background:var(--panel2);
+  border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+p.posture .hl{color:var(--good);text-transform:capitalize}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-top:14px}
+.pcard{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:11px 13px}
+.pname{font-weight:600;font-size:13px;margin-bottom:7px}
+.pstats{display:flex;flex-wrap:wrap;gap:11px;font-size:11px;color:var(--mut)}
+.pstats b{color:var(--txt)} .pstats .g b{color:var(--good)}
+.tablewrap{overflow-x:auto;margin-top:14px;border:1px solid var(--line);border-radius:10px}
+table.metrics{border-collapse:collapse;width:100%;font-size:12px;min-width:880px}
+table.metrics th,table.metrics td{padding:7px 11px;text-align:left;border-bottom:1px solid var(--line);
+  white-space:nowrap}
+table.metrics thead th{background:var(--panel2);position:sticky;top:0;color:var(--mut);
+  font-weight:600;cursor:pointer;user-select:none}
+table.metrics tbody tr:hover{background:#1a212c}
+table.metrics td.warn{color:var(--warn)}
+table.metrics tr.dim{opacity:.55}
+table.metrics td:nth-child(4),table.metrics td:nth-child(7){color:var(--good)}
+footer{margin-top:40px;padding:22px 36px 40px;border-top:1px solid var(--line);
+  background:#0a0d12;color:var(--mut);font-size:13px}
+.flinks a{color:var(--accent);text-decoration:none;margin:0 2px}
+.flinks a:hover{text-decoration:underline}
+.flinks a.gone{color:#5a6675;text-decoration:line-through}
+.fnote{margin-top:10px;font-size:11px;color:#677488}
+code{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:.9em}
+</style></head>
+<body>
+<header>
+  <h1>Wound/Injury Detection &amp; Pose — Spot + Jetson Orin</h1>
+  <p class="sum">Zero-shot, open-vocabulary perception works: you can type <span class="hl">“wound”</span> and get usable detections on a mannequin video with <b>no task-specific training</b>.</p><p class="sum">The standout pipeline is <b>OWLv2 / Grounding DINO for open-vocab localization</b> feeding <b>Grounded-SAM2 and MedSAM</b> for pixel-accurate wound masks — high detection rate, browser-real-time, modest VRAM.</p><p class="sum">Across all pose backends the subject’s dominant posture is classified as <b class="hl">lying</b>, consistent between MediaPipe, ViTPose and NLF.</p>
+  <div class="tags"><span class="tag">17 wound methods</span><span class="tag">4 pose backends</span><span class="tag">MediaPipe posture</span><span class="tag">Spot + Jetson Orin</span><span class="tag">mannequin video · 80 frames @2fps · 960×540</span><span class="tag">hero frame_00026.jpg</span></div>
+</header>
+<main>
+
+  <h2>Wound detection methods<span class="lead">17 pipelines on the hero frame (frame_00026.jpg)</span></h2>
+  <h3 class="sub">Classical <span class="blurb">Hand-tuned colour heuristics — no learning, runs on CPU.</span></h3><div class="grid">
+      <div class="card">
+        <img src="results/00_classical_cv/overlays/frame_00026.jpg" loading="lazy" alt="Classical CV (Lab redness/blood) overlay"/>
+        <div class="meta">
+          <div class="name">Classical CV (Lab redness/blood) </div>
+          <div class="out">box+mask (color)</div>
+          <div class="stats">
+            <span title="frames per second"><b>308.4</b> fps</span>
+            <span title="peak VRAM"><b>0</b> MB</span>
+            <span title="detection rate" class="g"><b>95%</b> det</span>
+            <span title="mean confidence" class="g"><b>0.27</b> conf</span>
+          </div>
+        </div>
+      </div></div><h3 class="sub">Open-vocab box <span class="blurb">Zero-shot text-prompted detectors: type the word “wound”, get boxes.</span></h3><div class="grid">
+      <div class="card">
+        <img src="results/10_gdino/overlays/frame_00026.jpg" loading="lazy" alt="Grounding DINO (open-vocab box) overlay"/>
+        <div class="meta">
+          <div class="name">Grounding DINO (open-vocab box) </div>
+          <div class="out">open-vocab 2D box</div>
+          <div class="stats">
+            <span title="frames per second"><b>7.2</b> fps</span>
+            <span title="peak VRAM"><b>2267</b> MB</span>
+            <span title="detection rate" class="g"><b>98%</b> det</span>
+            <span title="mean confidence" class="g"><b>0.24</b> conf</span>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <img src="results/11_owlv2/overlays/frame_00026.jpg" loading="lazy" alt="OWLv2 (open-vocab box) overlay"/>
+        <div class="meta">
+          <div class="name">OWLv2 (open-vocab box) </div>
+          <div class="out">open-vocab 2D box</div>
+          <div class="stats">
+            <span title="frames per second"><b>12.9</b> fps</span>
+            <span title="peak VRAM"><b>809</b> MB</span>
+            <span title="detection rate" class="g"><b>92%</b> det</span>
+            <span title="mean confidence" class="g"><b>0.13</b> conf</span>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <img src="results/12_owlvit/overlays/frame_00026.jpg" loading="lazy" alt="OWL-ViT (open-vocab box) overlay"/>
+        <div class="meta">
+          <div class="name">OWL-ViT (open-vocab box) </div>
+          <div class="out">open-vocab 2D box</div>
+          <div class="stats">
+            <span title="frames per second"><b>78.7</b> fps</span>
+            <span title="peak VRAM"><b>636</b> MB</span>
+            <span title="detection rate" class="g"><b>1%</b> det</span>
+            <span title="mean confidence" class="g"><b>0.08</b> conf</span>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <img src="results/13_yolo_world/overlays/frame_00026.jpg" loading="lazy" alt="YOLO-World v2 (open-vocab box) overlay"/>
+        <div class="meta">
+          <div class="name">YOLO-World v2 (open-vocab box) </div>
+          <div class="out">open-vocab box</div>
+          <div class="stats">
+            <span title="frames per second"><b>98.6</b> fps</span>
+            <span title="peak VRAM"><b>1013</b> MB</span>
+            <span title="detection rate" class="g"><b>25%</b> det</span>
+            <span title="mean confidence" class="g"><b>0.10</b> conf</span>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <img src="results/14_yoloe/overlays/frame_00026.jpg" loading="lazy" alt="YOLOE-11L-seg (open-vocab seg) overlay"/>
+        <div class="meta">
+          <div class="name">YOLOE-11L-seg (open-vocab seg) </div>
+          <div class="out">open-vocab seg</div>
+          <div class="stats">
+            <span title="frames per second"><b>152.9</b> fps</span>
+            <span title="peak VRAM"><b>286</b> MB</span>
+            <span title="detection rate" class="g"><b>24%</b> det</span>
+            <span title="mean confidence" class="g"><b>0.09</b> conf</span>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <img src="results/15_florence2/overlays/frame_00026.jpg" loading="lazy" alt="Florence-2 large (phrase grounding) overlay"/>
+        <div class="meta">
+          <div class="name">Florence-2 large (phrase grounding) </div>
+          <div class="out">open-vocab phrase grounding</div>
+          <div class="stats">
+            <span title="frames per second"><b>9.4</b> fps</span>
+            <span title="peak VRAM"><b>1803</b> MB</span>
+            <span title="detection rate" class="g"><b>100%</b> det</span>
+            <span title="mean confidence" class="g"><b>—</b> conf</span>
+          </div>
+        </div>
+      </div></div><h3 class="sub">Wound mask <span class="blurb">Pixel-accurate wound masks (box-prompted SAM / MedSAM / semantic / dedicated).</span></h3><div class="grid">
+      <div class="card">
+        <img src="results/20_grounded_sam2/overlays/frame_00026.jpg" loading="lazy" alt="Grounded-SAM2 (Grounding DINO + SAM 2.1) overlay"/>
+        <div class="meta">
+          <div class="name">Grounded-SAM2 (Grounding DINO + SAM 2.1) </div>
+          <div class="out">wound mask (box-prompted)</div>
+          <div class="stats">
+            <span title="frames per second"><b>7.2</b> fps</span>
+            <span title="peak VRAM"><b>1609</b> MB</span>
+            <span title="detection rate" class="g"><b>98%</b> det</span>
+            <span title="mean confidence" class="g"><b>0.24</b> conf</span>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <img src="results/21_medsam/overlays/frame_00026.jpg" loading="lazy" alt="MedSAM (SAM ViT-B medical, box-prompted) overlay"/>
+        <div class="meta">
+          <div class="name">MedSAM (SAM ViT-B medical, box-prompted) </div>
+          <div class="out">wound mask (MedSAM, box-prompted)</div>
+          <div class="stats">
+            <span title="frames per second"><b>12.1</b> fps</span>
+            <span title="peak VRAM"><b>1993</b> MB</span>
+            <span title="detection rate" class="g"><b>98%</b> det</span>
+            <span title="mean confidence" class="g"><b>0.24</b> conf</span>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <img src="results/22_clipseg/overlays/frame_00026.jpg" loading="lazy" alt="CLIPSeg (text-prompted semantic mask) overlay"/>
+        <div class="meta">
+          <div class="name">CLIPSeg (text-prompted semantic mask) </div>
+          <div class="out">text-prompted semantic mask</div>
+          <div class="stats">
+            <span title="frames per second"><b>10.9</b> fps</span>
+            <span title="peak VRAM"><b>854</b> MB</span>
+            <span title="detection rate" class="g"><b>86%</b> det</span>
+            <span title="mean confidence" class="g"><b>0.41</b> conf</span>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <img src="results/30_deepskin/overlays/frame_00026.jpg" loading="lazy" alt="Deepskin (EfficientNet-b3 U-Net, real-wound trained) overlay"/>
+        <div class="meta">
+          <div class="name">Deepskin (EfficientNet-b3 U-Net, real-wound trained) </div>
+          <div class="out">semantic wound mask (supervised)</div>
+          <div class="stats">
+            <span title="frames per second"><b>0.6</b> fps</span>
+            <span title="peak VRAM"><b>—</b> MB</span>
+            <span title="detection rate" class="g"><b>85%</b> det</span>
+            <span title="mean confidence" class="g"><b>0.47</b> conf</span>
+          </div>
+        </div>
+      </div></div><h3 class="sub">Class-agnostic + filter <span class="blurb">Segment everything, then keep regions that look like a wound.</span></h3><div class="grid">
+      <div class="card">
+        <img src="results/23_fastsam/overlays/frame_00026.jpg" loading="lazy" alt="FastSAM-x + redness filter (class-agnostic mask) overlay"/>
+        <div class="meta">
+          <div class="name">FastSAM-x + redness filter (class-agnostic mask) </div>
+          <div class="out">class-agnostic mask + redness filter</div>
+          <div class="stats">
+            <span title="frames per second"><b>35.4</b> fps</span>
+            <span title="peak VRAM"><b>625</b> MB</span>
+            <span title="detection rate" class="g"><b>12%</b> det</span>
+            <span title="mean confidence" class="g"><b>0.52</b> conf</span>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <img src="results/24_mobilesam/overlays/frame_00026.jpg" loading="lazy" alt="MobileSAM grid + redness filter (class-agnostic mask) overlay"/>
+        <div class="meta">
+          <div class="name">MobileSAM grid + redness filter (class-agnostic mask) </div>
+          <div class="out">class-agnostic mask + redness filter</div>
+          <div class="stats">
+            <span title="frames per second"><b>0.9</b> fps</span>
+            <span title="peak VRAM"><b>3875</b> MB</span>
+            <span title="detection rate" class="g"><b>20%</b> det</span>
+            <span title="mean confidence" class="g"><b>0.51</b> conf</span>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <img src="results/25_sam_auto_clip/overlays/frame_00026.jpg" loading="lazy" alt="SAM auto-masks -&gt; CLIP wound classification overlay"/>
+        <div class="meta">
+          <div class="name">SAM auto-masks -&gt; CLIP wound classification </div>
+          <div class="out">SAM region + CLIP classify</div>
+          <div class="stats">
+            <span title="frames per second"><b>0.7</b> fps</span>
+            <span title="peak VRAM"><b>4489</b> MB</span>
+            <span title="detection rate" class="g"><b>28%</b> det</span>
+            <span title="mean confidence" class="g"><b>0.58</b> conf</span>
+          </div>
+        </div>
+      </div></div><h3 class="sub">Supervised <span class="blurb">Closed-vocabulary models trained on fixed label sets.</span></h3><div class="grid">
+      <div class="card">
+        <img src="results/32_skin_burn/overlays/frame_00026.jpg" loading="lazy" alt="Skin-Burn YOLOv7 (Michael-OvO, 3-class burn grader) overlay"/>
+        <div class="meta">
+          <div class="name">Skin-Burn YOLOv7 (Michael-OvO, 3-class burn grader) </div>
+          <div class="out">2D box (burn degree, 3-class)</div>
+          <div class="stats">
+            <span title="frames per second"><b>82.5</b> fps</span>
+            <span title="peak VRAM"><b>1531</b> MB</span>
+            <span title="detection rate" class="g"><b>12%</b> det</span>
+            <span title="mean confidence" class="g"><b>0.77</b> conf</span>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <img src="results/40_depth_anything/overlays/frame_00026.jpg" loading="lazy" alt="Depth Anything V2 (metric indoor, monocular) overlay"/>
+        <div class="meta">
+          <div class="name">Depth Anything V2 (metric indoor, monocular) </div>
+          <div class="out">metric depth</div>
+          <div class="stats">
+            <span title="frames per second"><b>6.1</b> fps</span>
+            <span title="peak VRAM"><b>2123</b> MB</span>
+            <span title="detection rate" class="g"><b>100%</b> det</span>
+            <span title="mean confidence" class="g"><b>—</b> conf</span>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <img src="results/41_wound_3d/overlays/frame_00026.jpg" loading="lazy" alt="Wound 3D localization (depth-lifted boxes, camera XYZ) overlay"/>
+        <div class="meta">
+          <div class="name">Wound 3D localization (depth-lifted boxes, camera XYZ) </div>
+          <div class="out">3D wound position (x,y,z meters, camera frame)</div>
+          <div class="stats">
+            <span title="frames per second"><b>6.1</b> fps</span>
+            <span title="peak VRAM"><b>2123</b> MB</span>
+            <span title="detection rate" class="g"><b>98%</b> det</span>
+            <span title="mean confidence" class="g"><b>—</b> conf</span>
+          </div>
+        </div>
+      </div></div>
+
+  <h2>Side-by-side comparison<span class="lead">sparse overlays forward-filled, ~8&nbsp;fps</span></h2>
+  <figure class="vid"><video controls loop muted playsinline preload="metadata" src="results/_videos/wound_grid.mp4"></video><figcaption>All wound methods, synchronized grid over the full clip</figcaption></figure>
+
+  <h2>Pose &amp; posture<span class="lead">dense 80-frame overlays @30&nbsp;fps</span></h2>
+  <div class="vidrow"><figure class="vid"><video controls loop muted playsinline preload="metadata" src="results/_videos/pose_grid.mp4"></video><figcaption>2D/3D pose estimators — side-by-side (80 frames, 30 fps)</figcaption></figure><figure class="vid"><video controls loop muted playsinline preload="metadata" src="results/_videos/posture.mp4"></video><figcaption>Posture classification (MediaPipe backend)</figcaption></figure></div><p class="posture">Dominant posture (MediaPipe): <b class="hl">lying</b> (89% of frames classified) &nbsp;&middot;&nbsp; distribution: lying 69%, sitting 22%, standing 8%.</p><div class="pgrid">
+          <div class="pcard">
+            <div class="pname">YOLO11-Pose (2D)</div>
+            <div class="pstats">
+              <span class="g"><b>29%</b> det</span>
+              <span><b>41.1</b> fps</span>
+              <span><b>0.55</b> conf</span>
+            </div>
+          </div>
+          <div class="pcard">
+            <div class="pname">ViTPose (2D)</div>
+            <div class="pstats">
+              <span class="g"><b>42%</b> det</span>
+              <span><b>25.1</b> fps</span>
+              <span><b>0.67</b> conf</span>
+            </div>
+          </div>
+          <div class="pcard">
+            <div class="pname">MediaPipe BlazePose (2D+3D)</div>
+            <div class="pstats">
+              <span class="g"><b>85%</b> det</span>
+              <span><b>19.3</b> fps</span>
+              <span><b>0.53</b> conf</span>
+            </div>
+          </div>
+          <div class="pcard">
+            <div class="pname">NLF (3D mesh)</div>
+            <div class="pstats">
+              <span class="g"><b>62%</b> det</span>
+              <span><b>2.5</b> fps</span>
+              <span><b>0.34</b> conf</span>
+            </div>
+          </div></div>
+
+  <h2>All metrics<span class="lead">parsed from 19 results/_metrics/*.json &middot; click a header to sort</span></h2>
+  <div class="tablewrap"><table class="metrics"><thead><tr><th>Method</th><th>Name</th><th>Output</th><th>Det rate</th><th>Dets/fr</th><th>Conf</th><th>FPS</th><th>ms/fr</th><th>VRAM MB</th><th>Status</th><th>Weights</th></tr></thead><tbody><tr><td>00_classical_cv</td><td>Classical CV (Lab redness/blood)</td><td>box+mask (color)</td><td>95%</td><td>7.8</td><td>0.27</td><td>308.4</td><td>3</td><td>0</td><td>ok</td><td>n/a (classical)</td></tr><tr><td>10_gdino</td><td>Grounding DINO (open-vocab box)</td><td>open-vocab 2D box</td><td>98%</td><td>5.4</td><td>0.24</td><td>7.2</td><td>139</td><td>2267</td><td>ok</td><td>IDEA-Research/grounding-dino-base</td></tr><tr><td>11_owlv2</td><td>OWLv2 (open-vocab box)</td><td>open-vocab 2D box</td><td>92%</td><td>3.6</td><td>0.13</td><td>12.9</td><td>78</td><td>809</td><td>ok</td><td>google/owlv2-base-patch16-ensemble</td></tr><tr><td>12_owlvit</td><td>OWL-ViT (open-vocab box)</td><td>open-vocab 2D box</td><td>1%</td><td>0.0</td><td>0.08</td><td>78.7</td><td>13</td><td>636</td><td>ok</td><td>google/owlvit-base-patch32</td></tr><tr><td>13_yolo_world</td><td>YOLO-World v2 (open-vocab box)</td><td>open-vocab box</td><td>25%</td><td>0.4</td><td>0.10</td><td>98.6</td><td>10</td><td>1013</td><td>ok</td><td>yolov8x-worldv2.pt</td></tr><tr><td>14_yoloe</td><td>YOLOE-11L-seg (open-vocab seg)</td><td>open-vocab seg</td><td>24%</td><td>0.3</td><td>0.09</td><td>152.9</td><td>7</td><td>286</td><td>ok</td><td>yoloe-11l-seg.pt</td></tr><tr><td>15_florence2</td><td>Florence-2 large (phrase grounding)</td><td>open-vocab phrase grounding</td><td>100%</td><td>2.9</td><td>—</td><td>9.4</td><td>106</td><td>1803</td><td>ok</td><td>microsoft/Florence-2-large</td></tr><tr><td>20_grounded_sam2</td><td>Grounded-SAM2 (Grounding DINO + SAM 2.1)</td><td>wound mask (box-prompted)</td><td>98%</td><td>5.4</td><td>0.24</td><td>7.2</td><td>139</td><td>1609</td><td>ok</td><td>facebook/sam2.1-hiera-large + Grounding DINO boxes (10_gdino)</td></tr><tr><td>21_medsam</td><td>MedSAM (SAM ViT-B medical, box-prompted)</td><td>wound mask (MedSAM, box-prompted)</td><td>98%</td><td>5.4</td><td>0.24</td><td>12.1</td><td>82</td><td>1993</td><td>ok</td><td>flaviagiammarino/medsam-vit-base + 10_gdino (Grounding DINO) boxes</td></tr><tr><td>22_clipseg</td><td>CLIPSeg (text-prompted semantic mask)</td><td>text-prompted semantic mask</td><td>86%</td><td>2.0</td><td>0.41</td><td>10.9</td><td>92</td><td>854</td><td>ok</td><td>CIDAS/clipseg-rd64-refined</td></tr><tr><td>23_fastsam</td><td>FastSAM-x + redness filter (class-agnostic mask)</td><td>class-agnostic mask + redness filter</td><td>12%</td><td>0.1</td><td>0.52</td><td>35.4</td><td>28</td><td>625</td><td>ok</td><td>FastSAM-x.pt</td></tr><tr><td>24_mobilesam</td><td>MobileSAM grid + redness filter (class-agnostic mask)</td><td>class-agnostic mask + redness filter</td><td>20%</td><td>0.3</td><td>0.51</td><td>0.9</td><td>1132</td><td>3875</td><td>ok</td><td>mobile_sam.pt</td></tr><tr><td>25_sam_auto_clip</td><td>SAM auto-masks -&gt; CLIP wound classification</td><td>SAM region + CLIP classify</td><td>28%</td><td>0.4</td><td>0.58</td><td>0.7</td><td>1532</td><td>4489</td><td>ok</td><td>mobile_sam.pt + openai/clip-vit-base-patch32</td></tr><tr class="dim"><td>26_sam3</td><td>SAM 3 (concept segmentation, &#x27;wound&#x27;) [gated]</td><td>concept mask</td><td>0%</td><td>0.0</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="warn">skipped</td><td>facebook/sam3</td></tr><tr><td>30_deepskin</td><td>Deepskin (EfficientNet-b3 U-Net, real-wound trained)</td><td>semantic wound mask (supervised)</td><td>85%</td><td>2.0</td><td>0.47</td><td>0.6</td><td>1739</td><td>—</td><td>ok</td><td>Deepskin EfficientNet-b3 U-Net (gdown)</td></tr><tr class="dim"><td>31_yolo_sam_wound</td><td>YOSAW: Le0Dev wound-YOLOv8 detector + SAM (box-prompted)</td><td>wound box + mask (trained YOLO detector -&gt; SAM segment)</td><td>0%</td><td>0.0</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="warn">skipped</td><td>Le0Dev trained_yolo/best.pt (UNAVAILABLE) + SAM ckpt</td></tr><tr><td>32_skin_burn</td><td>Skin-Burn YOLOv7 (Michael-OvO, 3-class burn grader)</td><td>2D box (burn degree, 3-class)</td><td>12%</td><td>0.1</td><td>0.77</td><td>82.5</td><td>12</td><td>1531</td><td>ok</td><td>skin_burn_2022_8_21.pt (Michael-OvO v1.0.0, YOLOv7-W6)</td></tr><tr><td>40_depth_anything</td><td>Depth Anything V2 (metric indoor, monocular)</td><td>metric depth</td><td>100%</td><td>1.0</td><td>—</td><td>6.1</td><td>163</td><td>2123</td><td>ok</td><td>depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf</td></tr><tr><td>41_wound_3d</td><td>Wound 3D localization (depth-lifted boxes, camera XYZ)</td><td>3D wound position (x,y,z meters, camera frame)</td><td>98%</td><td>5.4</td><td>—</td><td>6.1</td><td>163</td><td>2123</td><td>ok</td><td>depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf + 2D boxes from results/10_gdino/predictions.json (Grounding DINO)</td></tr></tbody></table></div>
+
+</main>
+<footer><div class="flinks"><a href="explore.md">Exploration log</a> &middot; <a href="docs/research.md">Research notes</a> &middot; <a href="troubleshooting.md">Troubleshooting</a> &middot; <a href="docs/comparison.md">Method comparison</a></div><div class="fnote">Generated by <code>scripts/build_html.py</code> from <code>results/_metrics/*.json</code> and <code>methods/**/metrics.json</code>.</div></footer>
+<script>
+document.querySelectorAll('table.metrics').forEach(function(t){
+  var ths=t.querySelectorAll('thead th'); var dir=1, last=-1;
+  ths.forEach(function(th,ci){
+    th.addEventListener('click',function(){
+      dir = (last===ci) ? -dir : 1; last=ci;
+      var tb=t.querySelector('tbody');
+      var rows=Array.prototype.slice.call(tb.querySelectorAll('tr'));
+      var num=function(s){var m=String(s).replace('%','').replace(/[^0-9.\-]/g,'');
+        return m===''?null:parseFloat(m);};
+      rows.sort(function(a,b){
+        var x=a.children[ci].textContent.trim(), y=b.children[ci].textContent.trim();
+        var nx=num(x), ny=num(y);
+        if(nx!==null&&ny!==null) return (nx-ny)*dir;
+        return x.localeCompare(y)*dir;
+      });
+      rows.forEach(function(r){tb.appendChild(r);});
+    });
+  });
+});
+</script>
+</body></html>

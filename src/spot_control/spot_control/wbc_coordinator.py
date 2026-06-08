@@ -178,10 +178,8 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('min_body_height',             -0.20)
         self.declare_parameter('max_body_height',              0.0)
         self.declare_parameter('search_body_height',           0.0)   # [m] altezza nominale
-        self.declare_parameter('search_yaw_increment',         1.05)  # [rad] ≈60° passo Spot
-        self.declare_parameter('search_yaw_steps',             6)     # posizioni = 360°
+        self.declare_parameter('search_yaw_angles',         [30.0, -60.0, 90.0, -120.0, 150.0, -180.0])  # degrees, relative
         self.declare_parameter('search_pitch_angles',       [0.0, 0.087, 0.17])  # 0°,5°,10°
-        self.declare_parameter('search_coarse_dwell',           5.0)   # [s] dwell per posizione coarse
         self.declare_parameter('search_refine_dwell',           4.0)   # [s] dwell per pitch in refinement
         self.declare_parameter('search_yaw_kp',                    0.8)   # P-gain per rotazione yaw
         self.declare_parameter('search_yaw_tolerance',             0.08)  # [rad] ~4.6° tolleranza yaw raggiunto
@@ -230,10 +228,8 @@ class WBCCoordinatorNode(Node):
         self._body_grid_heights = self._read_float_array('body_grid_heights')
         self._body_grid_pitches = self._read_float_array('body_grid_pitches')
         self._body_sweet_spot   = self._read_float_array('body_sweet_spot')
-        self._search_yaw_increment  = float(p('search_yaw_increment'))
-        self._search_yaw_steps      = int(p('search_yaw_steps'))
+        self._search_yaw_angles     = self._read_float_array('search_yaw_angles')  # degrees
         self._search_pitch_angles   = self._read_float_array('search_pitch_angles')
-        self._search_coarse_dwell      = float(p('search_coarse_dwell'))
         self._search_refine_dwell      = float(p('search_refine_dwell'))
         self._search_yaw_kp         = float(p('search_yaw_kp'))
         self._search_yaw_tolerance  = float(p('search_yaw_tolerance'))
@@ -925,15 +921,16 @@ class WBCCoordinatorNode(Node):
             self._set_state(CoordState.IDLE, force=True)
             return
 
-        now_ns = self.get_clock().now().nanoseconds * 1e-9
-
-        # ── Durante il dwell: controlla se triggerare refinement ────
-        if self._search_position_start is not None and not self._search_rotating:
-            elapsed = now_ns - self._search_position_start.nanoseconds * 1e-9
-            if elapsed >= self._search_coarse_dwell:
+        # ── Waiting for arm to finish 3 poses after rotation ─────────
+        if not self._search_rotating and self._search_position_start is not None:
+            if self._ik_done:
+                self.get_logger().info(
+                    f'Search pos {self._search_position_idx+1}: arm done → next rotation')
                 self._search_position_idx += 1
                 self._search_position_start = None
+                self._ik_done = False
                 return
+            # Still waiting for arm — check refinement trigger
             if self._should_refine():
                 self._start_refinement()
                 return
@@ -959,18 +956,19 @@ class WBCCoordinatorNode(Node):
         # ── Rotating: timed open-loop (no TF needed) ──
         if self._search_rotating:
             elapsed = (self.get_clock().now() - self._search_rotation_start).nanoseconds / 1e9
-            expected = self._search_yaw_increment / self._search_max_angular_vel
+            pos = self._search_positions[self._search_position_idx]
+            expected = abs(pos['yaw']) / self._search_max_angular_vel
             if elapsed >= expected:
                 self._pub_cmd_vel.publish(Twist())
                 self._search_rotating = False
                 self._search_position_start = self.get_clock().now()
+                self._ik_done = False  # reset for arm to start 3 poses
                 self.get_logger().info(
                     f'Search pos {self._search_position_idx+1}: rotation done '
-                    f'({elapsed:.1f}s) → dwell {self._search_coarse_dwell:.0f}s')
+                    f'({elapsed:.1f}s) → arm 3 poses')
                 return
             t = Twist()
-            sign = 1.0 if (self._search_position_idx % 2 == 0) else -1.0
-            t.angular.z = float(self._search_max_angular_vel) * sign
+            t.angular.z = float(math.copysign(self._search_max_angular_vel, pos['yaw']))
             self._pub_cmd_vel.publish(t)
             return
 
@@ -1854,17 +1852,10 @@ class WBCCoordinatorNode(Node):
         return [float(val)]
 
     def _build_search_sequence(self) -> list:
-        """Build coarse search sequence: 6 yaw × 1 pitch (0°).
+        """Build search sequence from yaw_angles list (degrees, relative).
+        Each step: rotate by angle degrees, then arm does 3 poses.
         Pitch sweep is handled by refinement mode when a detection triggers."""
-        incr = self._search_yaw_increment
-        steps = self._search_yaw_steps
-        yaw_list = [0.0]
-        for i in range(1, steps):
-            n = (i + 1) // 2
-            if i % 2 != 0:
-                yaw_list.append(n * incr)
-            else:
-                yaw_list.append(-n * incr)
+        yaw_list = [math.radians(a) for a in self._search_yaw_angles]
         return [{'yaw': y, 'pitch': 0.0} for y in yaw_list]
 
     def _set_wbc_enabled(self, enabled: bool) -> None:
