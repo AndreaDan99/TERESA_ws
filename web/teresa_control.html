@@ -432,7 +432,7 @@ class TeresaController{
     this.logLines=[];this.maxLog=60;
     this._navTimer=null;
     // joystick
-    this.joystickMode='drive';this.joystickSpeed=0.5;this.joystickActive=false;this.joystickEnabled=false;
+    this.joystickMode='drive';this.joystickSpeed=0.5;this.joystickActive=false;this.joystickEnabled=true;
     this._joystickHeight=0.10;this._joystickPitch=0;
 
     this.connect();
@@ -1061,10 +1061,17 @@ class TeresaController{
     $('speed-val').textContent=this.joystickSpeed.toFixed(1);
   }
   updateJoystickEnabled(){
+    // Joystick sempre attivo — puoi guidare Spot in qualsiasi momento
     const wbc=$('wbc-state').textContent;
-    this.joystickEnabled=(wbc==='IDLE');
-    $('joystick-panel').classList.toggle('disabled',!this.joystickEnabled);
-    ['dpad-up','dpad-down','dpad-left','dpad-right'].forEach(id=>{$(id).disabled=!this.joystickEnabled;});
+    this.joystickEnabled=true;
+    $('joystick-panel').classList.toggle('disabled',false);
+    ['dpad-up','dpad-down','dpad-left','dpad-right'].forEach(id=>{$(id).disabled=false;});
+    // Avviso se WBC in missione (joystick compete con comandi autonomi)
+    if(wbc!=='---'&&wbc!=='IDLE'){
+      $('joystick-panel').style.borderColor='var(--warning)';
+    }else{
+      $('joystick-panel').style.borderColor='';
+    }
   }
   sendDriveCommand(dir){
     const s=this.joystickSpeed;
