@@ -106,11 +106,11 @@ HOMING → WAITING (aspetta segnale WBC + FAST points pre-calcolati dal QP)
 
 ### SEARCHING (rewritten 8 June 2026)
 
-**Coarse search**: Spot alternates ±30° yaw (timed open-loop, no TF dependency). Each yaw position: arm cycles through 7 hardcoded manual poses (3 forward + 4 look-behind, captured via FK reader). After both yaws complete: arm returns HOME, Spot steps forward 20cm, cycle repeats.
+**Coarse search**: Spot alternates ±30° yaw (timed open-loop, no TF dependency). Each yaw position: arm cycles through 6 symmetric mathematically-generated poses (3 forward X=+0.12 + 3 look-behind X=-0.15, all Z=0.53, Y=±0.20). Orientation computed via `compute_ee_orientation()` — no forced FK-reader quaternions. After both yaws complete: arm returns HOME, Spot steps forward 20cm, cycle repeats.
 
 - **Rotation**: timed `cmd_vel.angular.z = 0.2 rad/s` for ~2.6s per 30° step — no TF `odom→body` required
-- **Arm poses**: 7 positions hardcoded from FK reader (manual capture)
-- **Wait logic**: coordinator counts 7 `ik_done` events before advancing to next yaw
+- **Arm poses**: 6 pose simmetriche generate matematicamente (3 forward X=+0.12 + 3 look-behind X=-0.15, Z=0.53, Y=±0.20). Orientamento calcolato da `compute_ee_orientation()` — X_ee punta avanti/dietro, Y_ee vicino a home. Nessun quaternione FK-reader forzato.
+- **Wait logic**: coordinator counts 6 `ik_done` events before advancing to next yaw
 - **Step forward**: 20cm at 0.3 m/s (~0.67s) after each full cycle
 - **Refinement**: triggers when Orbbec posture confidence ≥ 0.30 during arm wait
 - **Lock**: confidence ≥ 0.70 → direct LOCKING (no SEMI_LOCKING needed)
@@ -169,6 +169,7 @@ Il QP riceve il segnale di APPROACHING e passa in modalità PERCEPTUAL_SCAN:
 ### exposure_scanner node
 - Nodo dedicato (`exposure_scanner.py`, 650 righe), stesso pattern per-punto del FAST
 - **Full-body grid**: 14 punti su 7 regioni (HEAD=2, TORSO=4, ARM×2=2+2, LEG×2=2+2, FEET=2) generate dai 17 keypoint COCO Orbbec trasformati in world frame via TF
+- **NLF prior grid**: la griglia exposure usa preferenzialmente lo skeleton NLF (24 SMPL, EMA-raffinato) quando disponibile. Fallback ai keypoint YOLO se il prior NLF non è stato catturato.
 - **Stima head da spalle**: se naso occluso nell'Orbbec, posizione testa stimata da (spalla_sx + spalla_dx) / 2 + offset verticale
 - **Look-at dinamico**: EE X verso corpo via `compute_ee_orientation`, stessa funzione del FAST ultrasound
 - **Standoff orizzontale**: 0.50 m verso Spot (X negativo), non verticale. Il braccio resta in configurazione naturale.
@@ -314,7 +315,7 @@ I target FSM sono in world frame — quando Spot cambia body_pose, il target si 
 
 | Fase | Spot | Braccio | WBC/QP |
 |------|:----:|:-------:|:------:|
-| **SEARCHING** | ±30° yaw timed open-loop + step forward 20cm | 7 pose hardcoded da FK reader in loop | Rotation + arm poses |
+| **SEARCHING** | ±30° yaw timed open-loop + step forward 20cm | 6 pose simmetriche generate matematicamente in loop | Rotation + arm poses |
 | **SEMI_LOCKING** | Ruotato+inclinato verso torso | LOOKAT attivo subito (re_enable=True) | Arm LOOKAT |
 | **LOCKING** | Fermo, al miglior pitch del refinement. Attende NLF burst (2 detection o 30s timeout). | Prima posa di search. Resta fermo. | Off → search pose. NLF burst pubblica prior raffinato. |
 | **PRE_APPROACH** | Dritto, fermo | LOOKAT verso body_center (ω_des + joint centering) | Arm-only WBC |
@@ -332,7 +333,7 @@ I target FSM sono in world frame — quando Spot cambia body_pose, il target si 
 | `wbc_coordinator` | FSM (11 stati). PRE_APPROACH: LOOKAT verso body_center con Z offset +0.40m fallback, sliding window (≥1 ESTIMATING/LOCKED su 5 tick). |
 | `exposure_scanner` | Full-body exposure scan: 14-pose grid su 7 regioni, look-at dinamico, standoff orizzontale 0.50m, TF Orbbec→world, running-average scheletro raffinato su `/exposure/refined_skeleton`, JSON output. |
 | `exposure_snapshot` | Snapshot RealSense su click in EXPOSURE_REVIEW. Trigger `/exposure/goto_point` + `/ik_done`, delay 1s, pubblica `/exposure/snapshot`, salva JPEG su disco. |
-| `wbc_qp_controller` | **Arm-only WBC, 3 modalità**: ACTIVE_SEARCH (7 pose hardcoded da FK reader), LOOKAT (ω_des + joint centering), PERCEPTUAL_SCAN (griglia adattiva 2-4 pose). |
+| `wbc_qp_controller` | **Arm-only WBC, 3 modalità**: ACTIVE_SEARCH (6 symmetric mathematically-generated poses), LOOKAT (ω_des + joint centering), PERCEPTUAL_SCAN (griglia adattiva 2-4 pose). |
 | `wbc_spot_navigator` | Navigatore semplificato per APPROACHING e WS_EXT. |
 
 ### Coordinator FSM
@@ -362,7 +363,7 @@ HOMING → WAITING → BODY_SCANNING → CHECKING_WORKSPACE ──────�
 
 ### WBC QP modes (SEARCHING → PRE_APPROACH → APPROACHING)
 
-Durante **SEARCHING** il QP opera in **ACTIVE_SEARCH mode**: 7 pose hardcoded (3 forward + 4 look-behind, catturate via FK reader), eseguite in loop mentre Spot ruota ±30° yaw. Il braccio esplora lo spazio senza un target reale, compensando la rotazione di Spot. Spot ruota via cmd_vel a tempo (open-loop, no TF); il refinement (sweep pitch) avviene a livello body_pose nel coordinator.
+Durante **SEARCHING** il QP opera in **ACTIVE_SEARCH mode**: 6 pose simmetriche generate matematicamente (3 forward X=+0.12 + 3 look-behind X=-0.15, Z=0.53, Y=±0.20), eseguite in loop mentre Spot ruota ±30° yaw. Orientamento calcolato da `compute_ee_orientation()` invece di quaternioni FK-reader forzati. Il braccio esplora lo spazio senza un target reale, compensando la rotazione di Spot. Spot ruota via cmd_vel a tempo (open-loop, no TF); il refinement (sweep pitch) avviene a livello body_pose nel coordinator.
 
 Durante **PRE_APPROACH** il QP opera in **LOOKAT mode**: calcola l'errore di orientamento tra X_ee e target (`ω_des = kp_ang * angle * axis`), risolve con damped pseudo-inverse su J_task (3×6), proietta joint centering nel null-space (`N @ k_null * (q_mid - q)`), integra in FK prediction, pubblica il goal all'IK solver. Loop a 10 Hz.
 
@@ -376,7 +377,7 @@ Spot è sempre controllato dal navigatore (APPROACHING) o dal coordinator (body 
 - Se RealSense perde il segnale durante SEMI_LOCKING, o se Orbbec perde LYING per >1s durante LOCKING: si riprende la ricerca dalla posizione corrente.
 ```
 SEARCHING:
-  QP Controller (ACTIVE_SEARCH) → 7 pose hardcoded da FK reader, loop
+  QP Controller (ACTIVE_SEARCH) → 6 symmetric mathematically-generated poses, loop
   Coordinator → ±30° yaw timed rotation (open-loop) + step forward 20cm
 
 SEMI_LOCKING:

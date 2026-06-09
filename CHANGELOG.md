@@ -14,6 +14,9 @@ Per la descrizione del sistema corrente vedi [`DESCRIPTION.md`](DESCRIPTION.md).
 - **Best Pitch on LOCKING**: refinement best pitch saved during SEARCHING is now applied on ALL LOCKING entry paths (direct lock, semi-lock), not just refinement lock. Ensures Orbbec has optimal camera angle during NLF burst.
 - **Launch Fix**: `nlf_skeleton_node` now has `IfCondition` — only launches with `perception_backend:=nlf`.
 - **Publish Suppression**: `/human_pose/points_3d` suppressed during active NLF burst to avoid YOLO conflict.
+- **Exposure NLF Grid**: exposure scanner now uses NLF prior (24 SMPL joints) for body grid generation when available, falling back to YOLO keypoints if NLF prior not available. HEAD, HAND, FOOT, SPINE joints all populated → denser grid.
+- **Unified Search Poses**: replaced 7 FK-reader hardcoded poses with 6 symmetric mathematically-generated poses (3 forward X=+0.12 + 3 behind X=-0.15, all Z=0.53). Orientation computed via `compute_ee_orientation()` instead of forced quaternions → IK finds natural arm configuration.
+- **Z1 WBC Dependency**: Z1 FSM now homes on startup then waits indefinitely for `/wbc/state` before proceeding. Standalone mode removed — Z1 cannot operate without WBC.
 
 ### Modified files
 | File | +/− | Changes |
@@ -23,6 +26,10 @@ Per la descrizione del sistema corrente vedi [`DESCRIPTION.md`](DESCRIPTION.md).
 | `nlf_params.yaml` | +3 | `burst_min_detections`, `burst_timeout_s`, `burst_throttle_frames` |
 | `wbc_params.yaml` | +2/−1 | `nlf_timeout` 10→30s, `nlf_excellent_confidence: 0.80` |
 | `spot_perception.launch.py` | +2/−1 | `condition=IfCondition` on `nlf_skeleton_node` |
+| `exposure_scanner.py` | +44/−2 | NLF prior subscriber + `_nlf_keypoints` fallback in grid generation |
+| `wbc_qp_controller.py` | +30/−17 | 6 symmetric poses replacing 7 FK-reader, `compute_ee_orientation()` |
+| `z1_FSM.py` | +5/−15 | WAITING state on startup, removed standalone timeout |
+| `sml_pose_indices.py` | −1 | Removed NECK from NEVER_AVAILABLE_YOLO |
 
 ### New topics
 | Topic | Type | Publisher | Subscriber | Purpose |

@@ -34,9 +34,22 @@ git status --short
 - LOCKING blocks until NLF burst completes (or times out)
 - EXCELLENT confidence tier: if NLF bbox_score ≥ 0.80 → 100% NLF blending
 
-### SEARCHING — Timed Open-Loop 7-Pose Search
-- 7 hardcoded manual poses (3 forward + 4 look-behind from FK reader)
+### SEARCHING — Timed Open-Loop with 6 Symmetric Poses
+- 6 symmetric mathematically-generated poses (3 forward + 3 look-behind)
+- Orientation computed via `compute_ee_orientation()` — no FK-reader quaternions
 - Refinement best pitch saved and applied on ALL LOCKING entry paths
+
+### Search Poses
+- 6 symmetric mathematically-generated poses (3 forward + 3 look-behind)
+- Orientation computed via compute_ee_orientation() — no FK-reader quaternions
+
+### Exposure NLF Grid
+- exposure_scanner uses NLF prior for body grid when available
+- Falls back to YOLO keypoints if NLF prior not captured
+
+### Z1 WBC Dependency
+- Z1 homes on startup, then waits indefinitely for WBC coordinator
+- No standalone operation possible
 
 ### Launch Fix
 - `nlf_skeleton_node` only launches with `perception_backend:=nlf`
