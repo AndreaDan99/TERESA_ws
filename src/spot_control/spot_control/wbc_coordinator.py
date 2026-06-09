@@ -1895,6 +1895,9 @@ class WBCCoordinatorNode(Node):
             self._pub_cmd_vel.publish(Twist())
             self._pub_guidance.publish(Bool(data=False))
             self._search_rotating = False
+            # Apply best pitch from refinement for optimal NLF camera view
+            if self._refine_best_pitch > 0.0:
+                self._set_body_pose(self._search_body_height, self._refine_best_pitch)
             self._ik_done = False
             self._set_wbc_enabled(True)
             # Trigger NLF prior if no valid prior already cached (debounce)
