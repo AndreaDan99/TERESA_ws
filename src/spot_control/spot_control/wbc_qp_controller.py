@@ -574,7 +574,7 @@ class WBCQPControllerNode(Node):
         home_pose = _make_pose_stamped(home_pos, home_quat)
         self._pub_ik.publish(home_pose)
         self._pub_en.publish(Bool(data=True))
-        self.get_logger().info('Lock home sent: search pose 1')
+        self.get_logger().info('🔒 Lock home pose sent [0.144, -0.005, 0.530]')
 
     # ── PERCEPTUAL_SCAN mode (APPROACHING) ───────────────────────────────
 
