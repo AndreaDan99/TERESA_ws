@@ -330,15 +330,15 @@ class Z1FSM(Node):
         self._wrist_align_start: float | None        = None
         self._homing_last_send:  float               = 0.0   # timestamp ultimo invio enable+goal in HOMING
 
-        # ── Start timer then go immediately to HOMING ───────────────────
+        # ── Start timer then wait for WBC before HOMING ─────────────────
         self.timer = self.create_timer(0.05, self.tick)   # 20 Hz
         self._homing_next_state = self.WAITING
-        self.set_state(self.HOMING)
+        self.set_state(self.WAITING)  # wait for WBC, don't move yet
         # NOTA: NON pubblicare ik_enable=False qui — il nodo IK parte già disabilitato
         # e pubblicare False in __init__ può arrivare DOPO ik_enable=True del primo tick
         # causando un race condition che impedisce l'homing.
 
-        self.get_logger().info("🧠 z1_FSM ready → avvio in HOMING")
+        self.get_logger().info("🧠 z1_FSM ready → waiting for WBC coordinator")
         self.get_logger().info(f"  torso_locked:      {self.torso_locked_topic}")
         self.get_logger().info(f"  ik_goal:           {self.ik_goal_topic}")
         self.get_logger().info(f"  ik_enable:         {self.ik_enable_topic}")
@@ -1144,24 +1144,14 @@ class Z1FSM(Node):
                 # Se WBC è in esecuzione, attendere che il coordinatore entri in SCANNING
                 # (Spot ha raggiunto il paziente e ha passato il controllo al FSM).
                 # Se _wbc_state_str è None: nessun messaggio ricevuto da /wbc/state →
-                # il WBC potrebbe non essere ancora partito. Attendere fino a 10s,
-                # poi assumere modalità standalone.
+                # attendere indefinitamente — nessuna modalità standalone.
                 if self._wbc_state_str is None:
                     if self._wbc_wait_start is None:
                         self._wbc_wait_start = self.get_clock().now().nanoseconds * 1e-9
                         self.get_logger().info(
                             '⏳ In attesa del WBC coordinator (/wbc/state)...'
                         )
-                        return
-                    elapsed = self.get_clock().now().nanoseconds * 1e-9 - self._wbc_wait_start
-                    wbc_timeout = float(self.get_parameter("wbc_startup_timeout").value)
-                    if elapsed < wbc_timeout:
-                        return
-                    self.get_logger().warn(
-                        f'⏰ Nessun WBC rilevato dopo {wbc_timeout:.0f}s → modalità standalone'
-                    )
-                    self._wbc_state_str = ''
-                    self._wbc_wait_start = None
+                    return
                 if self._wbc_state_str and self._wbc_state_str != 'SCANNING':
                     return
                 # If WBC approach scanner completed and fast_ready, skip body scan
