@@ -49,7 +49,7 @@ FEET_JOINTS = [FOOT_LEFT, FOOT_RIGHT]
 # ── Joints that are always NaN in YOLO-only mode ────────────────────────────
 NEVER_AVAILABLE_YOLO = [
     SPINE1, SPINE2, SPINE3, FOOT_LEFT, FOOT_RIGHT,
-    NECK, HEAD, HAND_LEFT, HAND_RIGHT,
+    HEAD, HAND_LEFT, HAND_RIGHT,
 ]
 
 
