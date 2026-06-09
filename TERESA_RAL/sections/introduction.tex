@@ -1,0 +1,139 @@
+% ============================================================
+%  I. INTRODUCTION
+% ============================================================
+\section{Introduction}
+\label{sec:introduction}
+
+\IEEEPARstart{E}{mergency} assessment protocols---including the Airway,
+Breathing, Circulation, Disability, Exposure (\ac{ABCDE}) survey and Focused
+Assessment with Sonography in Trauma (\ac{FAST}) ultrasound---enable rapid
+triage of life-threatening conditions at the point of care. In mass-casualty
+incidents and disaster sites, however, trained personnel are often unavailable,
+creating a critical bottleneck. A legged mobile manipulator could autonomously
+navigate unstructured terrain to locate patients and perform these assessments,
+but faces a fundamental challenge: the robot must actively reconfigure its body
+to compensate for perceptual uncertainty, as the quality of patient detection
+depends critically on how it positions its own camera---viewpoint, height, and
+orientation all affect accuracy. This coupling between body posture and
+perceptual quality has no closed-form model, and in emergency scenarios the
+robot operates with only onboard sensing.
+
+Robot-assisted ultrasound has advanced over two decades on fixed-base
+platforms. Comprehensive surveys~\cite{vonhaxthausen2021,li2021overview,
+munir2025,du2024review} document the evolution from teleoperated systems to
+contemporary autonomous scanning, and Hidalgo et al.~\cite{hidalgo2023} review
+current clinical applications. Key technical advances include force/position
+decoupling~\cite{gilbertson2015}, impedance control on curved
+surfaces~\cite{dyck2022}, force-guided scanning for soft
+tissue~\cite{ning2021}, active-sensing end-effectors~\cite{ma2022}, and
+autonomous protocol execution~\cite{suligoj2021,duan2022,farsoni2025autonomous}.
+Despite this progress, all deployed systems share a fundamental limitation: the
+patient must be pre-positioned within the arm's reachable workspace, confining
+autonomous ultrasound to controlled clinical settings.
+
+For the Exposure component of \ac{ABCDE}---the systematic visual inspection of
+the body surface for wounds, burns, and haemorrhages---computer vision models
+have recently emerged. Pre-trained YOLOv8-based forensic wound
+detectors\footnote{Available at
+\url{https://huggingface.co/trapezius60/forensic_wound_detection}} identify
+lacerations and contusions, while YOLOv7-based burn
+classifiers\footnote{Available at
+\url{https://github.com/Michael-OvO/Skin-Burn-Detection-Classification}} grade
+burn severity across three degrees. These models have demonstrated effective
+classification on clinical datasets but have not been deployed on mobile
+robotic platforms.
+
+Legged platforms such as the Boston Dynamics Spot remove the workspace
+constraint---they can traverse stairs, rubble, and confined spaces inaccessible
+to wheeled robots, and can therefore reach patients wherever they lie. Mounting
+a manipulator on a legged base introduces, however, a deeper challenge.
+Operational space formulation~\cite{khatib1987}, manipulability
+analysis~\cite{yoshikawa1985,bayle2003}, and optimisation-based
+control~\cite{wensing2023} underpin modern \ac{WBC}. For legged manipulators,
+hierarchical \ac{MPC}~\cite{minniti2019,sleiman2021}, holistic~\cite{haviland2022}
+and \ac{QP}-based~\cite{li2022wbc} \ac{WBC}, visual feedback
+integration~\cite{liu2024visual}, and Spot-specific grasping~\cite{zimmermann2021}
+and manipulability enhancement~\cite{xie2024manip} have been demonstrated. All
+existing legged \ac{WBC} formulations, however, assume known or static
+manipulation targets and do not account for the coupling between body posture
+and perceptual quality.
+
+Active perception surveys~\cite{zeng2020,bai2021} establish that moving to
+improve sensing outperforms passive observation~\cite{zaky2020}.
+Perception-aware planning~\cite{zhang2020fisher,tordesillas2022}, next-best-view
+grasping~\cite{breyer2022}, view planning for pose estimation~\cite{hu2022}, and
+active neural sensing~\cite{ren2023} couple motion with perception quality. For
+mobile manipulation, whole-body interaction~\cite{mittal2022},
+active-perceptive motion~\cite{jauhri2024}, coupled
+perception-manipulation~\cite{xie2024capm}, and one-shot multimodal
+frameworks~\cite{qin2026} optimise trajectories for information gain, yet
+operate on wheeled bases whose body posture is fixed. Posture optimisation via
+reachability~\cite{makhal2018,zhao2025}, base placement~\cite{fan2021},
+body-ground contact~\cite{wolfslag2020}, and legged manipulation
+surveys~\cite{gong2023} treat perception as input rather than an optimisation
+objective. No existing system closes the loop between body posture and
+perceptual quality on a legged platform for medical tasks.
+
+We advocate a paradigm in which body posture on a legged platform is treated as
+a first-class perceptual resource: the robot actively adapts its height, pitch,
+and yaw to maximise the quality of its own perceptual input, rather than solely
+to minimise kinematic error. The key idea is to close the perception-action
+loop at the whole-body level through confidence-gated search and anticipatory
+scanning. This paper addresses three fundamental questions: (i) how can a
+legged robot reconfigure its body to maximise perceptual quality when the
+target position is unknown, (ii) how can anatomical scanning be performed
+concurrently with base navigation to eliminate the idle time of sequential
+approaches, and (iii) how can body posture be pre-planned to maximise arm
+manipulability across multiple scanning targets without requiring real-time
+whole-body optimisation?
+
+This paper presents \acf{TERESA}, an integrated system for autonomous emergency
+assessment on a Boston Dynamics Spot legged robot equipped with a Unitree Z1
+manipulator arm. Building on the fixed-base ultrasound scanning competence
+established in~\cite{farsoni2025autonomous}, \ac{TERESA} extends autonomous
+assessment to a fully mobile platform through a whole-body active perception
+framework. The system integrates the pre-trained wound and burn detection
+models into its onboard perception pipeline, running inference on the
+\ac{EE}-mounted RealSense camera during the exposure body scan, and provides an
+interactive web-based review interface enabling operator-guided re-inspection
+of detected injuries.
+
+The key contributions of this paper are as follows:
+\begin{enumerate}
+  \item A whole-body active perception framework in which body posture---height,
+        pitch, and yaw---is optimised to improve perceptual quality rather than
+        solely to minimise kinematic error (Section~\ref{sec:active_perception}).
+  \item A hybrid confidence-gated search strategy that combines coarse body
+        rotation with targeted pitch refinement and dual-sensor locking,
+        ensuring robust patient localisation before the robot commits to
+        navigation (Section~\ref{sec:active_perception}).
+  \item An exposure body scanning pipeline that acquires multi-view anatomical
+        data across all patient postures (supine, sitting, standing) through
+        an adaptive skeleton-keypoint grid, integrating pre-trained forensic
+        wound and burn classification models with an interactive review
+        interface for operator-guided re-inspection of detected injuries
+        (Sections~\ref{sec:active_perception} and~\ref{sec:system_architecture}).
+  \item A pre-planned body reconfiguration method that optimises the legged
+        base posture for each anatomical scanning target through offline grid
+        search, maximising arm manipulability without requiring real-time
+        whole-body optimisation (Section~\ref{sec:active_perception}).
+  \item Experimental validation on a physical Spot+Z1 platform demonstrating
+        fully autonomous emergency assessment with reduced idle time compared
+        to a sequential stop-and-manipulate baseline
+        (Section~\ref{sec:experimental_results}).
+\end{enumerate}
+
+To the best of our knowledge, \ac{TERESA} is the first legged robotic system to
+demonstrate perception-driven whole-body reconfiguration for autonomous
+emergency assessment.
+
+The remainder of this paper is organised as follows.
+Section~\ref{sec:problem_formulation} defines the system and the autonomous
+emergency assessment problem.
+Section~\ref{sec:active_perception} presents the whole-body active perception
+and control framework, including search, scanning, reconfiguration, and
+exposure body scanning with interactive review.
+Section~\ref{sec:system_architecture} details the system architecture, mission
+\ac{FSM}, and web-based operator interface.
+Section~\ref{sec:experimental_results} presents experiments and results.
+Section~\ref{sec:conclusion} concludes the paper.

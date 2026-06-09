@@ -1,0 +1,42 @@
+% ============================================================
+%  ABSTRACT
+% ============================================================
+\begin{abstract}
+
+Emergency assessment protocols such as \ac{FAST} ultrasound and the \ac{ABCDE}
+survey are critical for rapid triage in mass-casualty incidents, disaster
+sites, and scenarios where trained clinicians are unavailable or overwhelmed.
+Deploying a legged mobile manipulator to autonomously perform these assessments
+could extend emergency care to inaccessible environments, but poses a
+fundamental challenge: the robot must actively reconfigure its body to
+compensate for perceptual uncertainty while navigating toward and scanning an
+unknown patient.
+
+This paper presents \ac{TERESA}, an integrated system for autonomous emergency
+assessment mounted on a Boston Dynamics Spot legged robot equipped with a
+Unitree Z1 manipulator arm. The core of \ac{TERESA} is a whole-body active
+perception framework in which the robot continuously adapts its posture---
+body height, pitch, and yaw---to maximise perceptual quality and bring
+anatomical targets into the arm's optimal workspace. A coarse-to-fine active
+search phase rotates the robot's body through a sequence of orientations,
+triggering a targeted refinement sweep whenever a camera detects a potential
+human form. Patient localisation is confirmed through a hybrid dual-sensor
+lock that combines a wide-field body camera with a close-range wrist camera
+before committing to navigation. An adaptive anticipatory scanner acquires
+multi-view anatomical data concurrently with approach motion, intelligently
+reducing the number of scanning poses when torso keypoints are already well
+resolved, thereby eliminating the idle time of traditional stop-then-scan
+approaches. During scanning, a pre-planned body reconfiguration optimises the
+robot's posture for each anatomical target through an offline search,
+maximising arm manipulability without requiring real-time whole-body
+optimisation.
+
+Experiments on the physical Spot+Z1 platform demonstrate that \ac{TERESA}
+achieves fully autonomous emergency assessment, with the active perception
+pipeline reducing mission idle time by \XX\,\% compared to a sequential
+stop-and-manipulate baseline while maintaining a probe positioning error
+below \XX\,mm. To the best of our knowledge, this is the first legged robotic
+system to demonstrate perception-driven whole-body reconfiguration for
+autonomous emergency assessment.
+
+\end{abstract}

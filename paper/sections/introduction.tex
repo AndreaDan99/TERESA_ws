@@ -1,0 +1,104 @@
+% ============================================================
+%  I. INTRODUCTION
+% ============================================================
+\section{Introduction}
+\label{sec:introduction}
+
+\IEEEPARstart{E}{mergency} assessment protocols---including the \acf{ABCDE}
+survey and \acf{FAST} ultrasound---enable clinicians to rapidly identify
+life-threatening conditions at the point of care. In mass-casualty incidents,
+disaster sites, and hazardous environments, however, trained personnel are
+often unavailable or overwhelmed, creating a critical bottleneck in triage.
+A legged mobile manipulator that can autonomously navigate unstructured
+terrain, locate a patient, and perform these assessments could extend
+emergency care to scenarios where human responders cannot safely operate.
+
+Autonomous robotic ultrasound has advanced significantly on fixed-base
+platforms. Systems employing impedance control, deep-learning-based
+segmentation, and pre-planned scan protocols have demonstrated clinically
+relevant probe positioning without direct human
+guidance~\cite{mathiassen2016, li2021overview, duan2022, farsoni2025autonomous}.
+These results, however, share a fundamental limitation: the patient must be
+pre-positioned within the arm's reachable workspace, confining autonomous
+ultrasound to controlled clinical settings.
+
+Legged platforms such as the Boston Dynamics Spot remove this constraint.
+They can traverse stairs, rubble, and confined spaces inaccessible to wheeled
+robots, and can therefore reach patients wherever they lie. Mounting a
+manipulator arm on a legged base introduces, however, a deeper challenge that
+goes beyond motion coordination. The robot does not know the patient's
+location a priori, and the quality of its perception depends critically on how
+it positions its own body: camera viewpoint, height, and orientation all
+affect detection accuracy. Existing \ac{WBC} formulations for legged
+manipulators~\cite{bellicoso2019, sleiman2021, haviland2022} simultaneously
+optimise base and arm motion, but assume known or static targets and do not
+account for the coupling between body posture and perceptual quality. In a
+realistic emergency scenario, the robot must actively shape its own perception
+before it can act.
+
+This paper presents \acf{TERESA} (Trustworthy Emergency Robot for Efficient
+Support and Assistance), an integrated system for autonomous emergency
+assessment on a Boston Dynamics Spot legged robot equipped with a Unitree Z1
+manipulator arm. Building on the fixed-base scanning competence established
+in~\cite{farsoni2025autonomous}, we extend autonomous assessment to a fully
+mobile platform capable of operating in unstructured environments. The core
+contribution of \ac{TERESA} is a whole-body active perception framework: the
+robot continuously adapts its posture---body height, pitch, and yaw---not
+merely to minimise kinematic error, but to maximise the quality of its
+perceptual input.
+
+The system is built around four principles. First, a \textbf{hybrid
+confidence-gated active search} phase combines coarse body rotation with
+targeted refinement: the robot sweeps through orientations and, upon
+detecting a potential body with either of its two cameras, performs a focused
+sweep to maximise perceptual confidence before committing to a dual-sensor
+lock that confirms patient localisation. Second, an \textbf{adaptive
+anticipatory body scanner} acquires multi-view anatomical data during base
+navigation, dynamically selecting the number of scanning poses based on how
+well the torso keypoints have already been resolved---sparse confidence
+triggers a more comprehensive sweep, while already-certain detections proceed
+with minimal scanning overhead. Third, a \textbf{perception-quality-aware
+velocity controller} scales the approach speed in proportion to detection
+confidence, avoiding both premature commitment to uncertain targets and
+unnecessary stops. Fourth, a \textbf{pre-planned body reconfiguration} step
+optimises the robot's posture for each anatomical scanning target through an
+offline search, maximising arm manipulability without requiring real-time
+whole-body optimisation.
+
+The main contributions of this paper are:
+\begin{enumerate}
+  \item A \textbf{whole-body active perception framework} for legged mobile
+        manipulation, in which body posture is optimised to improve
+        perceptual quality rather than solely to minimise kinematic error
+        (Section~\ref{sec:active_perception}).
+  \item A \textbf{hybrid confidence-gated search strategy} that combines
+        coarse rotation with targeted refinement and dual-sensor locking,
+        ensuring robust patient localisation before the robot commits to
+        navigation (Section~\ref{sec:active_perception}).
+  \item An \textbf{adaptive multi-view scanning pipeline} that acquires
+        patient anatomy concurrently with base motion and dynamically reduces
+        scanning poses when keypoints are already well resolved, removing the
+        idle periods inherent in sequential stop-and-scan architectures
+        (Section~\ref{sec:system_architecture}).
+  \item \textbf{Experimental validation} on a physical Spot+Z1 platform,
+        demonstrating fully autonomous emergency assessment with a
+        \XX\,\% reduction in idle time compared to a stop-and-manipulate
+        baseline (Section~\ref{sec:results}).
+\end{enumerate}
+
+To the best of our knowledge, \ac{TERESA} is the first legged robotic system to
+demonstrate perception-driven whole-body reconfiguration for autonomous
+emergency assessment.
+
+The remainder of this paper is organised as follows.
+Section~\ref{sec:related_work} reviews related work in robotic ultrasound,
+legged whole-body control, and active perception for mobile manipulation.
+Section~\ref{sec:problem_formulation} formally defines the system and the
+autonomous emergency assessment problem.
+Section~\ref{sec:active_perception} presents the active perception framework,
+including hybrid confidence-gated search and adaptive anticipatory scanning.
+Section~\ref{sec:method} describes the decoupled whole-body reconfiguration
+approach. Section~\ref{sec:system_architecture} details the complete system
+architecture and mission \ac{FSM}. Section~\ref{sec:experiments} describes the
+experimental setup and Section~\ref{sec:results} presents the results and
+discussion. Section~\ref{sec:conclusion} concludes the paper.

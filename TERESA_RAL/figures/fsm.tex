@@ -1,0 +1,106 @@
+% ============================================================
+%  FSM DIAGRAM — 13 states, 4 columns
+%  Requires: tikz
+% ============================================================
+\begin{tikzpicture}[
+    node distance = 1.6cm and 1.8cm,
+    auto,
+    >=stealth,
+    state/.style   = {rectangle, rounded corners=3pt, draw, minimum width=1.6cm,
+                      minimum height=0.55cm, font=\tiny,
+                      fill=white, thick, inner sep=2pt},
+    search/.style  = {state, draw=orange!70, fill=orange!8},
+    lock/.style    = {state, draw=red!60, fill=red!8},
+    approach/.style = {state, draw=blue!70, fill=blue!8},
+    expose/.style  = {state, draw=cyan!65, fill=cyan!8},
+    review/.style  = {state, draw=teal!60, fill=teal!8},
+    scan/.style    = {state, draw=green!60!black, fill=green!8},
+    idle/.style    = {state, draw=gray!70, fill=gray!8},
+    wait/.style    = {state, draw=violet!60, fill=violet!8, densely dashed},
+    trans/.style   = {->, thick, font=\tiny},
+    transd/.style  = {->, thick, dashed, font=\tiny},
+    every label/.style = {font=\tiny}
+  ]
+
+  % ── Column 1: Init (x≈0.0) ──────────────────────────────────
+  \node[idle]  (wtf)                                  {Waiting TF};
+  \node[idle]  (idl)  [below=of wtf]                   {Idle};
+
+  % ── Column 2: Search / Lock (x≈2.8) ─────────────────────────
+  \node[search] (sr)  [right=2.8cm of idl]                    {Searching};
+  \node[lock]   (sl)  [above=of sr]                            {Semi-locking};
+  \node[lock]   (lk)  [right=of sl]                            {Locking};
+
+  % ── Column 3: Approach + Exposure (x≈6.2) ──────────────────
+  \node[approach] (pa) [right=2.2cm of lk]                     {Pre-approach};
+  \node[approach] (ap) [below=of pa]                            {Approaching};
+  \node[wait]     (we) [below=1.8cm of ap]                        {Wait. Exp.};
+  \node[expose]   (es) [right=2.2cm of ap]                      {Exp. Scanning};
+  \node[review]   (er) [below=of es]                            {Exp. Review};
+
+  % ── Column 4: FAST (x≈10.2) ─────────────────────────────────
+  \node[scan]    (sc) [right=2.2cm of es]                      {Scanning (FAST)};
+  \node[wait]    (wf) [above=of sc]                            {Wait. FAST};
+  \node[approach] (ws) [right=2.2cm of sc]                     {WS ext};
+
+  % ── Transitions ─────────────────────────────────────────────
+
+  % Init
+  \draw[trans] (wtf) -- node[right]{\tiny TF ready} (idl);
+  \draw[trans] (idl) -- node[above]{\tiny start} (sr);
+
+  % Search / Lock
+  \draw[trans] (sr)  -- node[left]{\tiny RS guided} (sl);
+  \draw[trans] (sl)  -- node[above]{\tiny Orbbec} (lk);
+  \draw[transd] (sl.west) -- ++(-0.5,0) |- node[pos=0.4,left]{\tiny timeout} (sr.west);
+  \draw[trans] (sr)  -| node[above left,pos=0.7]{\tiny LYING} (lk);
+  \draw[transd] (lk.south west) -- node[above left,pos=0.4,yshift=2pt]{\tiny timeout} (sr.north east);
+
+  % Lock → Pre-approach
+  \draw[trans] (lk)  -- node[above]{\tiny samples+ik} (pa);
+
+  % Pre-approach → Approaching
+  \draw[trans] (pa)  -- node[left]{\tiny EST/LOCKED} (ap);
+  \draw[transd] (pa) to[loop right] node[right]{\tiny timeout} (pa);
+
+  % Approaching → Exposure (conditional gate)
+  \draw[trans] (ap.east) -- node[above,pos=0.3]{\tiny handoff} (es.west);
+  \draw[transd] (ap) -- node[left]{\tiny man.\ gate} (we);
+
+  % Waiting Exposure → Exposure Scanning
+  \draw[trans] (we) -- node[above]{\tiny confirm} (es);
+
+  % Exposure Scanning → Exposure Review
+  \draw[trans] (es) -- node[right,near start]{\tiny /exp.\_ready} (er);
+
+  % Exposure Review → FAST (conditional gate)
+  \draw[trans] ([yshift=-0.2cm]er.east) -| node[above,pos=0.25]{\tiny terminate} ([xshift=-0.2cm]sc.south);
+  \draw[transd] ([yshift=0.2cm]er.east) -- ++(0.8,0) |- node[left,pos=0.4]{\tiny man.\ gate} (wf.west);
+
+  % Waiting FAST → Scanning
+  \draw[trans] (wf.south) -- node[below right,pos=0.7]{\tiny confirm} (sc.north);
+
+  % Scanning ↔ WS ext
+  \draw[trans] (sc) -- node[above]{\tiny unreach.} (ws);
+  \draw[trans] (ws) -- node[below]{\tiny ik\_done} (sc);
+
+  % Complete → Idle (passes below all states)
+  \draw[transd] ([xshift=+0.2cm]sc.south) -- ++(0,-2.5) -|
+    node[pos=0.22,below]{\tiny complete} (idl.south);
+
+  % ── Legend ──────────────────────────────────────────────────
+  \node[state, draw=orange!70, fill=orange!8, minimum width=1.0cm,
+        font=\tiny, inner sep=1pt] at (7.5, -5.7) {Search};
+  \node[state, draw=red!60, fill=red!8, minimum width=1.0cm,
+        font=\tiny, inner sep=1pt] at (9.0, -5.7) {Lock};
+  \node[state, draw=blue!70, fill=blue!8, minimum width=1.0cm,
+        font=\tiny, inner sep=1pt] at (10.5, -5.7) {Approach};
+  \node[state, draw=cyan!65, fill=cyan!8, minimum width=0.9cm,
+        font=\tiny, inner sep=1pt] at (12.0, -5.7) {Expose};
+  \node[state, draw=teal!60, fill=teal!8, minimum width=0.9cm,
+        font=\tiny, inner sep=1pt] at (13.5, -5.7) {Review};
+  \node[state, draw=green!60!black, fill=green!8, minimum width=0.9cm,
+        font=\tiny, inner sep=1pt] at (15.0, -5.7) {FAST};
+  \draw[transd, thick] (16.0, -5.7) -- node[above,font=\tiny]{dashed} ++(1.0,0);
+
+\end{tikzpicture}

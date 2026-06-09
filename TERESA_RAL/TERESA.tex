@@ -1,0 +1,73 @@
+% ============================================================
+%  TERESA: Whole-Body Active Perception for Legged
+%  Robot-Assisted Emergency Assessment
+%
+%  IEEE Robotics and Automation Letters (RA-L) — submission draft
+% ============================================================
+\documentclass[journal]{IEEEtran}
+
+% ── Packages ────────────────────────────────────────────────
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{cite}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{bm}           % bold math symbols
+\usepackage{siunitx}      % \SI{}{} units
+\usepackage{acronym}      % \ac{}, \acf{}, \acp{}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.15}
+\usetikzlibrary{arrows.meta, automata, positioning, shapes.geometric,
+                fit, calc, backgrounds}
+
+% ── Macros ──────────────────────────────────────────────────
+\newcommand{\R}[1]{\mathbb{R}^{#1}}
+\newcommand{\vdes}{\mathbf{v}_{\mathrm{des}}}
+\newcommand{\Jarm}{\mathbf{J}_{\mathrm{arm}}}
+
+% ── Title / Authors ─────────────────────────────────────────
+\title{TERESA: Whole-Body Active Perception for Legged
+       Robot-Assisted Emergency Assessment}
+
+\author{Andrea~D'Antona,~\IEEEmembership{}
+        
+                \thanks{A.~D'Antona is with the Department of Engineering,
+                University of Ferrara, 44122 Ferrara, Italy
+                (e-mail: dntndr1@unife.it).}}
+
+% ============================================================
+\begin{document}
+
+\maketitle
+
+% ── Acronym definitions ─────────────────────────────────────
+\input{sections/acronyms}
+
+% ── Abstract ────────────────────────────────────────────────
+\input{sections/abstract}
+
+% ── Keywords ────────────────────────────────────────────────
+\begin{IEEEkeywords}
+Whole-body active perception, legged manipulation, medical robotics,
+emergency assessment, mobile manipulation, body reconfiguration.
+\end{IEEEkeywords}
+
+% ── Sections ────────────────────────────────────────────────
+\input{sections/introduction}
+\input{sections/problem_formulation}
+\input{sections/active_perception}
+\input{sections/system_architecture}
+\input{sections/experimental_results}
+\input{sections/conclusion}
+
+% ── Bibliography ────────────────────────────────────────────
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

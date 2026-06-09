@@ -1,0 +1,37 @@
+% ============================================================
+%  ABSTRACT
+% ============================================================
+\begin{abstract}
+
+Deploying legged mobile manipulators for autonomous emergency assessment could
+extend care to inaccessible environments, but requires the robot to actively
+reconfigure its body to compensate for perceptual uncertainty while approaching
+an unknown patient.
+
+This paper presents \ac{TERESA} (Trustworthy Emergency Robot for Efficient
+Support and Assistance), an autonomous emergency assessment system on a Boston
+Dynamics Spot quadruped with a Unitree Z1 arm. \ac{TERESA} introduces a
+whole-body active perception framework that continuously adapts body posture---
+height, pitch, and yaw---to maximise perceptual quality. A hybrid
+confidence-gated search combines coarse body rotation with targeted refinement,
+confirming patient localisation through a dual-sensor lock before navigation.
+An adaptive anticipatory scanner acquires multi-view anatomical data
+concurrently with base motion, dynamically reducing scanning poses when torso
+keypoints are already resolved, eliminating idle time of sequential approaches.
+An exposure body scanning pipeline covers the patient's body surface across all
+postures, integrating pre-trained forensic wound and burn detection models with
+an interactive review phase in which the operator can click any grid point on
+the web camera feed to command the robot to re-inspect that body region. During
+\ac{FAST} scanning, pre-planned body reconfiguration optimises posture for each
+anatomical target via offline search, maximising arm manipulability without
+real-time whole-body optimisation.
+
+Experiments on the physical Spot+Z1 platform demonstrate fully autonomous
+emergency assessment across supine, sitting, and standing patient postures,
+with the active perception pipeline reducing idle time compared to a
+stop-and-manipulate baseline. To the best of our knowledge, \ac{TERESA} is the
+first legged system to demonstrate perception-driven whole-body reconfiguration
+with an interactive operator review interface for autonomous emergency
+assessment.
+
+\end{abstract}

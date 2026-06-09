@@ -1,0 +1,258 @@
+% ============================================================
+%  IV. WHOLE-BODY ACTIVE PERCEPTION
+% ============================================================
+\section{Whole-Body Active Perception}
+\label{sec:active_perception}
+
+The core contribution of \ac{TERESA} is a whole-body active perception
+framework: the robot continuously adapts its posture---body height, pitch,
+and yaw---to maximise the quality of its perceptual input. This section
+describes the three mechanisms that realise this principle:
+hybrid confidence-gated active search
+(Section~\ref{sec:confidence_search}),
+adaptive anticipatory body scanning with \ac{WBC}
+(Section~\ref{sec:anticipatory_scan}),
+and perception-quality-aware velocity control
+(Section~\ref{sec:quality_velocity}).
+
+\subsection{Hybrid Confidence-Gated Active Search}
+\label{sec:confidence_search}
+
+Before the robot can approach the patient, it must first localise them
+reliably. In an unstructured emergency scenario, the patient's position is
+unknown a priori, and the detection quality of the onboard Orbbec \ac{RGBD}
+camera depends strongly on the robot's body posture: a higher camera provides
+a wider field of view but reduces resolution at the ground plane; a forward
+pitch directs the camera toward the expected patient location but narrows the
+horizon. \ac{TERESA} treats this coupling as an opportunity rather than a
+limitation: the robot actively searches over body postures to find the
+configuration that maximises detection confidence.
+
+\subsubsection{Coarse rotation with targeted refinement}
+
+The robot enters a SEARCHING phase in which it sweeps through a sequence of
+body yaw orientations at a nominal pitch, pausing at each to allow both
+cameras to observe the environment. A second camera---an \ac{EE}-mounted
+RealSense---runs a torso tracker in a lenient guidance mode, capable of
+detecting any human keypoint without requiring full torso visibility. At
+each orientation, two conditions are evaluated concurrently:
+
+\begin{itemize}
+  \item \textbf{Orbbec direct detection}: if the wide-field camera detects a
+        lying patient with high posture confidence and a valid approach
+        point can be computed, the robot transitions immediately to target
+        locking---this is the dominant path when visibility is favourable.
+  \item \textbf{RealSense guidance}: if the RealSense tracker detects a
+        potential body (even a partial set of keypoints) while the Orbbec
+        has not yet confirmed, the robot enters a semi-locking phase. It
+        computes the optimal yaw and pitch to align the Orbbec with the
+        detected body and rotates the base accordingly, while the arm
+        maintains a continuous look-at orientation toward the target to keep
+        the \ac{EE} camera on the region of interest. The Orbbec receives a
+        clean observation window of several seconds to confirm the detection.
+\end{itemize}
+
+If neither condition is met after the coarse sweep completes, the robot
+triggers a \textbf{refinement phase}: at the most promising orientation
+(where either camera reported above-threshold confidence), it performs a
+targeted sweep of body pitch angles, maximising the Orbbec confidence score.
+If the best pitch yields confirmation, the lock proceeds; otherwise the
+coarse search resumes from the next orientation.
+
+This two-tier strategy combines the speed of a sparse coarse search with the
+precision of targeted refinement, avoiding the idle time of an exhaustive
+posture grid while ensuring that narrow detections are not missed.
+
+\subsubsection{Dual-sensor confidence lock}
+
+Patient localisation is confirmed through a hybrid lock that fuses
+information from both cameras. When the Orbbec detects a lying posture with
+high confidence and a valid approach point, the robot enters a LOCKING state.
+The arm returns to an elevated home pose, providing the \ac{EE}-mounted
+RealSense with an optimal vantage point for fine-grained torso analysis. The
+coordinator simultaneously collects a short sequence of approach point
+estimates from the Orbbec, transforms them to the world-fixed odometry frame
+$\mathcal{F}_W$ via the \ac{TF} tree, and computes their mean as the initial
+approach target. The transition to the approach phase is gated by both the
+completion of the arm's home trajectory (confirmed by the \ac{IK} solver)
+and the collection of the required number of samples---ensuring that the
+robot is mechanically prepared and the target is statistically stable before
+committing to navigation.
+
+This dual-sensor architecture provides complementary coverage: the Orbbec
+offers wide-field posture classification and coarse localisation, while the
+RealSense guides fine base alignment when the body is partially visible and
+confirms the target at close range during the subsequent pre-approach phase.
+
+\subsubsection{Robustness to confidence loss}
+
+If the Orbbec detection is temporarily lost during sample collection---for
+instance, due to a transient occlusion or a change in lighting---the system
+tolerates a brief absence before abandoning the lock and resuming the coarse
+search from the current orientation. This closed-loop behaviour prevents
+commitment to a stale or degraded target without reacting to momentary
+flickering.
+
+Once the target is locked and the arm is in its home pose, the robot
+straightens its body posture (returning to nominal height and zero pitch),
+and the mission transitions to the pre-approach phase. During pre-approach,
+the \ac{EE}-mounted RealSense camera becomes the primary sensor: the arm
+maintains a \ac{WBC} look-at orientation toward the patient's torso centroid
+(computed from the Orbbec skeleton keypoints during locking), and the
+coordinator waits for consecutive tracker confirmations before authorising
+the final approach.
+
+\subsection{Adaptive Anticipatory Body Scanning with Whole-Body Control}
+\label{sec:anticipatory_scan}
+
+In traditional mobile manipulation pipelines, the robot first navigates to a
+target position, stops, and only then begins visual scanning---a sequential
+approach that introduces significant idle time. \ac{TERESA} eliminates this
+idle period by executing the body scan concurrently with the approach
+navigation. This anticipatory scanning is enabled by a decoupled architecture
+in which the Spot base navigates toward the patient while the Z1 arm
+simultaneously performs a multi-view scan of the patient's torso.
+
+\subsubsection{Decoupled whole-body coordination}
+
+During the approach phase, two independent controllers run in parallel. The
+Spot base is driven by a P-controller that computes forward velocity
+$v_x = k_p^{\mathrm{lin}}\,\Delta d$ and yaw rate
+$\omega_z = k_p^{\mathrm{ang}}\,\Delta\theta$ from the distance and angle
+error between the current body pose and the target in $\mathcal{F}_W$. The
+arm is controlled by a \ac{WBC} \ac{QP} that computes joint velocities
+$\dot{\mathbf{q}}$ via a damped pseudo-inverse of the arm Jacobian,
+generating an EE orientation that points the RealSense camera toward the
+patient's torso centroid. The \ac{WBC} is used here not merely to optimise
+kinematics, but to serve the active perception objective: it continuously
+reorients the sensor to maximise the quality of the anatomical data being
+acquired.
+
+\subsubsection{Adaptive Cartesian scan grid}
+
+The arm executes a perceptual body scan using a dynamically generated
+Cartesian grid of poses around the current \ac{EE} position. Unlike a fixed
+scan pattern, the grid adapts to the pre-existing torso detection quality.
+During the pre-approach phase, the RealSense tracker publishes per-keypoint
+confidence scores for the four canonical torso landmarks (left and right
+shoulders, left and right hips). These scores drive the grid generation:
+
+\begin{itemize}
+  \item If all four torso keypoints are detected with high confidence, the
+        scan uses a minimal grid: the current \ac{EE} pose (already
+        oriented toward the torso via the \ac{WBC} look-at controller),
+        advanced forward toward the patient, and a second elevated
+        viewpoint for depth cross-validation. This two-pose scan completes
+        rapidly, as the torso is already well resolved.
+  \item If any keypoint falls below the confidence threshold, the grid
+        expands to a comprehensive pattern: the base pose plus symmetric
+        lateral offsets and an elevated frontal viewpoint, with the home
+        pose interleaved between each lateral transit to ensure smooth
+        \ac{IK} trajectories. This four-pose sweep guarantees multi-angle
+        coverage of the torso region, recovering keypoints that were
+        partially occluded or at the periphery of the camera frustum.
+\end{itemize}
+
+All scanning poses include a forward advance toward the patient, shifting
+the camera closer to the torso for improved depth resolution. Each pose
+maintains a minimum-rotation look-at orientation that points the camera
+optical axis toward the target while preserving the wrist configuration, and
+is clipped against the arm's reachable workspace with a safety margin.
+
+\subsubsection{Multi-view fusion and FAST target generation}
+
+At each pose, the BodySearchScanner module fuses the RealSense depth and
+skeleton data into 3D keypoint estimates of the patient's torso landmarks
+(shoulders, hips, sternum). The per-pose data collection runs for a fixed
+interval, with early termination if a high-quality detection is achieved
+before the timeout. After all poses are visited, the multi-view estimates are
+fused through a weighted average that accounts for detection rate, average
+confidence, and 3D spatial stability. From the fused torso model, the five
+canonical FAST anatomical target poses (Hub, Subxiphoid, RUQ, LUQ,
+Suprapubic) are computed as fixed offsets from the estimated torso centroid,
+expressed in the arm base frame $\mathcal{F}_0$.
+
+The adaptive nature of the grid yields two key advantages. First, it reduces
+the total scan duration when visibility is favourable---the majority of
+cases---without compromising anatomical localisation when keypoints are
+partially occluded. Second, it eliminates the need for a separate phase-three
+conditional refinement step: the grid itself encodes the logic of
+``comprehensive when uncertain, minimal when confident.''
+
+\subsubsection{Z1 FSM integration}
+
+Once the scan is complete and the FAST targets are published in
+$\mathcal{F}_0$, a ready signal is broadcast. The Z1 \ac{FSM}, which normally
+executes its own body scanning routine, receives this signal and skips its
+internal scan phase, transitioning directly to the scanning sequence. This
+integration eliminates redundant scanning and ensures that the body scan
+performed during approach is directly leveraged for the subsequent
+ultrasound acquisition.
+
+\subsection{Perception-Quality-Aware Velocity Control}
+\label{sec:quality_velocity}
+
+During the approach, the quality of the patient detection can vary due to
+partial occlusions, changes in body posture, or motion of the platform. A
+fixed approach velocity would be either overly conservative (taking
+unnecessary time when detection is certain) or unsafe (charging toward an
+uncertain target). \ac{TERESA} addresses this trade-off through a
+QualityMonitor that continuously maps detection confidence to approach
+velocity.
+
+\subsubsection{Quality monitor}
+
+The QualityMonitor maintains a target position in $\mathcal{F}_W$ and an
+associated quality value $q \in [q_{\min},\, q_{\max}]$ measured in metres.
+The target is initialised from the confidence-locked sample mean obtained
+during the active search phase. It is subsequently updated only if a new
+detection arrives with confidence that exceeds the current best confidence
+by a minimum margin, preventing the target from drifting toward lower-quality
+measurements. The quality value is computed from the posture confidence
+$c$ as:
+\begin{equation}
+  q = q_{\max}\,(1 - c),
+  \label{eq:quality_confidence}
+\end{equation}
+where $q_{\max}$ is a ceiling parameter. When confidence is high
+($c \to 1$), the quality is low (small uncertainty radius); when confidence
+drops, the quality grows, reflecting increasing positional uncertainty.
+If no new confidence data arrive---for instance, during a temporary
+occlusion---the quality grows linearly with time, modelling the accumulation
+of uncertainty in the absence of new observations:
+\begin{equation}
+  q(t + \Delta t) = q(t) + \dot{q}_{\mathrm{growth}}\,\Delta t.
+  \label{eq:quality_growth}
+\end{equation}
+
+\subsubsection{Velocity scaling}
+
+The base approach velocity is scaled by a smooth function of the current
+quality:
+\begin{equation}
+  v_{\mathrm{scale}}(q) =
+  v_{\min} + \frac{1 - v_{\min}}{1 + q / q_{\mathrm{ref}}},
+  \label{eq:velocity_scale}
+\end{equation}
+where $v_{\min} > 0$ is a floor that ensures the robot never stops
+completely (avoiding deadlocks when quality is high), and $q_{\mathrm{ref}}$
+is a reference quality at which the velocity is reduced to
+$(1 + v_{\min})/2$. The scaling is applied multiplicatively to both the
+forward velocity $v_x$ and the yaw rate $\omega_z$:
+\begin{equation}
+  v_x^{\mathrm{cmd}} = v_{\mathrm{scale}}(q)\,v_x, \qquad
+  \omega_z^{\mathrm{cmd}} = v_{\mathrm{scale}}(q)\,\omega_z.
+  \label{eq:cmd_vel_scaled}
+\end{equation}
+
+When detection is reliable ($q \approx q_{\min}$, i.e., high confidence),
+$v_{\mathrm{scale}} \approx 1$ and the robot approaches at full speed.
+As confidence degrades ($q$ grows), the velocity scales down smoothly,
+giving the perception pipeline more time to re-acquire the target. When
+no new detections arrive, the linear growth of $q$ in~\eqref{eq:quality_growth}
+produces a gradual deceleration, ensuring that the robot does not charge
+blindly toward a lost target.
+
+The QualityMonitor thus closes the perception-action loop: the robot's
+motion is continuously modulated by the quality of its own perceptual input,
+embodying the principle that action should be proportional to certainty.

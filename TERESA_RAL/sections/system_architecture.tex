@@ -1,0 +1,127 @@
+% ============================================================
+%  IV. SYSTEM ARCHITECTURE
+% ============================================================
+\section{System Architecture}
+\label{sec:system_architecture}
+
+The \ac{TERESA} system is organised into four layers---hardware, perception,
+mission management, and control---communicating over \ac{ROS}~2 with
+\ac{DDS}. Computation is distributed across three units: the Spot onboard
+computer SpotCore (base control and odometry), a NVIDIA Jetson (perception and
+arm control), and an external PC (mission coordination and \ac{WBC}).
+
+\subsection{Hardware Platform}
+
+The Boston Dynamics Spot quadruped is commanded via its onboard \ac{ROS}~2
+driver through velocity commands $[v_x,\, \omega_z]$ and body posture commands.
+The Unitree Z1 is a six-\ac{DOF} manipulator mounted on Spot's back, controlled
+at the torque level through a \ac{JTC} interface. Two \ac{RGBD} cameras provide
+complementary coverage. An Orbbec Femto Bolt is mounted on Spot's body for
+wide-field patient detection at distances up to \SI{3}{\metre}. An Intel
+RealSense D435 is mounted at the Z1 \ac{EE}; the arm's \ac{WBC} look-at
+controller positions it as an active pan-tilt unit for close-range torso
+tracking and surface estimation. Spot's five built-in stereo cameras are
+positioned low on the body for ground-plane obstacle avoidance and are not
+suitable for \ac{YOLO} skeleton detection.
+
+%\subsection{Frame Tree}
+%
+%The \ac{TF} tree defines the spatial relationships between all system
+%components, as illustrated in Fig.~\ref{fig:frame_tree}. The root
+%\texttt{my\_spot/odom} is world-fixed and published by SpotCore odometry.
+%\texttt{my\_spot/body} moves with the base (height, pitch, and yaw are set
+%via \texttt{/body\_pose}) and branches into the Orbbec chain
+%(\texttt{orbbec\_link} $\to$ \texttt{orbbec\_color\_optical\_frame}) and the Z1
+%arm chain (\texttt{world} $\to$ \texttt{link00} $\to$ $\cdots$ $\to$
+%\texttt{link06} $\to$ \texttt{camera\_link} $\to$
+%\texttt{camera\_color\_optical\_frame}). Because the \texttt{body $\to$ world}
+%transform is static, any change in body posture automatically propagates to the
+%arm base frame $\mathcal{F}_0$.
+
+%\begin{figure}[t]
+%  \centering
+%  \input{figures/frame_tree}
+%  \caption{\ac{TF} frame tree. \texttt{my\_spot/odom} $\to$
+%           \texttt{my\_spot/body} branches into the Orbbec chain and the Z1 arm
+%           chain.}
+%  \label{fig:frame_tree}
+%\end{figure}
+
+\subsection{Mission Finite State Machine}
+
+The mission is orchestrated by a nine-state \ac{FSM} shown in
+Fig.~\ref{fig:fsm}. The robot waits for \ac{TF} readiness, then upon the start
+command enters SEARCHING, sweeping through body yaw orientations while two
+cameras observe the environment. A RealSense detection triggers SEMI\_LOCKING,
+rotating the base toward the torso to give the Orbbec a clean observation
+window. An Orbbec confirmation transitions to LOCKING, where approach point
+samples are collected. PRE\_APPROACH straightens Spot while the \ac{WBC}
+look-at controller orients the RealSense toward the patient's torso.
+APPROACHING drives the base toward the target while the adaptive anticipatory
+scanner executes concurrently. EXPOSURE\_SCANNING executes the posture-adaptive
+exposure body scan with integrated wound and burn detection. Upon completion,
+EXPOSURE\_REVIEW enters an interactive phase where the operator can click any
+grid point on the web camera view to command the robot to re-inspect that body
+region. The review ends with a termination command, after which SCANNING
+executes the \ac{FAST} cycle with pre-planned body reconfiguration between
+targets.
+
+\begin{figure*}[t]
+  \centering
+  \resizebox{\textwidth}{!}{\input{figures/fsm}}
+  \caption{Mission \ac{FSM}. Transitions are triggered by perception confidence
+           (dashed) or geometric conditions (solid).}
+  \label{fig:fsm}
+\end{figure*}
+
+\subsection{System Integration}
+
+Fig.~\ref{fig:system_block} shows the block diagram of the complete system. The
+Orbbec and RealSense \ac{RGBD} streams feed the perception pipeline
+(\ac{YOLO}-pose, Kalman 3D, surface estimation). Detection and surface
+estimates are routed to the mission \ac{FSM}, which coordinates three
+controllers: a \ac{WBC} \ac{QP} for arm look-at during approach, an \ac{IK}
+goal multiplexer for position-controlled trajectories, and the impedance
+controller for compliant scanning. The \ac{WBC} \ac{QP} publishes base velocity
+commands $[v_x,\, \omega_z]$ to Spot and arm goals to the multiplexer, while
+the impedance controller publishes joint torques $\boldsymbol{\tau}$ directly
+to the Z1. An \texttt{ik\_goal\_mux} node gives \ac{WBC} goals priority over
+the Z1 \ac{FSM} goals when \ac{WBC} is enabled, ensuring seamless transitions
+between the search, approach, and scanning phases.
+
+The Z1 \ac{FSM} is integrated with the \ac{WBC} coordinator: when the approach
+is complete and the anticipatory scanner has computed the \ac{FAST} target set,
+the Z1 \ac{FSM} skips its internal scanning phase. During the \ac{FAST} cycle,
+the coordinator optimises Spot's posture for each target and signals readiness;
+the Z1 \ac{FSM} waits for this signal before executing the next target,
+synchronising posture changes with arm motion. All components are available as
+open-source software. An emergency stop immediately halts the base and returns
+the arm to a safe configuration.
+
+\begin{figure}[t]
+  \centering
+  \resizebox{\columnwidth}{!}{\input{figures/system_block}}
+  \caption{System block diagram. Sensors feed the perception pipeline; the
+           mission \ac{FSM} coordinates three controllers with the Spot and Z1
+           hardware.}
+  \label{fig:system_block}
+\end{figure}
+
+\subsection{Web-Based Operator Interface}
+
+The \ac{TERESA} web interface provides dual-camera monitoring and robot control
+via a browser dashboard communicating over rosbridge WebSocket. During exposure
+review, the RealSense overlay renders the scan grid as clickable markers; each
+click triggers a full re-positioning sequence---posture optimisation, settle,
+and \ac{IK} trajectory replay---within the same \ac{ROS}~2 topic protocol used
+for autonomous operation. A manual/automatic scan gate toggle allows the
+operator to require explicit confirmation before advancing between mission
+phases. All web commands are mirrored on the keyboard controller for
+redundancy. Fig.~\ref{fig:web_interface} shows the interface during review.
+
+\begin{figure}[t]
+  \centering
+  \input{figures/web_interface}
+  \caption{Web-based operator interface during the exposure review phase. Blue markers show scan grid points; the current point is highlighted with a ring. Red and orange bounding boxes indicate detected wounds and burns. Clicking any grid marker commands Spot and the Z1 arm to return to that body region.}
+  \label{fig:web_interface}
+\end{figure}

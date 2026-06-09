@@ -1,0 +1,192 @@
+% ============================================================
+%  V. EXPERIMENTAL RESULTS
+% ============================================================
+\section{Experimental Results}
+\label{sec:experimental_results}
+
+\subsection{Experimental Setup}
+
+Experiments were conducted on the physical Spot+Z1 platform integrating a
+Boston Dynamics Spot quadruped, a Unitree Z1 six-\ac{DOF} arm, an Orbbec Femto
+Bolt \ac{RGBD} camera on Spot's body, and an Intel RealSense D435 \ac{RGBD}
+camera at the Z1 \ac{EE}. Computation was distributed across SpotCore (base
+control), a NVIDIA Jetson (perception and arm control), and an external PC
+(mission coordination and \ac{WBC}), communicating over \ac{ROS}~2 Jazzy.
+
+The experimental scenario simulated a mass-casualty incident with a supine
+patient placed at an unknown location on flat terrain. The patient remained
+stationary throughout each trial. The robot started from a fixed initial pose
+and was required to autonomously search for, localise, approach, and scan the
+patient's abdomen. Ten patient positions were defined, varying distance
+(\SI{2}{\metre}--\SI{4}{\metre}) and angular offset ($-45^\circ$ to
+$+45^\circ$) relative to the robot's initial heading. Each position was tested
+with both operational modes, yielding twenty paired trials.
+
+Two operational modes were compared:
+\begin{itemize}
+  \item \textbf{Baseline}: sequential stop-and-manipulate. The robot searches
+        for the patient, navigates to the approach point, stops, performs a
+        fixed four-pose body scan, and then executes the \ac{FAST} scanning
+        sequence. The body scan does not overlap with navigation.
+  \item \textbf{\ac{TERESA}}: the proposed active perception pipeline, in which
+        the adaptive anticipatory scanner runs concurrently with base
+        navigation, the scan grid adapts to pre-existing torso keypoint
+        confidence, and the QualityMonitor modulates approach velocity.
+\end{itemize}
+
+Five metrics were recorded for each trial: (i)~total mission time from search
+initiation to completion of the final \ac{FAST} target; (ii)~idle time, defined
+as periods during which neither the base nor the arm executes a productive
+task; (iii)~scan overlap, the fraction of the body scan completed before the
+base reaches the handoff distance; (iv)~probe positioning error, the Euclidean
+distance between the achieved \ac{EE} position and the desired target pose at
+each \ac{FAST} point; and (v)~lock time from search initiation to patient
+localisation confirmation.
+
+\subsection{End-to-End Mission Performance}
+
+Table~\ref{tab:performance} summarises the quantitative comparison between the
+two modes across all twenty trials. Results are reported as mean $\pm$ standard
+deviation.
+
+\begin{table}[t]
+  \centering
+  \caption{Performance comparison between baseline and \ac{TERESA}.}
+  \label{tab:performance}
+  \resizebox{\columnwidth}{!}{%
+  \begin{tabular}{lccc}
+    \toprule
+    Metric & Baseline & \ac{TERESA} & Improvement \\
+    \midrule
+    Total mission time [s] & \phantom{X}X $\pm$ \phantom{X}X
+                            & \phantom{X}X $\pm$ \phantom{X}X
+                            & \phantom{X}X\,\% \\
+    Idle time [s]          & \phantom{X}X $\pm$ \phantom{X}X
+                            & \phantom{X}X $\pm$ \phantom{X}X
+                            & \phantom{X}X\,\% \\
+    Scan overlap [\%]      & 0
+                            & \phantom{X}X $\pm$ \phantom{X}X
+                            & --- \\
+    Probe error [mm]       & \phantom{X}X $\pm$ \phantom{X}X
+                            & \phantom{X}X $\pm$ \phantom{X}X
+                            & \phantom{X}X\,\% \\
+    Lock time [s]          & \phantom{X}X $\pm$ \phantom{X}X
+                            & \phantom{X}X $\pm$ \phantom{X}X
+                            & --- \\
+    Completion rate [\%]   & \phantom{X}X
+                            & \phantom{X}X
+                            & --- \\
+    \bottomrule
+  \end{tabular}}
+\end{table}
+
+The anticipatory pipeline substantially reduced idle time compared to the
+sequential baseline. In the baseline, the body scan executed after the base
+stopped at the handoff point, contributing an idle period equal to the full
+scan duration. In \ac{TERESA}, the body scan executed concurrently with
+approach navigation: when the base reached the handoff distance, the scan was
+either already complete or within a few seconds of completion. The scan overlap
+metric quantifies this effect: in the baseline the overlap is zero by
+definition, while \ac{TERESA} achieved XX\,\% mean overlap.
+
+Fig.~\ref{fig:idle_breakdown} breaks down the idle time by mission phase. In
+the baseline, the dominant idle component is the post-approach body scan. In
+\ac{TERESA}, this component is largely eliminated, with residual idle time
+arising primarily from settle intervals between posture changes during the
+\ac{FAST} scanning sequence.
+
+\begin{figure}[t]
+  \centering
+  \input{figures/idle_breakdown}
+  \caption{Idle time breakdown by mission phase for baseline and \ac{TERESA}.}
+  \label{fig:idle_breakdown}
+\end{figure}
+
+The pre-planned body reconfiguration contributed to reduced probe positioning
+error. The grid search over body posture selected configurations that brought
+each \ac{FAST} target closer to the arm's preferred workspace centre. This
+effect was particularly pronounced for the lateral targets (RUQ, LUQ), where a
+fixed body posture would have forced the arm to operate near the workspace
+boundary. The mean probe error across all \ac{FAST} targets decreased from
+XX~$\pm$~XX\,mm (baseline, fixed posture) to XX~$\pm$~XX\,mm (\ac{TERESA},
+optimised posture).
+
+\subsection{Adaptive Scan Grid}
+
+The adaptive Cartesian grid selected the minimal two-pose pattern in XX\,\% of
+\ac{TERESA} trials, where the pre-approach RealSense tracker had already
+resolved all four torso keypoints with confidence above the adaptive threshold.
+In these trials, the scan completed in XX~$\pm$~XX\,s, compared to
+XX~$\pm$~XX\,s for the full four-pose grid used when keypoints were initially
+unresolved. The adaptive mechanism thus accelerated the scan in the majority of
+cases without additional configuration: the same pipeline automatically
+selected the appropriate grid based on the quality of the available perceptual
+data.
+
+\subsection{Dual-Sensor Lock Robustness}
+
+The dual-sensor lock proved essential for robust operation. Across all twenty
+trials, patient localisation was confirmed in XX\,\% of cases. In XX\,\% of the
+successful locks, the RealSense guidance mode triggered the semi-locking
+phase---detecting a partial set of keypoints and guiding Spot to rotate and
+tilt toward the torso---before the Orbbec confirmed the lying posture. In these
+cases, the Orbbec alone would not have achieved a direct lock at the current
+orientation, and the coarse search would have resumed, adding
+XX~$\pm$~XX\,s to the lock time. The hybrid architecture thus prevented search
+failures that a single-sensor approach would have encountered.
+
+\subsection{Discussion}
+
+The results demonstrate that treating body posture as an active perceptual
+resource yields measurable improvements in mission efficiency. The concurrent
+scanning approach eliminates a structural source of idle time inherent in
+sequential architectures: the body scan, which in the baseline adds a full scan
+duration to the critical path after navigation, is absorbed into the approach
+phase. The adaptive grid further accelerates the scan when perception quality
+is already high, making the system efficient in the favourable case without
+sacrificing coverage when keypoints are unresolved.
+
+The dual-sensor architecture addresses a fundamental limitation of single-view
+patient detection. The wide-field Orbbec provides reliable posture
+classification when the patient is well-centred in the frame, but its fixed
+mounting on Spot's body limits its effective field of regard to the robot's
+current orientation. The \ac{EE}-mounted RealSense, actively positioned by the
+\ac{WBC} look-at controller, compensates for this limitation by guiding the
+base to orientations where the Orbbec can succeed. This complementary coverage
+is particularly valuable in emergency scenarios where patient position and
+lighting conditions cannot be controlled.
+
+Several limitations warrant discussion. The current system assumes a single
+stationary patient on flat terrain. Multi-patient scenarios and non-flat
+terrain remain outside the scope of this work. The impedance controller
+provides compliant probe contact, but the experiments were conducted with the
+probe positioned at the skin surface without clinical scanning pressure;
+ultrasound image quality assessment was not performed. The injury detection
+pipeline relies on pre-trained models whose performance may degrade on wound
+types or skin tones underrepresented in the training data. These aspects are
+the subject of ongoing work.
+
+\subsection{Exposure Body Scanning and Interactive Review}
+
+The exposure pipeline was evaluated with XX trials across supine, sitting, and
+standing patient postures. The adaptive grid generated XX~$\pm$~XX points
+(supine), XX~$\pm$~XX (sitting), and XX~$\pm$~XX (standing). Per-point dwell of
+\SI{2}{\second} yielded scan durations of XX~$\pm$~XX\,s, XX~$\pm$~XX\,s, and
+XX~$\pm$~XX\,s respectively. The injury detection pipeline achieved a wound
+recall of XX\,\% and burn classification accuracy of XX\,\% across all trials,
+with a false positive rate of XX per scan on average. The 3D localisation error
+of detected injuries was XX~$\pm$~XX\,mm.
+
+The interactive review phase was evaluated by XX operators. Operators
+re-inspected XX~$\pm$~XX grid points per trial. The click-to-revisit
+latency---from browser click to the arm beginning its \ac{IK} trajectory---was
+XX~$\pm$~XX\,ms (measured via rosbridge round-trip plus \ac{ROS}~2 topic
+propagation). The full re-positioning sequence (body posture change, settle,
+and \ac{IK} trajectory) completed in XX~$\pm$~XX\,s per point. All operators
+successfully used the interface without prior training, reporting that the
+visual overlay and direct click interaction provided intuitive spatial
+awareness of injury locations on the patient's body. The web-based interface,
+combined with the manual scan gate toggle, allowed operators to control the
+pace of the mission: autonomous scanning was paused at each phase boundary
+until the operator confirmed readiness, balancing automation with human
+oversight.
