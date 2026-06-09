@@ -27,7 +27,10 @@ decoupling~\cite{gilbertson2015}, impedance control on curved
 surfaces~\cite{dyck2022}, force-guided scanning for soft
 tissue~\cite{ning2021}, active-sensing end-effectors~\cite{ma2022}, and
 autonomous protocol execution~\cite{suligoj2021,duan2022,farsoni2025autonomous}.
-Despite this progress, all deployed systems share a fundamental limitation: the
+Building on assistive robotics, Gu and Demiris~\cite{gu2024vttb} proposed
+visuo-tactile learning for robot-assisted bed bathing, and Farsoni et
+al.~\cite{farsoni2024saras} developed a multi-layer motion planner for
+autonomous surgical robots. Despite this progress, all deployed systems share a fundamental limitation: the
 patient must be pre-positioned within the arm's reachable workspace, confining
 autonomous ultrasound to controlled clinical settings.
 
@@ -41,7 +44,11 @@ classifiers\footnote{Available at
 \url{https://github.com/Michael-OvO/Skin-Burn-Detection-Classification}} grade
 burn severity across three degrees. These models have demonstrated effective
 classification on clinical datasets but have not been deployed on mobile
-robotic platforms.
+robotic platforms. Casado and Demiris~\cite{casado2022federated}
+pioneered federated learning from demonstration for assistive wheelchairs, and
+Casado et al.~\cite{casado2024diffusion} proposed diffusion-based intention
+estimation for shared wheelchair control, demonstrating that assistive
+robotics can benefit from distributed, privacy-preserving learning.
 
 Legged platforms such as the Boston Dynamics Spot remove the workspace
 constraint---they can traverse stairs, rubble, and confined spaces inaccessible
@@ -71,8 +78,10 @@ operate on wheeled bases whose body posture is fixed. Posture optimisation via
 reachability~\cite{makhal2018,zhao2025}, base placement~\cite{fan2021},
 body-ground contact~\cite{wolfslag2020}, and legged manipulation
 surveys~\cite{gong2023} treat perception as input rather than an optimisation
-objective. No existing system closes the loop between body posture and
-perceptual quality on a legged platform for medical tasks.
+objective. Gandhi et al.~\cite{gandhi2025shared} demonstrated shared control
+for mobile bimanual manipulation on a robotic wheelchair, bridging assistive
+robotics and mobile manipulation. No existing system closes the loop between
+body posture and perceptual quality on a legged platform for medical tasks.
 
 We advocate a paradigm in which body posture on a legged platform is treated as
 a first-class perceptual resource: the robot actively adapts its height, pitch,
