@@ -234,8 +234,9 @@ class WBCQPControllerNode(Node):
     def _cb_wbc_state(self, msg: String) -> None:
         prev = self._wbc_state
         self._wbc_state = msg.data
-        self.get_logger().info(
-            f'📡 /wbc/state = "{msg.data}" (prev="{prev}", mode={self._mode})')
+        if msg.data != prev:
+            self.get_logger().info(
+                f'📡 /wbc/state = "{msg.data}" (prev="{prev}", mode={self._mode})')
 
         if msg.data == 'SEARCHING':
             if prev != 'SEARCHING':

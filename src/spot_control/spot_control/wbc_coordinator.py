@@ -837,6 +837,23 @@ class WBCCoordinatorNode(Node):
     def _tick_locking(self) -> None:
         """Braccio va in home (QP), coordinator raccoglie campioni in parallelo.
         Tollera fino a 10 tick (1s a 10 Hz) di assenza Orbbec prima di arrendersi."""
+
+        # ── NLF trigger + timeout (runs regardless of LYING status) ──
+        if self._nlf_trigger_pending:
+            elapsed = (self.get_clock().now() - self._nlf_trigger_time).nanoseconds * 1e-9
+            if elapsed >= 3.0:
+                msg = Bool()
+                msg.data = True
+                self._pub_nlf_trigger.publish(msg)
+                self._nlf_trigger_time = self.get_clock().now()
+                self._nlf_trigger_pending = False
+                self.get_logger().info('NLF trigger sent (after 3s delay)')
+        if self._nlf_prior is None and self._nlf_trigger_time is not None:
+            elapsed = (self.get_clock().now() - self._nlf_trigger_time).nanoseconds * 1e-9
+            if elapsed > 30.0:
+                self.get_logger().warn('NLF timeout (30s) — proceeding without prior')
+                self._nlf_prior = 'timeout'
+
         if self._posture == 'LYING' \
                 and self._confidence >= self._search_lock_confidence \
                 and self._approach_point_odom is not None:
@@ -887,24 +904,6 @@ class WBCCoordinatorNode(Node):
             self._lock_lost_ticks = 0
             self._search_position_start = None  # riprendi dalla posizione corrente
             self._set_state(CoordState.SEARCHING)
-
-        # Send pending NLF trigger after 3s delay (model loading time)
-        if self._nlf_trigger_pending:
-            elapsed = (self.get_clock().now() - self._nlf_trigger_time).nanoseconds * 1e-9
-            if elapsed >= 3.0:
-                msg = Bool()
-                msg.data = True
-                self._pub_nlf_trigger.publish(msg)
-                self._nlf_trigger_time = self.get_clock().now()
-                self._nlf_trigger_pending = False
-                self.get_logger().info('NLF trigger sent (after 3s delay)')
-
-        # NLF prior timeout check (non-blocking — gates transition via _nlf_prior == 'timeout')
-        if self._nlf_prior is None and self._nlf_trigger_time is not None:
-            elapsed = (self.get_clock().now() - self._nlf_trigger_time).nanoseconds * 1e-9
-            if elapsed > 30.0:
-                self.get_logger().warn('NLF timeout (30s) — proceeding without prior')
-                self._nlf_prior = 'timeout'
 
     def _check_realsense_guidance(self) -> bool:
         """Ruota e inclina Spot verso il corpo rilevato dalla RealSense.
