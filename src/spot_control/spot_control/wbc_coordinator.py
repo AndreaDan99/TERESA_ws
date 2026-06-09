@@ -475,6 +475,8 @@ class WBCCoordinatorNode(Node):
 
     def _cb_ik_done(self, msg: Bool) -> None:
         with self._lock:
+            if msg.data and not self._ik_done:
+                self.get_logger().info('✅ ik_done received — arm home reached')
             self._ik_done = msg.data
 
     def _cb_z1_state(self, msg: String) -> None:
@@ -867,11 +869,6 @@ class WBCCoordinatorNode(Node):
                     self.get_logger().info(
                         '🔒 LOCKING: waiting for arm home (ik_done) ...',
                         throttle_duration_sec=2.0)
-                    # Timeout after 10s — proceed without ik_done
-                    if self._lock_ik_ticks >= 100:
-                        self.get_logger().warn(
-                            '🔒 LOCKING: ik_done timeout (10s) — proceeding anyway')
-                        self._ik_done = True
                 elif not self._nlf_prior_valid() and self._nlf_prior != 'timeout':
                     self._lock_nlf_ticks += 1
                     self.get_logger().info(
