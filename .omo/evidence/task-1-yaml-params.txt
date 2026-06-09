@@ -1,0 +1,12 @@
+TASK 1 QA — Scenario: YAML parameters are valid and loadable
+===============================================================
+RESULT: PASS
+
+Step 1: nlf_params.yaml — VALID (dict)
+Step 2: wbc_params.yaml — VALID (dict)
+Step 3: grep burst_min_detections → found: "burst_min_detections: 2"
+Step 4: grep burst_timeout_s → found: "burst_timeout_s: 30.0"
+Step 5: grep nlf_timeout: 30.0 → found: "nlf_timeout: 30.0"
+Additional: burst_throttle_frames: 10 confirmed
+
+All 3 new params + 1 updated param verified.

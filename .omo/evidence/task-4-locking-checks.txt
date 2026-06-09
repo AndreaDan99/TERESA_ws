@@ -1,0 +1,25 @@
+TASK 4 QA — wbc_coordinator.py LOCKING checks
+=============================================================
+RESULT: ALL 7 CHECKS PASS
+
+1. _nlf_prior_valid() or self._nlf_prior == 'timeout' in LOCKING transition:
+   Line 845: and (self._nlf_prior_valid() or self._nlf_prior == 'timeout'):
+   → PASS
+
+2. Timeout is 30.0 (not 10.0):
+   Line 882: if elapsed > 30.0:
+   No "10.0" found in NLF timeout context → PASS
+
+3. Bool(False) publish on timeout REMOVED:
+   Zero occurrences of "Bool(False)" in entire file → PASS
+   Timeout only sets self._nlf_prior = 'timeout' + log warning (line 883-884)
+
+4. _pub_nlf_trigger publisher still exists for Bool(True):
+   - Created at line 374: self._pub_nlf_trigger = self.create_publisher(Bool, '/nlf/trigger', 10)
+   - Used 2x for publishing Bool(True) (lines 874, 1323)
+   → PASS
+
+Note: nlf_timeout is hardcoded as 30.0 (not read from wbc_params.yaml parameter).
+      This matches the plan's acceptance criterion: "nlf_timeout uses 30 seconds".
+
+Scenarios [7/7 pass] | VERDICT: PASS
