@@ -855,6 +855,28 @@ class WBCCoordinatorNode(Node):
                     f'{nlf_status} → PRE_APPROACH')
                 self._pre_approach_start = self.get_clock().now()
                 self._set_state(CoordState.PRE_APPROACH)
+            else:
+                # ── Debug: log what's blocking the LOCKING → PRE_APPROACH transition ──
+                n = len(self._search_lock_buffer) if self._search_lock_buffer else 0
+                if n < self._search_lock_samples:
+                    self.get_logger().info(
+                        f'🔒 LOCKING: samples {n}/{self._search_lock_samples}',
+                        throttle_duration_sec=3.0)
+                elif not self._ik_done:
+                    self._lock_ik_ticks += 1
+                    self.get_logger().info(
+                        '🔒 LOCKING: waiting for arm home (ik_done) ...',
+                        throttle_duration_sec=2.0)
+                    # Timeout after 10s — proceed without ik_done
+                    if self._lock_ik_ticks >= 100:
+                        self.get_logger().warn(
+                            '🔒 LOCKING: ik_done timeout (10s) — proceeding anyway')
+                        self._ik_done = True
+                elif not self._nlf_prior_valid() and self._nlf_prior != 'timeout':
+                    self._lock_nlf_ticks += 1
+                    self.get_logger().info(
+                        '🔒 LOCKING: waiting for NLF prior ...',
+                        throttle_duration_sec=3.0)
             return
 
         # Orbbec persa — tolleranza prima di arrendersi
@@ -1899,6 +1921,8 @@ class WBCCoordinatorNode(Node):
             if self._refine_best_pitch > 0.0:
                 self._set_body_pose(self._search_body_height, self._refine_best_pitch)
             self._ik_done = False
+            self._lock_ik_ticks = 0
+            self._lock_nlf_ticks = 0
             self._set_wbc_enabled(True)
             # Trigger NLF prior if no valid prior already cached (debounce)
             if not self._nlf_prior_valid():
