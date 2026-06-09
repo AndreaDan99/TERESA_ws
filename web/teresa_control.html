@@ -61,6 +61,18 @@ body{
 #log-area::-webkit-scrollbar{width:6px}#log-area::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 #start-indicator{font-size:11px;color:var(--text-dim)}
 
+/* status grid */
+#status-grid{display:flex;gap:8px;width:100%;max-width:560px;justify-content:center}
+.status-card{flex:1;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:10px;display:flex;flex-direction:column;align-items:center;gap:3px}
+.status-dot{width:8px;height:8px;border-radius:50%;background:#555;transition:background .3s}
+.status-dot.green{background:var(--accent);box-shadow:0 0 6px var(--accent)}
+.status-dot.yellow{background:var(--warning);box-shadow:0 0 6px var(--warning)}
+.status-dot.red{background:var(--danger);box-shadow:0 0 6px var(--danger)}
+.status-dot.blue{background:#4488ff;box-shadow:0 0 6px #4488ff}
+.status-dot.gray{background:#555}
+.status-name{color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;font-size:9px}
+.status-text{color:var(--text);font-weight:600;text-align:center;white-space:nowrap}
+
 /* joystick panel */
 #joystick-panel{
   flex:0 0 320px;display:flex;flex-direction:column;gap:14px;
@@ -250,6 +262,28 @@ body{
     <div id="log-panel">
       <div id="state-big">---</div>
       <div id="state-detail">Connecting to rosbridge...</div>
+      <div id="status-grid">
+        <div class="status-card" id="card-ik">
+          <span class="status-dot" id="dot-ik"></span>
+          <span class="status-name">IK</span>
+          <span class="status-text" id="txt-ik">---</span>
+        </div>
+        <div class="status-card" id="card-orbbec">
+          <span class="status-dot" id="dot-orbbec"></span>
+          <span class="status-name">Orbbec</span>
+          <span class="status-text" id="txt-orbbec">---</span>
+        </div>
+        <div class="status-card" id="card-realsense">
+          <span class="status-dot" id="dot-realsense"></span>
+          <span class="status-name">RealSense</span>
+          <span class="status-text" id="txt-realsense">---</span>
+        </div>
+        <div class="status-card" id="card-qp">
+          <span class="status-dot" id="dot-qp"></span>
+          <span class="status-name">QP</span>
+          <span class="status-text" id="txt-qp">---</span>
+        </div>
+      </div>
       <div id="log-area"><div class="entry" style="color:var(--text-dim)">---</div></div>
     </div>
     <div id="joystick-panel">
@@ -435,6 +469,7 @@ class TeresaController{
     // ui
     this.logLines=[];this.maxLog=60;
     this._navTimer=null;
+    this._lastIkDone=null;this._lastPosture='';this._lastTracker='';this._lastQpMode='';this._lastConfidence=0;
     // joystick
     this.joystickMode='drive';this.joystickSpeed=0.5;this.joystickActive=false;this.joystickEnabled=true;
     this._joystickHeight=0.10;this._joystickPitch=0;
@@ -510,6 +545,19 @@ class TeresaController{
     d.textContent='['+t+'] '+msg;const a=$('log-area');a.appendChild(d);this.logLines.push(d);
     while(this.logLines.length>this.maxLog){const o=this.logLines.shift();o.remove();}
     a.scrollTop=a.scrollHeight;
+  }
+
+  _updateStatusCard(cardId,dotColor,text){
+    const dot=$('dot-'+cardId),txt=$('txt-'+cardId);
+    if(dot){dot.className='status-dot '+(dotColor||'gray');}
+    if(txt){txt.textContent=text||'---';}
+  }
+  _updateStatusOrbbec(){
+    const p=this.posture,c=this.confidence;
+    if(!p||p==='---'){this._updateStatusCard('orbbec','gray','---');return;}
+    const confPct=(c*100).toFixed(0);
+    const color=p==='LYING'?'green':'yellow';
+    this._updateStatusCard('orbbec',color,p+' '+confPct+'%');
   }
 
   /* ── ROS connection ───────────────────────── */
@@ -602,6 +650,46 @@ class TeresaController{
     /* /wbc/tf_status — detailed diagnostics from tf_monitor */
     this.tfStatusSub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/tf_status',messageType:'std_msgs/String'});
     this.tfStatusSub.subscribe(msg=>{$('tf-status').textContent=msg.data;});
+
+    /* status grid subscribers (always active) */
+    this.ikDoneSub=new ROSLIB.Topic({ros:this.ros,name:'/ik_done',messageType:'std_msgs/Bool'});
+    this.ikDoneSub.subscribe(msg=>{
+      const v=msg.data;
+      if(v!==this._lastIkDone){this._lastIkDone=v;if(v)this.log('✅ IK arrived at pose','info');}
+      this._updateStatusCard('ik',v?'green':'yellow',v?'ARRIVED':'MOVING');
+    });
+
+    this.qpModeSub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/qp_mode',messageType:'std_msgs/String'});
+    this.qpModeSub.subscribe(msg=>{
+      const v=msg.data;
+      if(v!==this._lastQpMode){this._lastQpMode=v;this.log('⚙️ QP: '+v,'info');}
+      let c='gray';if(v==='LOOKAT')c='green';else if(v==='ACTIVE_SEARCH')c='yellow';else if(v==='PERCEPTUAL_SCAN')c='blue';
+      this._updateStatusCard('qp',c,v);
+    });
+
+    this.statusPostureSub=new ROSLIB.Topic({ros:this.ros,name:'/human_pose/posture',messageType:'std_msgs/String'});
+    this.statusPostureSub.subscribe(msg=>{
+      const v=msg.data;
+      if(v!==this._lastPosture){this._lastPosture=v;this.log('👤 Orbbec: '+v+' @ '+(this._lastConfidence*100).toFixed(0)+'%','info');}
+      this.posture=v;
+      this._updateStatusOrbbec();
+    });
+
+    this.statusConfSub=new ROSLIB.Topic({ros:this.ros,name:'/human_pose/posture_confidence',messageType:'std_msgs/Float32'});
+    this.statusConfSub.subscribe(msg=>{
+      this._lastConfidence=msg.data;
+      this.confidence=msg.data;
+      this._updateStatusOrbbec();
+    });
+
+    this.statusTrackerSub=new ROSLIB.Topic({ros:this.ros,name:'/torso_tracker_state',messageType:'std_msgs/String'});
+    this.statusTrackerSub.subscribe(msg=>{
+      const v=msg.data;
+      this.trackerState=v;
+      if(v!==this._lastTracker){this._lastTracker=v;this.log('📷 RealSense: '+v,'info');}
+      let c='gray';if(v==='LOCKED')c='green';else if(v==='ESTIMATING'||v==='GUIDING')c='yellow';
+      this._updateStatusCard('realsense',c,v);
+    });
 
     this._topicsReady = true;
     this.enableAlways();

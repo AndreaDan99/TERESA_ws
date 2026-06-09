@@ -202,6 +202,8 @@ class WBCQPControllerNode(Node):
         self._pub_tracker_scan = self.create_publisher(Bool, '/tracker_scan_mode', 10)
         self._pub_tracker_reset = self.create_publisher(Bool, '/tracker_reset',    10)
         self._pub_grid_type     = self.create_publisher(String, '/wbc/scan_grid_type', 10)
+        self._pub_qp_mode      = self.create_publisher(String, '/wbc/qp_mode',       10)
+        self._pub_qp_mode.publish(String(data='IDLE'))
 
         # ── Timer ─────────────────────────────────────────────────────────
         self.create_timer(self._update_period, self._update)
@@ -521,6 +523,7 @@ class WBCQPControllerNode(Node):
             return
 
         self._mode = 'ACTIVE_SEARCH'
+        self._pub_qp_mode.publish(String(data='ACTIVE_SEARCH'))
         self._scan_ik_done = False
         self._scan_data_queue.clear()
         self._scan_scanner = BodySearchScanner(
@@ -559,6 +562,7 @@ class WBCQPControllerNode(Node):
 
     def _end_search(self, re_enable: bool = False) -> None:
         self._mode = 'LOOKAT'
+        self._pub_qp_mode.publish(String(data='LOOKAT'))
         self._pub_tracker_scan.publish(Bool(data=False))
         self._scan_scanner = None
         self._scan_data_queue.clear()
@@ -649,6 +653,7 @@ class WBCQPControllerNode(Node):
             return
 
         self._mode = 'PERCEPTUAL_SCAN'
+        self._pub_qp_mode.publish(String(data='PERCEPTUAL_SCAN'))
         self._scan_ik_done = False
         self._scan_data_queue.clear()
         self._scan_poses = poses
@@ -700,6 +705,7 @@ class WBCQPControllerNode(Node):
 
     def _end_scan(self) -> None:
         self._mode = 'LOOKAT'
+        self._pub_qp_mode.publish(String(data='IDLE'))
         self._pub_tracker_scan.publish(Bool(data=False))
         self._pub_en.publish(Bool(data=False))
         if self._scan_scanner is not None:
