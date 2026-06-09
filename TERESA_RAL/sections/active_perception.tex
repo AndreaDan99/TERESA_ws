@@ -58,7 +58,7 @@ from both cameras. When the Orbbec detects a lying posture with high
 confidence, the robot enters a locking state: the arm returns to an elevated
 home pose, and the coordinator collects a sequence of approach point estimates
 in the world-fixed odometry frame $\mathcal{F}_W$, computing their mean as the
-navigation target. The transition to the approach phase is gated by both the
+navigation target. Concurrently, the NLF pipeline produces a refined 3D skeleton estimate by accumulating two valid detections with exponential moving average smoothing, providing higher-fidelity anatomical data for the subsequent approach phase. The transition to the approach phase is gated by both the
 arm's home trajectory and the collection of the required number of samples. If
 the Orbbec detection is temporarily lost, the system tolerates a brief absence
 before resuming the search from the current orientation.
@@ -173,7 +173,7 @@ shoulder and hip keypoints. For sitting or standing patients, a frontal grid
 combines bilinear torso sampling with polyline-based sampling along the arms
 and legs. The number of grid points ranges from 15 (supine) to 49 (standing,
 full body). At each point the arm positions the camera at a standoff distance
-with a look-at orientation toward the body surface.
+with a look-at orientation toward the body surface. When the NLF prior is available, all 24 joints are populated, enabling a denser grid without relying on estimated keypoint positions.
 
 \subsubsection{Injury detection}
 
