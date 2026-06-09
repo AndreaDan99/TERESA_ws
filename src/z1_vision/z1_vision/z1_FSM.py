@@ -330,15 +330,15 @@ class Z1FSM(Node):
         self._wrist_align_start: float | None        = None
         self._homing_last_send:  float               = 0.0   # timestamp ultimo invio enable+goal in HOMING
 
-        # ── Start timer then wait for WBC before HOMING ─────────────────
+        # ── Start timer then go to HOMING, then wait for WBC ────────────
         self.timer = self.create_timer(0.05, self.tick)   # 20 Hz
         self._homing_next_state = self.WAITING
-        self.set_state(self.WAITING)  # wait for WBC, don't move yet
+        self.set_state(self.HOMING)
         # NOTA: NON pubblicare ik_enable=False qui — il nodo IK parte già disabilitato
         # e pubblicare False in __init__ può arrivare DOPO ik_enable=True del primo tick
         # causando un race condition che impedisce l'homing.
 
-        self.get_logger().info("🧠 z1_FSM ready → waiting for WBC coordinator")
+        self.get_logger().info("🧠 z1_FSM ready → HOMING, poi attesa WBC")
         self.get_logger().info(f"  torso_locked:      {self.torso_locked_topic}")
         self.get_logger().info(f"  ik_goal:           {self.ik_goal_topic}")
         self.get_logger().info(f"  ik_enable:         {self.ik_enable_topic}")
