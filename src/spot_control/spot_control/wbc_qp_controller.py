@@ -88,7 +88,7 @@ class WBCQPControllerNode(Node):
         self.declare_parameter('q_dot_max',     0.6)
         self.declare_parameter('cartesian_step',      0.12)
         self.declare_parameter('cartesian_step_wide', 0.20)
-        self.declare_parameter('search_timeout_per_point', 2.0)
+        self.declare_parameter('search_timeout_per_point', 1.2)
         self.declare_parameter('scan_timeout_per_point',   3.0)
         self.declare_parameter('scan_adaptive_iters',      3)
         self.declare_parameter('kp_confidence_ok',         0.4)
@@ -232,13 +232,15 @@ class WBCQPControllerNode(Node):
     def _cb_wbc_state(self, msg: String) -> None:
         prev = self._wbc_state
         self._wbc_state = msg.data
+        self.get_logger().info(
+            f'📡 /wbc/state = "{msg.data}" (prev="{prev}", mode={self._mode})')
 
         if msg.data == 'SEARCHING':
             if prev != 'SEARCHING':
                 self._start_active_search()
         elif msg.data == 'SEMI_LOCKING' and self._mode == 'ACTIVE_SEARCH':
             self._end_search(re_enable=True)
-        elif msg.data == 'LOCKING':
+        elif msg.data == 'LOCKING' and prev != 'LOCKING':
             self._end_search()
             self._send_home()
         elif msg.data == 'APPROACHING' and prev != 'APPROACHING':
@@ -481,9 +483,10 @@ class WBCQPControllerNode(Node):
 
         poses = []
 
-        # ── Forward poses (X_ee points forward, toward patient) ──
+        # ── Forward poses (X_ee points forward+down, toward patient) ──
         forward_x = 0.12
-        forward_look = np.array([1.0, 0.0, 0.0])
+        tilt = np.radians(10.0)  # 10° downward tilt
+        forward_look = np.array([np.cos(tilt), 0.0, -np.sin(tilt)])
         for y_sign, label in [(-1.0, 'L'), (0.0, 'C'), (1.0, 'R')]:
             pos = np.array([forward_x, y_sign * 0.20, 0.53])
             clipped, was_clipped, _ = self._ws_checker.clip_target(pos)
@@ -493,9 +496,9 @@ class WBCQPControllerNode(Node):
                 self.get_logger().warn(
                     f'Forward {label} clipped: {pos} → {clipped}')
 
-        # ── Look-behind poses (X_ee points backward) ──
+        # ── Look-behind poses (X_ee points backward+down) ──
         behind_x = -0.15
-        behind_look = np.array([-1.0, 0.0, 0.0])
+        behind_look = np.array([-np.cos(tilt), 0.0, -np.sin(tilt)])
         for y_sign, label in [(-1.0, 'L'), (0.0, 'C'), (1.0, 'R')]:
             pos = np.array([behind_x, y_sign * 0.20, 0.53])
             clipped, was_clipped, _ = self._ws_checker.clip_target(pos)
