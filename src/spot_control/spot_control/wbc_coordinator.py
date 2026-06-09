@@ -217,6 +217,7 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('step_mode',                   False)  # gate automatic FSM transitions
         self.declare_parameter('nlf_coherence_threshold',     0.15)  # [m] YOLO−NLF delta for HIGH coherence
         self.declare_parameter('nlf_divergence_threshold',    0.30)  # [m] YOLO−NLF delta for MEDIUM coherence
+        self.declare_parameter('nlf_excellent_confidence',    0.80)  # [0-1] NLF mean bbox_score for EXCELLENT tier
 
         p = lambda n: self.get_parameter(n).value
         self._handoff_dist    = float(p('handoff_distance'))
@@ -250,6 +251,7 @@ class WBCCoordinatorNode(Node):
         self._search_lock_confidence = float(p('search_lock_confidence'))
         self._search_lock_samples   = int(p('search_lock_samples'))
         self._search_refine_trigger_orb_conf = float(p('search_refine_trigger_orb_conf'))
+        self._nlf_excellent_conf = float(p('nlf_excellent_confidence'))
         self._pre_approach_duration = float(p('pre_approach_duration'))
         self._body_settle_time      = float(p('body_settle_time'))
         self._step_mode          = bool(p('step_mode'))
@@ -343,6 +345,7 @@ class WBCCoordinatorNode(Node):
         self._nlf_trigger_time = None         # rclpy.time.Time or None
         self._nlf_trigger_pending: bool = False  # True = trigger queued, waiting for 3s delay
         self._nlf_low_ticks = 0              # consecutive LOW-coherence ticks
+        self._nlf_confidence = 0.0           # mean bbox_score from NLF burst
 
         # Exposure body pose optimization (same grid search as FAST)
         self._exposure_grid_points: list | None = None  # list of np.ndarray in world frame
@@ -368,6 +371,7 @@ class WBCCoordinatorNode(Node):
         self.create_subscription(Bool,           '/wbc/set_manual_scan_gate', self._cb_manual_gate, 10)
         self.create_subscription(PoseArray,      '/exposure/grid_points',     self._cb_exposure_grid_points, 10)
         self.create_subscription(PoseArray,      '/exposure/nlf_prior',       self._cb_nlf_prior,         10)
+        self.create_subscription(Float32,        '/exposure/nlf_confidence',  self._cb_nlf_confidence,    10)
         self.create_subscription(PoseArray,      '/human_pose/points_3d',     self._cb_skeleton_stream,   10)
 
         self._pub_goal     = self.create_publisher(PoseStamped, p('wbc_goal_topic'),        10)
@@ -1323,6 +1327,9 @@ class WBCCoordinatorNode(Node):
         self._pub_nlf_trigger.publish(msg)
         self.get_logger().info('NLF streaming paused after prior capture')
 
+    def _cb_nlf_confidence(self, msg: Float32) -> None:
+        self._nlf_confidence = float(msg.data)
+
     def _cb_skeleton_stream(self, msg: PoseArray) -> None:
         pass  # stub: future Quality Monitor integration
 
@@ -1409,13 +1416,19 @@ class WBCCoordinatorNode(Node):
             p = self._quality.get_position()
             # ── NLF prior blending ──────────────────────────────
             if self._nlf_prior_valid():
-                quality_label, delta = self._check_nlf_delta(p)
-                nlf_center = self._torso_center_from_prior()
-                if quality_label == 'HIGH':
-                    p = 0.7 * nlf_center + 0.3 * p
-                elif quality_label == 'MEDIUM':
-                    p = 0.5 * nlf_center + 0.5 * p
-                # LOW → keep p as-is (YOLO/Orbbec 100%)
+                # EXCELLENT tier: NLF confidence ≥ threshold → 100% NLF, skip delta blending
+                if self._nlf_confidence >= self._nlf_excellent_conf:
+                    nlf_center = self._torso_center_from_prior()
+                    p = nlf_center.copy()
+                    self._nlf_low_ticks = 0
+                else:
+                    quality_label, delta = self._check_nlf_delta(p)
+                    nlf_center = self._torso_center_from_prior()
+                    if quality_label == 'HIGH':
+                        p = 0.7 * nlf_center + 0.3 * p
+                    elif quality_label == 'MEDIUM':
+                        p = 0.5 * nlf_center + 0.5 * p
+                    # LOW → keep p as-is (YOLO/Orbbec 100%)
 
                 if quality_label == 'LOW':
                     self._nlf_low_ticks += 1

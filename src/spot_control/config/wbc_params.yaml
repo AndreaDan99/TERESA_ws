@@ -147,5 +147,6 @@ wbc_coordinator:
     nlf_timeout: 30.0
     nlf_coherence_threshold: 0.15
     nlf_divergence_threshold: 0.30
+    nlf_excellent_confidence: 0.80
     nlf_prior_topic: '/exposure/nlf_prior'
     nlf_trigger_topic: '/nlf/trigger'

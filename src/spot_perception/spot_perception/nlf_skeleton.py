@@ -21,7 +21,7 @@ from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import PoseArray, Pose, Point
 from visualization_msgs.msg import Marker, MarkerArray
 from cv_bridge import CvBridge
-from std_msgs.msg import Bool, Header
+from std_msgs.msg import Bool, Float32, Header
 
 from spot_perception.sml_pose_indices import (
     PELVIS, HIP_LEFT, HIP_RIGHT,
@@ -107,6 +107,8 @@ class NLFSkeletonNode(Node):
         self._burst_detection_count = 0
         self._burst_start_time = None
         self._latest_raw_torso = None  # stores raw torso joints for 1-detection fallback
+        self._burst_conf_sum = 0.0     # sum of bbox_scores for confidence averaging
+        self._burst_conf_count = 0     # number of bbox_scores accumulated
 
         # ── Parameters (from nlf_params.yaml) ─────────────────────────────────
         self.declare_parameter("model_path",        "nlf_s_multi.torchscript")
@@ -165,6 +167,8 @@ class NLFSkeletonNode(Node):
                 PoseArray, self._mesh_topic, 10)
         self.pub_nlf_prior = self.create_publisher(
             PoseArray, '/exposure/nlf_prior', 10)
+        self.pub_nlf_confidence = self.create_publisher(
+            Float32, '/exposure/nlf_confidence', 10)
 
         # ── EMA smoothing state ────────────────────────────────────────────────
         self._smoothed_kp: dict = {}   # keyed by NLF box ID → list of 24 numpy arrays
@@ -250,6 +254,8 @@ class NLFSkeletonNode(Node):
         self._burst_start_time = time.time()
         self._smoothed_kp = {}
         self._latest_raw_torso = None
+        self._burst_conf_sum = 0.0
+        self._burst_conf_count = 0
         self.get_logger().info('NLF burst started (target: 2 detections, timeout: 30s)')
 
     def _finish_burst(self):
@@ -296,6 +302,12 @@ class NLFSkeletonNode(Node):
             )
 
         self.pub_nlf_prior.publish(pa)
+
+        # Publish mean bbox confidence
+        conf_msg = Float32()
+        conf_msg.data = self._burst_conf_sum / max(self._burst_conf_count, 1)
+        self.pub_nlf_confidence.publish(conf_msg)
+        self.get_logger().info(f'NLF burst confidence: {conf_msg.data:.3f}')
 
     # ── NLF inference ──────────────────────────────────────────────────────────
 
@@ -428,6 +440,7 @@ class NLFSkeletonNode(Node):
                 "id": pid,
                 "pts_3d": smoothed,
                 "vertices3d": det.get("vertices3d"),
+                "bbox_score": det.get("bbox_score", 1.0),
             })
 
         # Cleanup stale smoothed entries (people who left the frame)
@@ -477,6 +490,10 @@ class NLFSkeletonNode(Node):
                 )
                 if torso_valid:
                     self._burst_detection_count += 1
+                    # Accumulate bbox_score for confidence averaging
+                    bbox_score = target.get("bbox_score", 1.0)
+                    self._burst_conf_sum += bbox_score
+                    self._burst_conf_count += 1
                     # Store raw torso for 1-detection fallback
                     self._latest_raw_torso = [pts[j].copy() for j in range(NUM_JOINTS)]
                     self.get_logger().info(
