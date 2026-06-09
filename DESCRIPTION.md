@@ -20,7 +20,7 @@ Due pipeline coesistono:
 Two perception backends are available, selectable via the `perception_backend` launch parameter:
 
 - **`yolo` (default since 8 June 2026)**: YOLO11n-pose — 2D keypoints + depth back-projection + Kalman filtering. 24 joints published (17 COCO mapped + 7 NaN for SMPL-only joints). Runs at ~40 FPS, used during SEARCHING.
-- **`nlf`**: NLF (Neural Localizer Fields) — direct 3D SMPL joints from RGB, no depth back-projection needed. 24 joints published. Runs at ~2.5 FPS. Starts in paused mode (`_streaming_paused = True`), triggered at LOCKING with 3s delay for model loading. Publishes to `/exposure/nlf_prior` (separate topic, no conflict with YOLO).
+- **`nlf`**: NLF (Neural Localizer Fields) — direct 3D SMPL joints from RGB, no depth back-projection needed. 24 joints published. Runs at ~2.5 FPS. Starts in paused mode (`_streaming_paused = True`). Triggered at LOCKING con burst multi-frame (2 detection valide, EMA smoothing, timeout 30s). Pubblica prior raffinato su `/exposure/nlf_prior` e confidence su `/exposure/nlf_confidence`.
 
 Switch at launch:
 ```bash
@@ -130,6 +130,7 @@ HOMING → WAITING (aspetta segnale WBC + FAST points pre-calcolati dal QP)
 - **WBC QP Controller — LOOKAT mode**: calcola ω_des (errore orientamento X_ee → target), risolve il task con damped pseudo-inverse sul Jacobiano angolare J_task (3×6), applica joint centering nel null-space (N @ k_null * (q_mid - q_current)), integra q_dot in FK prediction, pubblica il goal di posa all'IK solver. Loop a 10 Hz.
 - Coordinator conta 3 tick consecutivi di `ESTIMATING` o `LOCKED` da RealSense. **Timeout 5s** → APPROACHING comunque (fallback con warning).
 - `ESTIMATING/LOCKED ×3 → APPROACHING`
+- **NLF confidence gate**: se la confidence NLF post-burst è ≥ 0.80 (pubblicata su `/exposure/nlf_confidence`), il blend LOOKAT usa **100% NLF** (skip del delta check posizionale). Sotto 0.80, blend standard NLF(70%)+YOLO(30%) per HIGH coherence, YOLO 100% per LOW coherence.
 
 ---
 
@@ -313,9 +314,9 @@ I target FSM sono in world frame — quando Spot cambia body_pose, il target si 
 
 | Fase | Spot | Braccio | WBC/QP |
 |------|:----:|:-------:|:------:|
-| **SEARCHING** | 6 yaw coarse (cmd_vel) + refinement pitch | 3 pose Cartesiane in loop (ACTIVE_SEARCH) | Coarse rotation + refinement |
+| **SEARCHING** | ±30° yaw timed open-loop + step forward 20cm | 7 pose hardcoded da FK reader in loop | Rotation + arm poses |
 | **SEMI_LOCKING** | Ruotato+inclinato verso torso | LOOKAT attivo subito (re_enable=True) | Arm LOOKAT |
-| **LOCKING** | Fermo | Va in home Z=0.60 | Off → home |
+| **LOCKING** | Fermo, al miglior pitch del refinement. Attende NLF burst (2 detection o 30s timeout). | Prima posa di search. Resta fermo. | Off → search pose. NLF burst pubblica prior raffinato. |
 | **PRE_APPROACH** | Dritto, fermo | LOOKAT verso body_center (ω_des + joint centering) | Arm-only WBC |
 | **APPROACHING** | Navigatore → goal (timeout 60s) | PERCEPTUAL_SCAN (2-4 pose adattive + advance X) | Cartesian grid adattiva |
 | **SCANNING** | Body pose (h,p) + WS_EXT (h,p,dx,dy), timeout 120s | z1_FSM: FAST cycle 5 punti, body_ready safe skip | Off |
@@ -331,7 +332,7 @@ I target FSM sono in world frame — quando Spot cambia body_pose, il target si 
 | `wbc_coordinator` | FSM (11 stati). PRE_APPROACH: LOOKAT verso body_center con Z offset +0.40m fallback, sliding window (≥1 ESTIMATING/LOCKED su 5 tick). |
 | `exposure_scanner` | Full-body exposure scan: 14-pose grid su 7 regioni, look-at dinamico, standoff orizzontale 0.50m, TF Orbbec→world, running-average scheletro raffinato su `/exposure/refined_skeleton`, JSON output. |
 | `exposure_snapshot` | Snapshot RealSense su click in EXPOSURE_REVIEW. Trigger `/exposure/goto_point` + `/ik_done`, delay 1s, pubblica `/exposure/snapshot`, salva JPEG su disco. |
-| `wbc_qp_controller` | **Arm-only WBC, 3 modalità**: ACTIVE_SEARCH (3 pose Cartesiane), LOOKAT (ω_des + joint centering), PERCEPTUAL_SCAN (griglia adattiva 2-4 pose). |
+| `wbc_qp_controller` | **Arm-only WBC, 3 modalità**: ACTIVE_SEARCH (7 pose hardcoded da FK reader), LOOKAT (ω_des + joint centering), PERCEPTUAL_SCAN (griglia adattiva 2-4 pose). |
 | `wbc_spot_navigator` | Navigatore semplificato per APPROACHING e WS_EXT. |
 
 ### Coordinator FSM
@@ -361,7 +362,7 @@ HOMING → WAITING → BODY_SCANNING → CHECKING_WORKSPACE ──────�
 
 ### WBC QP modes (SEARCHING → PRE_APPROACH → APPROACHING)
 
-Durante **SEARCHING** il QP opera in **ACTIVE_SEARCH mode**: 3 pose Cartesiane wide attorno alla home (HOME/LEFT/RIGHT, sweep Y ±0.28m, X +0.20m, Z=0.42m, tilt fisso -15°). Il braccio esplora lo spazio senza un target reale, compensando la rotazione lenta di Spot. Spot ruota in coarse via cmd_vel; il refinement (sweep pitch) avviene a livello body_pose nel coordinator.
+Durante **SEARCHING** il QP opera in **ACTIVE_SEARCH mode**: 7 pose hardcoded (3 forward + 4 look-behind, catturate via FK reader), eseguite in loop mentre Spot ruota ±30° yaw. Il braccio esplora lo spazio senza un target reale, compensando la rotazione di Spot. Spot ruota via cmd_vel a tempo (open-loop, no TF); il refinement (sweep pitch) avviene a livello body_pose nel coordinator.
 
 Durante **PRE_APPROACH** il QP opera in **LOOKAT mode**: calcola l'errore di orientamento tra X_ee e target (`ω_des = kp_ang * angle * axis`), risolve con damped pseudo-inverse su J_task (3×6), proietta joint centering nel null-space (`N @ k_null * (q_mid - q)`), integra in FK prediction, pubblica il goal all'IK solver. Loop a 10 Hz.
 
@@ -371,12 +372,12 @@ Spot è sempre controllato dal navigatore (APPROACHING) o dal coordinator (body 
 
 #### SEMI_LOCKING e LOCKING (gestione QP)
 - **SEMI_LOCKING**: il QP va in pausa — il braccio si blocca nella posa corrente. Triggerato da RealSense `ESTIMATING` o `LOCKED`. L'Orbbec ha 3s di finestra pulita.
-- **LOCKING**: il WBC viene spento immediatamente, poi riattivato per mandare il braccio in home. Il coordinator raccoglie 5 campioni in parallelo.
+- **LOCKING**: il WBC viene spento immediatamente, poi riattivato per mandare il braccio alla prima posa di search. Spot applica il best pitch dal refinement per la miglior visuale Orbbec. NLF esegue un burst multi-frame (2 detection valide con EMA, timeout 30s). Il coordinator raccoglie 5 campioni in parallelo. La transizione a PRE_APPROACH è bloccante: richiede (5 campioni + ik_done + NLF valido o timeout).
 - Se RealSense perde il segnale durante SEMI_LOCKING, o se Orbbec perde LYING per >1s durante LOCKING: si riprende la ricerca dalla posizione corrente.
 ```
 SEARCHING:
-  QP Controller (ACTIVE_SEARCH) → 3 pose Cartesiane wide, loop infinito
-  Coordinator → coarse rotation cmd_vel (6 yaw) + refinement pitch trigger-based
+  QP Controller (ACTIVE_SEARCH) → 7 pose hardcoded da FK reader, loop
+  Coordinator → ±30° yaw timed rotation (open-loop) + step forward 20cm
 
 SEMI_LOCKING:
   QP Controller → PAUSA (braccio congelato)

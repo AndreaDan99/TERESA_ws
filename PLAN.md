@@ -2,6 +2,28 @@
 
 ---
 
+## ✅ NLF Burst Streaming + Confidence Gate — IMPLEMENTED (9 June 2026)
+
+### Fatto
+- ✅ NLF trigger: one-shot → burst multi-frame con EMA (2 detection valide, timeout 30s)
+- ✅ EXCELLENT confidence tier: ≥ 0.80 → 100% NLF
+- ✅ LOCKING bloccante: attende NLF prima di PRE_APPROACH
+- ✅ Best pitch applicato su tutti i path di ingresso LOCKING
+- ✅ Launch fix: nlf_skeleton_node solo con perception_backend:=nlf
+- ✅ Publish suppression su /human_pose/points_3d durante burst
+- ✅ `/exposure/nlf_confidence` topic per confidence NLF
+
+### File modificati
+| File | +/− |
+|------|-----|
+| `nlf_skeleton.py` | +117/−34 |
+| `wbc_coordinator.py` | +11/−11 |
+| `nlf_params.yaml` | +3 |
+| `wbc_params.yaml` | +2/−1 |
+| `spot_perception.launch.py` | +2/−1 |
+
+---
+
 ## ✅ Exposure Body Scanning — IMPLEMENTED (5 June 2026)
 
 L'exposure body scanning è stato implementato con differenze rispetto al piano originale:
@@ -627,9 +649,9 @@ Analisi fase-per-fase del FSM con fix mirati. Ogni fase viene analizzata, i prob
 
 | Fase | Stato | Problemi risolti |
 |------|:-----:|------------------|
-| **SEARCHING** | ✅ | Coarse+refinement search, 6 yaw×1 pitch, 5s dwell (2 Giugno) |
+| **SEARCHING** | ✅ | Timed ±30° open-loop rotation, 7 pose FK reader, step 20cm (8 Giugno) |
 | **SEMI_LOCKING** | ✅ | Pitch flush, GUIDING conf≥0.5 + ≥2 kp, `_end_search(re_enable=True)` |
-| **LOCKING** | ✅ | `ik_done` gate prima di PRE_APPROACH, home_lock_z=0.60 |
+| **LOCKING** | ✅ | `ik_done` gate, home_lock_z=0.60 → sostituita da prima posa search (8 Giugno). NLF burst multi-frame + blocco PRE_APPROACH (9 Giugno) |
 | **PRE_APPROACH** | ✅ | LOOKAT → `/laying_human/body_center`, soglia ESTIMATING/LOCKED ×3 |
 | **APPROACHING** | ✅ | Griglia adattiva 2/4 pose + advance X=0.10, `_do_set_state` pulizia, timeout 60s |
 | **SCANNING** | ✅ | Global timeout 120s, parametrizzazione `max_workspace_reach`/`ws_ext_goal_tolerance`, body_ready safe skip |
@@ -651,7 +673,7 @@ Sezioni riscritte per riflettere l'implementazione corrente: abstract (no numeri
 |-----------|---------|------|
 | `body_center_topic` | `/laying_human/body_center` | PRE_APPROACH |
 | `ik_done_topic` | `/ik_done` | PRE_APPROACH |
-| `home_lock_z` | 0.60 | LOCKING |
+| `home_lock_z` | 0.60 → sostituito da prima posa search (8 Giugno) | LOCKING |
 | `cartesian_x_advance` | 0.10 | APPROACHING |
 | `pre_scan_conf_thr` | 0.6 | APPROACHING |
 | `approach_timeout` | 60.0 | APPROACHING |

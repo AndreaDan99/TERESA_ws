@@ -5,6 +5,32 @@ Per la descrizione del sistema corrente vedi [`DESCRIPTION.md`](DESCRIPTION.md).
 
 ---
 
+## 9 June 2026 — NLF Burst Streaming + Confidence Gate + LOCKING Blocking
+
+### Overview
+- **NLF Burst Streaming**: NLF trigger redesigned from one-shot to multi-frame burst with EMA accumulation. Collects 2 valid detections (lying person + 4 torso joints non-NaN), publishes refined skeleton to `/exposure/nlf_prior`, auto-pauses. Timeout: 30s.
+- **EXCELLENT Confidence Tier**: after burst, publishes mean bbox_score on `/exposure/nlf_confidence`. If NLF confidence ≥ 0.80 → 100% NLF blending (skip positional delta check). Otherwise existing HIGH/MEDIUM/LOW tiers unchanged.
+- **LOCKING Blocking**: coordinator waits for NLF prior (or timeout) before transitioning to PRE_APPROACH. Condition: 5 samples + ik_done + (NLF valid or timeout).
+- **Best Pitch on LOCKING**: refinement best pitch saved during SEARCHING is now applied on ALL LOCKING entry paths (direct lock, semi-lock), not just refinement lock. Ensures Orbbec has optimal camera angle during NLF burst.
+- **Launch Fix**: `nlf_skeleton_node` now has `IfCondition` — only launches with `perception_backend:=nlf`.
+- **Publish Suppression**: `/human_pose/points_3d` suppressed during active NLF burst to avoid YOLO conflict.
+
+### Modified files
+| File | +/− | Changes |
+|------|-----|---------|
+| `nlf_skeleton.py` | +117/−34 | Burst state machine: `_burst_active`, `_finish_burst()` (3 fallback branches), `_cb_trigger` redesign, EMA accumulation, publish suppression, `/exposure/nlf_confidence` publisher |
+| `wbc_coordinator.py` | +11/−11 | LOCKING blocking gate, timeout 10→30s, removed `Bool(False)` publish on timeout, `_cb_nlf_confidence`, EXCELLENT tier in `_filtered_goal()`, best pitch on LOCKING entry |
+| `nlf_params.yaml` | +3 | `burst_min_detections`, `burst_timeout_s`, `burst_throttle_frames` |
+| `wbc_params.yaml` | +2/−1 | `nlf_timeout` 10→30s, `nlf_excellent_confidence: 0.80` |
+| `spot_perception.launch.py` | +2/−1 | `condition=IfCondition` on `nlf_skeleton_node` |
+
+### New topics
+| Topic | Type | Publisher | Subscriber | Purpose |
+|-------|------|-----------|------------|---------|
+| `/exposure/nlf_confidence` | Float32 | nlf_skeleton | wbc_coordinator | Mean NLF bbox_score after burst |
+
+---
+
 ## 8 June 2026 — Web Joystick, Timed Search, YOLO Default
 
 ### Overview

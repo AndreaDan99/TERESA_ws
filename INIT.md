@@ -25,39 +25,27 @@ git status --short
 
 ---
 
-## Current State (8 June 2026)
+## Current State (9 June 2026)
 
-### Web Joystick Control Panel
-- Two-panel layout: left log terminal, right joystick D-pad (↑↓←→)
-- Drive mode: arrow buttons for cmd_vel (forward/back/strafe)
-- Body mode: ↑↓ for height (±5cm), ←→ for pitch (±5°)
-- Speed +/- buttons (0.1 to 1.0 m/s)
-- Height slider (0-20cm, 5cm steps) and pitch slider (0°-15°, 5° steps)
-- 🏠 HOME and 🔌 PARK buttons for arm presets
-- STOP now also disables IK (stops arm)
-- Joystick auto-disabled during autonomous WBC mission
+### NLF Burst Streaming
+- NLF trigger redesigned from one-shot to multi-frame burst
+- Collects 2 valid detections (lying + torso non-NaN), EMA accumulation, timeout 30s
+- Publishes refined prior on `/exposure/nlf_prior` and confidence on `/exposure/nlf_confidence`
+- LOCKING blocks until NLF burst completes (or times out)
+- EXCELLENT confidence tier: if NLF bbox_score ≥ 0.80 → 100% NLF blending
 
 ### SEARCHING — Timed Open-Loop 7-Pose Search
 - 7 hardcoded manual poses (3 forward + 4 look-behind from FK reader)
-- Spot: ±30° yaw rotation (timed open-loop, no TF needed)
-- Sequential: rotate → wait for 7 arm poses → rotate other way → HOME → step 20cm forward → repeat
-- Rotation speed: 0.2 rad/s (gentle). Each 30° step = ~2.6s
-- Arm speed: max_joint_vel 0.4 rad/s
-- Dwell replaced by ik_done count (wait for all 7 poses, not timer)
-- `_search_ik_done_count` tracks per-position completions
+- Refinement best pitch saved and applied on ALL LOCKING entry paths
 
-### Perception Pipeline — YOLO Default, NLF Idle
-- Default perception_backend changed from `nlf` to `yolo` (40 FPS vs 2.5 FPS)
-- YOLO on both cameras during SEARCHING
-- NLF skeleton always runs but starts in paused mode (`_streaming_paused = True`)
-- NLF triggered at LOCKING with 3s delay for model loading
-- NLF publishes to `/exposure/nlf_prior` (different topic, no conflict with YOLO)
-- Both YOLO and NLF can coexist without conflicts
+### Launch Fix
+- `nlf_skeleton_node` only launches with `perception_backend:=nlf`
+- With `perception_backend:=yolo` (default): NLF not started at all
 
 ### Other Fixes
-- Removed dead `/torso_sm_state` subscription from both trackers
-- Fixed missing closing brace in `camera_view.html` drawRealSenseOverlay
-- LOCKING home now uses search pose 1 instead of raised Z position
+- Publish suppression: `/human_pose/points_3d` blocked during active NLF burst
+- Coordinator no longer publishes `Bool(False)` on NLF timeout (NLF self-manages)
+- `nlf_timeout` extended from 10s to 30s
 
 ---
 
