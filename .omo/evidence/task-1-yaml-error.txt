@@ -1,9 +1,0 @@
-TASK 1 QA — Scenario: Invalid YAML is rejected
-===============================================================
-RESULT: PASS
-
-Step 1: Appended "invalid: : yaml" to nlf_params.yaml
-Step 2: yaml.safe_load() → yaml.scanner.ScannerError (EXIT CODE: 1)
-Step 3: git checkout restored original file successfully
-
-YAMLError correctly raised on malformed YAML.

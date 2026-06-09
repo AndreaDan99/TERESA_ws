@@ -51,6 +51,7 @@ cmake_install.cmake
 
 src/my_spot_controller/config/my_spot.yaml
 .claude/
+.omo/
 .texpadtmp/
 paper/
 TERESA_RAL/
