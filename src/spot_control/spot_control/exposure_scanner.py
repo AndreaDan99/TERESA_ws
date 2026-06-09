@@ -6,9 +6,10 @@ Moves the Z1 arm with the RealSense camera over a grid of points
 on the patient's body, coordinating with the WBC coordinator for
 Spot body posture changes via the same per-point protocol as FAST.
 
-Regions (22+ points total):
+Regions (23 points total with NLF, fewer with YOLO fallback):
   HEAD (3) → TORSO (6) → LEFT_ARM (3) → RIGHT_ARM (3) →
   LEFT_LEG (3) → RIGHT_LEG (3) → FEET (2)
+Uses NLF prior (24 SMPL EMA-refined) when available, YOLO fallback otherwise.
 
 Protocol:
   exposure_scanner          wbc_coordinator
@@ -145,6 +146,7 @@ class ExposureScanner(Node):
         self._tf_listener = TransformListener(self._tf_buffer, self)
 
         self._keypoints: dict[int, np.ndarray | None] = {}
+        self._nlf_keypoints: dict[int, np.ndarray | None] = {}
         self._scan_data: dict[int, list] = {}
         self._scan_buffer: list = []
         self._refined_kp: dict[int, np.ndarray] = {}
@@ -164,6 +166,9 @@ class ExposureScanner(Node):
         )
         self._sub_skeleton = self.create_subscription(
             PoseArray, '/human_pose/points_3d', self._cb_skeleton, 10
+        )
+        self._sub_nlf_prior = self.create_subscription(
+            PoseArray, '/exposure/nlf_prior', self._cb_nlf_prior, 10
         )
         self._sub_scan = self.create_subscription(
             Float32MultiArray, '/torso_scan_point', self._cb_scan_point, 10
@@ -251,6 +256,37 @@ class ExposureScanner(Node):
             except TransformException:
                 self._keypoints[i] = None
 
+    def _cb_nlf_prior(self, msg: PoseArray):
+        """Store NLF prior skeleton (24 SMPL joints) for grid generation.
+        Transforms from orbbec_color_optical_frame to world frame."""
+        if len(msg.poses) < NUM_JOINTS:
+            return
+        frame_id = msg.header.frame_id or 'orbbec_color_optical_frame'
+        self._nlf_keypoints = {}
+        for i, pose in enumerate(msg.poses):
+            p = pose.position
+            if np.isnan(p.x) or np.isnan(p.y) or np.isnan(p.z):
+                self._nlf_keypoints[i] = None
+                continue
+            pt = PointStamped()
+            pt.header.frame_id = frame_id
+            pt.header.stamp = msg.header.stamp
+            pt.point.x = p.x
+            pt.point.y = p.y
+            pt.point.z = p.z
+            try:
+                transform = self._tf_buffer.lookup_transform(
+                    'world', frame_id, rclpy.time.Time(),
+                    timeout=rclpy.duration.Duration(seconds=0.1))
+                world_pt = do_transform_point(pt, transform)
+                self._nlf_keypoints[i] = np.array([
+                    world_pt.point.x, world_pt.point.y, world_pt.point.z])
+            except TransformException:
+                self._nlf_keypoints[i] = None
+        if self._nlf_keypoints:
+            valid = sum(1 for v in self._nlf_keypoints.values() if v is not None)
+            self.get_logger().info(f'NLF prior received: {valid}/{NUM_JOINTS} valid joints for exposure grid')
+
     def _cb_scan_point(self, msg: Float32MultiArray):
         if self._active and self._phase == 'dwell':
             self._scan_buffer.append(list(msg.data))
@@ -298,7 +334,13 @@ class ExposureScanner(Node):
     # ── grid generation ──────────────────────────────────────────
 
     def _gen_exposure_grid(self) -> list[ExposurePoint]:
-        kp = self._keypoints
+        # Prefer NLF prior (24 SMPL, EMA-refined) over YOLO (17 COCO → 24 with NaN)
+        if self._nlf_keypoints:
+            kp = self._nlf_keypoints
+            self.get_logger().info('Using NLF prior for exposure grid generation')
+        else:
+            kp = self._keypoints
+            self.get_logger().info('Using YOLO keypoints for exposure grid (NLF prior not available)')
         z_off = np.array([-self._standoff, 0.0, 0.0])
         points = []
 
