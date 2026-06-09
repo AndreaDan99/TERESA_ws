@@ -473,25 +473,38 @@ class WBCQPControllerNode(Node):
     # ── ACTIVE_SEARCH mode (SEARCHING) ───────────────────────────────────
 
     def _gen_cartesian_search_grid(self) -> list[PoseStamped]:
+        """6 symmetric poses: 3 forward + 3 look-behind.
+        Orientation computed by compute_ee_orientation() — lets IK find
+        natural arm configuration instead of forcing FK-reader quaternions.
         """
-        7 hardcoded manual poses: position + quaternion.
-        No tilt computation, no HOME_POS offset.
-        """
-        SEARCH_POSES = [
-            ([0.144, -0.005,  0.530], [0.0182,  0.1521, -0.0217, 0.9880]),   # 1
-            ([0.067, -0.070,  0.540], [0.0906,  0.1890, -0.3976, 0.8932]),   # 2
-            ([0.057,  0.079,  0.538], [-0.0888, 0.1933,  0.4310, 0.8769]),   # 3
-            ([-0.1001, -0.2671, 0.4404], [-0.1740, -0.1059, 0.9485, -0.2428]),  # 4 look-behind
-            ([-0.2196, -0.1382, 0.5284], [-0.1314, 0.0163, 0.9893, 0.0608]),    # 5
-            ([-0.1477,  0.1043, 0.5047], [-0.1151, 0.1665, 0.9711, 0.1263]),    # 6
-            ([-0.0487,  0.0746, 0.3784], [-0.1336, 0.2679, 0.8804, 0.3678]),    # 7
-        ]
+        home_ori = self._home_orientation.tolist()
 
         poses = []
-        for pos, quat in SEARCH_POSES:
-            pos_arr = np.array(pos)
-            clipped, _, _ = self._ws_checker.clip_target(pos_arr)
+
+        # ── Forward poses (X_ee points forward, toward patient) ──
+        forward_x = 0.12
+        forward_look = np.array([1.0, 0.0, 0.0])
+        for y_sign, label in [(-1.0, 'L'), (0.0, 'C'), (1.0, 'R')]:
+            pos = np.array([forward_x, y_sign * 0.20, 0.53])
+            clipped, was_clipped, _ = self._ws_checker.clip_target(pos)
+            quat = compute_ee_orientation(forward_look, home_ori)
             poses.append(_make_pose_stamped(clipped, quat))
+            if was_clipped:
+                self.get_logger().warn(
+                    f'Forward {label} clipped: {pos} → {clipped}')
+
+        # ── Look-behind poses (X_ee points backward) ──
+        behind_x = -0.15
+        behind_look = np.array([-1.0, 0.0, 0.0])
+        for y_sign, label in [(-1.0, 'L'), (0.0, 'C'), (1.0, 'R')]:
+            pos = np.array([behind_x, y_sign * 0.20, 0.53])
+            clipped, was_clipped, _ = self._ws_checker.clip_target(pos)
+            quat = compute_ee_orientation(behind_look, home_ori)
+            poses.append(_make_pose_stamped(clipped, quat))
+            if was_clipped:
+                self.get_logger().warn(
+                    f'Behind {label} clipped: {pos} → {clipped}')
+
         return poses
 
     def _start_active_search(self) -> None:
@@ -517,8 +530,8 @@ class WBCQPControllerNode(Node):
         )
         self._scan_scanner.reset()
         self.get_logger().info(
-            f'ACTIVE_SEARCH: {len(poses)} wide poses '
-            f'(HOME [0.50m], LEFT/RIGHT [±0.28m Y, +0.20m X, Z=0.42m], tilt -15°)')
+            f'ACTIVE_SEARCH: {len(poses)} symmetric poses '
+            f'(3 forward X=+0.12 Y=±0.20 + 3 behind X=-0.15 Y=±0.20, Z=0.53)')
 
     def _tick_active_search(self) -> None:
         if self._scan_scanner is None:
