@@ -144,7 +144,7 @@ wbc_coordinator:
     wbc_enable_topic:         '/wbc/enable'
 
     # ── NLF prior parameters ─────────────────────────────────────────────────
-    nlf_timeout: 10.0
+    nlf_timeout: 30.0
     nlf_coherence_threshold: 0.15
     nlf_divergence_threshold: 0.30
     nlf_prior_topic: '/exposure/nlf_prior'

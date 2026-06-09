@@ -138,7 +138,8 @@ def generate_launch_description():
         executable='nlf_skeleton',
         name='nlf_skeleton',
         output='screen',
-        parameters=[nlf_params_file]
+        parameters=[nlf_params_file],
+        condition=IfCondition(PythonExpression(['"', perception_backend, '" == "nlf"']))
     )
 
     # ============================================================

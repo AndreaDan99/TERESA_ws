@@ -11,3 +11,6 @@ nlf_skeleton:
     mesh_decimation: 4
     num_joints: 24
     process_every_n_frames: 1
+    burst_min_detections: 2
+    burst_timeout_s: 30.0
+    burst_throttle_frames: 10

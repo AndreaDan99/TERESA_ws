@@ -841,11 +841,14 @@ class WBCCoordinatorNode(Node):
             if len(self._search_lock_buffer) < self._search_lock_samples:
                 self._search_lock_buffer.append(z)
             if len(self._search_lock_buffer) >= self._search_lock_samples \
-                    and self._ik_done:
+                    and self._ik_done \
+                    and (self._nlf_prior_valid() or self._nlf_prior == 'timeout'):
                 target = np.mean(self._search_lock_buffer, axis=0)
                 self._quality.set_target(target, self._search_lock_confidence)
+                nlf_status = 'NLF prior valid' if self._nlf_prior_valid() else 'NLF timeout'
                 self.get_logger().info(
-                    f'Locking complete: {self._search_lock_samples} samples → PRE_APPROACH')
+                    f'Locking complete: {self._search_lock_samples} samples, '
+                    f'{nlf_status} → PRE_APPROACH')
                 self._pre_approach_start = self.get_clock().now()
                 self._set_state(CoordState.PRE_APPROACH)
             return
@@ -873,18 +876,12 @@ class WBCCoordinatorNode(Node):
                 self._nlf_trigger_pending = False
                 self.get_logger().info('NLF trigger sent (after 3s delay)')
 
-        # NLF prior timeout check (non-blocking — does not gate transition)
+        # NLF prior timeout check (non-blocking — gates transition via _nlf_prior == 'timeout')
         if self._nlf_prior is None and self._nlf_trigger_time is not None:
             elapsed = (self.get_clock().now() - self._nlf_trigger_time).nanoseconds * 1e-9
-            if elapsed > 10.0:
-                self.get_logger().warn('NLF timeout (10s) — proceeding without prior')
+            if elapsed > 30.0:
+                self.get_logger().warn('NLF timeout (30s) — proceeding without prior')
                 self._nlf_prior = 'timeout'
-
-                # Pause NLF streaming on timeout (no point keeping it running)
-                msg = Bool()
-                msg.data = False
-                self._pub_nlf_trigger.publish(msg)
-                self.get_logger().info('NLF streaming paused after timeout')
 
     def _check_realsense_guidance(self) -> bool:
         """Ruota e inclina Spot verso il corpo rilevato dalla RealSense.

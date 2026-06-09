@@ -8,6 +8,8 @@ Simplified: EMA smoothing replaces Kalman3D tracking — NLF gives accurate 3D j
 so complex multi-joint Kalman adds unnecessary complexity, latency, and drift.
 """
 
+import time
+
 import numpy as np
 
 import torch
@@ -100,6 +102,12 @@ class NLFSkeletonNode(Node):
         self._last_color_msg = None
         self._streaming_paused = True
 
+        # ── Burst streaming state ────────────────────────────────────────────
+        self._burst_active = False
+        self._burst_detection_count = 0
+        self._burst_start_time = None
+        self._latest_raw_torso = None  # stores raw torso joints for 1-detection fallback
+
         # ── Parameters (from nlf_params.yaml) ─────────────────────────────────
         self.declare_parameter("model_path",        "nlf_s_multi.torchscript")
         self.declare_parameter("model_url",         "https://github.com/isarandi/nlf/releases/download/v0.2.0/nlf_s_multi_multi.torchscript")
@@ -114,8 +122,14 @@ class NLFSkeletonNode(Node):
         self.declare_parameter("lying_torso_angle_min", 65.0)
         self.declare_parameter("target_hysteresis_frames", 10)
         self.declare_parameter("process_every_n_frames", 5)
+        self.declare_parameter("burst_min_detections", 2)
+        self.declare_parameter("burst_timeout_s", 30.0)
+        self.declare_parameter("burst_throttle_frames", 10)
 
         self._process_every = int(self.get_parameter("process_every_n_frames").value)
+        self._burst_min_detections = int(self.get_parameter("burst_min_detections").value)
+        self._burst_timeout_s = float(self.get_parameter("burst_timeout_s").value)
+        self._burst_throttle_frames = int(self.get_parameter("burst_throttle_frames").value)
         self._frame_count = 0
 
         self._model_path     = str(self.get_parameter("model_path").value)
@@ -208,12 +222,19 @@ class NLFSkeletonNode(Node):
     # ── Trigger callback (one-shot NLF prior on /nlf/trigger) ───────────────────
 
     def _cb_trigger(self, msg):
-        """One-shot: run NLF inference on last color frame, publish 24 joints
-        to /exposure/nlf_prior. Does not affect continuous /human_pose/points_3d.
-        Bool(False) pauses continuous streaming; Bool(True) triggers prior."""
+        """Burst trigger: Bool(True) starts burst streaming with EMA accumulation.
+        Bool(False) pauses streaming (ignored during active burst)."""
         if not msg.data:
+            if self._burst_active:
+                self.get_logger().warn('Bool(False) ignored during active burst')
+                return
             self._streaming_paused = True
             self.get_logger().info('NLF streaming paused')
+            return
+
+        # Bool(True) — start burst
+        if self._burst_active:
+            self.get_logger().warn('NLF burst already active — ignoring duplicate trigger')
             return
         if not self._nlf_ready:
             self.get_logger().warn('NLF trigger received but model not ready')
@@ -222,46 +243,59 @@ class NLFSkeletonNode(Node):
             self.get_logger().warn('NLF trigger received but no image available')
             return
 
-        img = self.bridge.imgmsg_to_cv2(self._last_color_msg, "rgb8")
-        detections = self._run_nlf_inference(img)
+        # Activate burst
+        self._streaming_paused = False
+        self._burst_active = True
+        self._burst_detection_count = 0
+        self._burst_start_time = time.time()
+        self._smoothed_kp = {}
+        self._latest_raw_torso = None
+        self.get_logger().info('NLF burst started (target: 2 detections, timeout: 30s)')
 
-        # Find target: closest lying person (same logic as streaming pipeline)
-        lying = []
-        for det in detections:
-            joints = det['joints3d']
-            sh_l = joints[SHOULDER_LEFT]
-            sh_r = joints[SHOULDER_RIGHT]
-            hi_l = joints[HIP_LEFT]
-            hi_r = joints[HIP_RIGHT]
-            if all(x is not None and not np.isnan(x[0])
-                   for x in [sh_l, sh_r, hi_l, hi_r]):
-                sh_mid = (sh_l + sh_r) / 2.0
-                hi_mid = (hi_l + hi_r) / 2.0
-                torso_vec = sh_mid - hi_mid
-                angle = _angle_between(torso_vec, _UP)
-                if angle > self._lying_angle_min:
-                    depth = float(sh_mid[2])
-                    lying.append((depth, det))
-
-        target_det = lying[0][1] if lying else (
-            detections[0] if detections else None)
+    def _finish_burst(self):
+        """Complete the burst: publish refined/raw/empty prior and auto-pause."""
+        self._streaming_paused = True
+        self._burst_active = False
+        elapsed = time.time() - self._burst_start_time if self._burst_start_time else 0
 
         pa = PoseArray()
         pa.header.frame_id = "orbbec_color_optical_frame"
-        pa.header.stamp = self._last_color_msg.header.stamp
+        stamp = self._last_color_msg.header.stamp if self._last_color_msg else self.get_clock().now().to_msg()
+        pa.header.stamp = stamp
 
-        if target_det is not None:
+        if self._burst_detection_count >= 2:
+            # EMA-refined skeleton from smoothed_kp
+            if self._target_id is not None and self._target_id in self._smoothed_kp:
+                pts = self._smoothed_kp[self._target_id]
+                for j in range(NUM_JOINTS):
+                    pose = Pose()
+                    pose.position.x = float(pts[j][0])
+                    pose.position.y = float(pts[j][1])
+                    pose.position.z = float(pts[j][2])
+                    pose.orientation.w = 1.0
+                    pa.poses.append(pose)
+            self.get_logger().info(
+                f'NLF burst finished: {self._burst_detection_count} detections in {elapsed:.1f}s (EMA refined)'
+            )
+        elif self._burst_detection_count == 1 and self._latest_raw_torso is not None:
+            # Single raw detection (no EMA)
             for j in range(NUM_JOINTS):
                 pose = Pose()
-                pose.position.x = float(target_det['joints3d'][j][0])
-                pose.position.y = float(target_det['joints3d'][j][1])
-                pose.position.z = float(target_det['joints3d'][j][2])
+                pose.position.x = float(self._latest_raw_torso[j][0])
+                pose.position.y = float(self._latest_raw_torso[j][1])
+                pose.position.z = float(self._latest_raw_torso[j][2])
                 pose.orientation.w = 1.0
                 pa.poses.append(pose)
+            self.get_logger().info(
+                f'NLF burst finished: 1 detection in {elapsed:.1f}s (raw, no EMA)'
+            )
+        else:
+            # 0 detections — empty
+            self.get_logger().warn(
+                f'NLF burst finished: 0 detections in {elapsed:.1f}s (empty prior)'
+            )
 
         self.pub_nlf_prior.publish(pa)
-        if target_det is not None:
-            self.get_logger().info('NLF prior published: 24 joints')
 
     # ── NLF inference ──────────────────────────────────────────────────────────
 
@@ -349,15 +383,19 @@ class NLFSkeletonNode(Node):
         Inference → EMA smoothing → target selection → publish.
         Simple, direct pipeline — no Kalman filtering.
         """
-        # ── Store last frame for one-shot trigger inference ───────────────
+        # ── Store last frame for trigger inference ────────────────────────
         self._last_color_msg = msg
+        self._frame_count += 1
+
+        # ── Burst throttle: prevent executor backlog on CPU ──────────────
+        if self._burst_active and self._frame_count % self._burst_throttle_frames != 0:
+            return
 
         # ── Pause guard: skip inference when streaming is paused ──────────
         if self._streaming_paused:
             return
 
         # ── Frame-skip: only run NLF every N frames ───────────────────────
-        self._frame_count += 1
         if self._frame_count % self._process_every != 0:
             return
 
@@ -427,6 +465,38 @@ class NLFSkeletonNode(Node):
             self._hysteresis_miss += 1
             if self._hysteresis_miss > self._hysteresis_frames:
                 self._target_id = None
+
+        # ── Burst detection counting ──────────────────────────────────────────
+        if self._burst_active:
+            target = next((d for d in processed if d["id"] == self._target_id), None)
+            if target is not None:
+                pts = target["pts_3d"]
+                # Check 4 torso joints are valid (non-NaN)
+                torso_valid = all(
+                    not np.isnan(pts[j][0]) for j in [SPINE1, SPINE2, SPINE3, PELVIS]
+                )
+                if torso_valid:
+                    self._burst_detection_count += 1
+                    # Store raw torso for 1-detection fallback
+                    self._latest_raw_torso = [pts[j].copy() for j in range(NUM_JOINTS)]
+                    self.get_logger().info(
+                        f'NLF burst: detection {self._burst_detection_count}/{self._burst_min_detections}'
+                    )
+
+            # Check finish conditions
+            if self._burst_detection_count >= self._burst_min_detections:
+                self._finish_burst()
+                return  # skip normal publish for this frame
+
+            elapsed = time.time() - self._burst_start_time
+            if elapsed > self._burst_timeout_s:
+                self.get_logger().warn(f'NLF burst timeout ({elapsed:.1f}s)')
+                self._finish_burst()
+                return  # skip normal publish for this frame
+
+        # ── Suppress publish during active burst ──────────────────────────────
+        if self._burst_active:
+            return  # skip _publish_target_pose, _publish_all_markers, mesh publish
 
         # ── Publish target pose ───────────────────────────────────────────
         target = next((d for d in processed if d["id"] == self._target_id), None)
