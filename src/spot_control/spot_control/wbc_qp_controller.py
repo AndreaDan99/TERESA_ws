@@ -32,9 +32,7 @@ from std_msgs.msg import Bool, String, Float32MultiArray
 from tf2_ros import Buffer, TransformListener, TransformException
 import tf2_geometry_msgs  # noqa: F401
 
-from teresa_utils.orientation import (
-    compute_ee_orientation, compute_ee_orientation_minrot,
-)
+from teresa_utils.orientation import compute_ee_orientation_minrot
 
 from spot_control.wbc_math import damped_pinv, null_space_projector, manipulability
 from z1_vision.workspace_checker import WorkspaceChecker
@@ -456,9 +454,7 @@ class WBCQPControllerNode(Node):
         goal_msg.pose.position.y = float(clipped_pos[1])
         goal_msg.pose.position.z = float(clipped_pos[2])
 
-        quat = (compute_ee_orientation_minrot(x_desired, self._home_orientation.tolist())
-                if self._orientation_mode == 'minrot'
-                else compute_ee_orientation(x_desired, self._home_orientation.tolist()))
+        quat = compute_ee_orientation_minrot(x_desired, self._home_orientation.tolist())
         goal_msg.pose.orientation.x = float(quat[0])
         goal_msg.pose.orientation.y = float(quat[1])
         goal_msg.pose.orientation.z = float(quat[2])
@@ -476,38 +472,36 @@ class WBCQPControllerNode(Node):
     # ── ACTIVE_SEARCH mode (SEARCHING) ───────────────────────────────────
 
     def _gen_cartesian_search_grid(self) -> list[PoseStamped]:
-        """6 symmetric poses: 3 forward + 3 look-behind.
-        Orientation computed by compute_ee_orientation() — lets IK find
-        natural arm configuration instead of forcing FK-reader quaternions.
+        """6 hardcoded poses: 3 forward + 3 behind.
+
+        All poses use compute_ee_orientation_minrot() — camera looks toward +X
+        (patient direction) with 10° downward tilt. No Gram-Schmidt twisting.
         """
         home_ori = self._home_orientation.tolist()
 
+        # Look direction: +X with 10° downward tilt
+        tilt = np.radians(10.0)
+        look_dir = np.array([np.cos(tilt), 0.0, -np.sin(tilt)])
+        quat = compute_ee_orientation_minrot(look_dir, home_ori)
+
+        # 6 positions — 3 forward (old FK-reader, known good) + 3 behind (symmetric)
+        SEARCH_POSITIONS = [
+            # FORWARD — from old FK-reader poses (tested, arm doesn't twist)
+            (np.array([0.144, -0.005, 0.530]),  "FWD-C"),
+            (np.array([0.067, -0.070, 0.540]),  "FWD-L"),
+            (np.array([0.057,  0.079, 0.538]),  "FWD-R"),
+            # BEHIND — symmetric to forward, negative X
+            (np.array([-0.15, -0.20, 0.53]),   "BWD-L"),
+            (np.array([-0.15,  0.00, 0.53]),   "BWD-C"),
+            (np.array([-0.15,  0.20, 0.53]),   "BWD-R"),
+        ]
+
         poses = []
-
-        # ── Forward poses (X_ee points forward+down, toward patient) ──
-        forward_x = 0.12
-        tilt = np.radians(10.0)  # 10° downward tilt
-        forward_look = np.array([np.cos(tilt), 0.0, -np.sin(tilt)])
-        for y_sign, label in [(-1.0, 'L'), (0.0, 'C'), (1.0, 'R')]:
-            pos = np.array([forward_x, y_sign * 0.20, 0.53])
+        for pos, label in SEARCH_POSITIONS:
             clipped, was_clipped, _ = self._ws_checker.clip_target(pos)
-            quat = compute_ee_orientation(forward_look, home_ori)
             poses.append(_make_pose_stamped(clipped, quat))
             if was_clipped:
-                self.get_logger().warn(
-                    f'Forward {label} clipped: {pos} → {clipped}')
-
-        # ── Look-behind poses (X_ee points backward+down) ──
-        behind_x = -0.15
-        behind_look = np.array([-np.cos(tilt), 0.0, -np.sin(tilt)])
-        for y_sign, label in [(-1.0, 'L'), (0.0, 'C'), (1.0, 'R')]:
-            pos = np.array([behind_x, y_sign * 0.20, 0.53])
-            clipped, was_clipped, _ = self._ws_checker.clip_target(pos)
-            quat = compute_ee_orientation(behind_look, home_ori)
-            poses.append(_make_pose_stamped(clipped, quat))
-            if was_clipped:
-                self.get_logger().warn(
-                    f'Behind {label} clipped: {pos} → {clipped}')
+                self.get_logger().warn(f'{label} clipped: {pos} → {clipped}')
 
         return poses
 
@@ -535,8 +529,8 @@ class WBCQPControllerNode(Node):
         )
         self._scan_scanner.reset()
         self.get_logger().info(
-            f'ACTIVE_SEARCH: {len(poses)} symmetric poses '
-            f'(3 forward X=+0.12 Y=±0.20 + 3 behind X=-0.15 Y=±0.20, Z=0.53)')
+            f'ACTIVE_SEARCH: {len(poses)} hardcoded poses '
+            f'(3 forward + 3 behind)')
 
     def _tick_active_search(self) -> None:
         if self._scan_scanner is None:
@@ -568,16 +562,21 @@ class WBCQPControllerNode(Node):
         self._pub_en.publish(Bool(data=re_enable))
 
     def _send_home(self) -> None:
-        """Send first search pose (Forward Left) with 10° downward camera tilt."""
         if not self._enabled:
-            self.get_logger().warn('_send_home skipped: node not enabled')
+            self.get_logger().warn('_send_home: QP not enabled')
             return
+
+        tilt = np.radians(10.0)
+        look_dir = np.array([np.cos(tilt), 0.0, -np.sin(tilt)])
+        quat = compute_ee_orientation_minrot(look_dir, self._home_orientation.tolist())
+
         home_pos = np.array([0.12, -0.20, 0.53])
-        home_quat = np.array([-0.0055, 0.0872, 0.0005, 0.9962])
-        home_pose = _make_pose_stamped(home_pos, home_quat)
+        clipped, _, _ = self._ws_checker.clip_target(home_pos)
+
+        home_pose = _make_pose_stamped(clipped, quat)
         self._pub_ik.publish(home_pose)
         self._pub_en.publish(Bool(data=True))
-        self.get_logger().info('🔒 Lock pose sent (search pose 1) [0.12, -0.20, 0.53]')
+        self.get_logger().info('🔒 Lock pose sent (search pose 1: FWD-L)')
 
     # ── PERCEPTUAL_SCAN mode (APPROACHING) ───────────────────────────────
 
