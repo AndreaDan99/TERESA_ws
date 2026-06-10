@@ -18,9 +18,9 @@ git status --short
 
 | Document | Contents |
 |----------|----------|
-| [`CHANGELOG.md`](CHANGELOG.md) | Changelog storico (6 May – 10 June 2026) |
-| [`DESCRIPTION.md`](DESCRIPTION.md) | Architettura sistema, frame tree, FSM, build/run |
-| [`PLAN.md`](PLAN.md) | Piano futuro (exposure, injury detection, refactoring) |
+| [`docs/CHANGELOG.md`](docs/CHANGELOG.md) | Changelog storico (6 May – 10 June 2026) |
+| [`docs/DESCRIPTION.md`](docs/DESCRIPTION.md) | Architettura sistema, frame tree, FSM, build/run |
+| [`docs/PLAN.md`](docs/PLAN.md) | Piano futuro (exposure, injury detection, refactoring) |
 | [`web/README.md`](web/README.md) | Web control panel + camera view con YOLO overlay |
 
 ---
@@ -64,7 +64,7 @@ source install/setup.bash
 
 ## Running
 
-See [`DESCRIPTION.md`](DESCRIPTION.md) for the full flow (5 terminals).
+See [`docs/DESCRIPTION.md`](docs/DESCRIPTION.md) for the full flow (5 terminals).
 
 ```
 T1: ros2 launch spot_control teresa_core.launch.py         # driver + TF + monitor
