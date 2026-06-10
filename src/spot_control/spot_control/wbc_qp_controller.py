@@ -472,18 +472,23 @@ class WBCQPControllerNode(Node):
     # ── ACTIVE_SEARCH mode (SEARCHING) ───────────────────────────────────
 
     def _gen_cartesian_search_grid(self) -> list[PoseStamped]:
-        """6 hardcoded poses: 3 forward (FK-reader quaternions, tested)
-        + 3 behind (acquired via joystick + tf2_echo).
+        """7 poses (3 forward + 3 behind with transit): interleave FWD-C between
+        behind poses to prevent IK from taking the wrong wrist path.
         """
         SEARCH_POSES = [
-            # FORWARD — FK-reader quaternions (tested, natural arm config)
-            (np.array([0.144, -0.005, 0.520]), np.array([0.0182, 0.1521, -0.0217, 0.9880]), "FWD-C"),
-            (np.array([0.067, -0.070, 0.520]), np.array([0.0906, 0.1890, -0.3976, 0.8932]), "FWD-L"),
-            (np.array([0.057, 0.079, 0.520]), np.array([-0.0888, 0.1933, 0.4310, 0.8769]), "FWD-R"),
-            # BEHIND — acquired via joystick + tf2_echo
-            (np.array([-0.052, -0.042, 0.520]), np.array([-0.208, -0.175, 0.910, -0.313]), "BWD-L"),
-            (np.array([-0.075, -0.013, 0.520]), np.array([-0.152, -0.109, 0.982, 0.000]), "BWD-C"),
-            (np.array([-0.159, 0.035, 0.520]), np.array([-0.199, 0.029, 0.978, -0.046]), "BWD-R"),
+            # FORWARD
+            (np.array([0.144, -0.005, 0.52]), np.array([0.0182, 0.1521, -0.0217, 0.9880]), "FWD-C"),
+            (np.array([0.067, -0.070, 0.52]), np.array([0.0906, 0.1890, -0.3976, 0.8932]), "FWD-L"),
+            # BEHIND LEFT (via forward)
+            (np.array([-0.052, -0.042, 0.52]), np.array([-0.208, -0.175, 0.910, -0.313]), "BWD-L"),
+            # TRANSIT to center
+            (np.array([0.144, -0.005, 0.52]), np.array([0.0182, 0.1521, -0.0217, 0.9880]), "FWD-C"),
+            # BEHIND CENTER
+            (np.array([-0.075, -0.013, 0.52]), np.array([-0.152, -0.109, 0.982, 0.000]), "BWD-C"),
+            # TRANSIT to center
+            (np.array([0.144, -0.005, 0.52]), np.array([0.0182, 0.1521, -0.0217, 0.9880]), "FWD-C"),
+            # BEHIND RIGHT
+            (np.array([-0.159, 0.035, 0.52]), np.array([-0.199, 0.029, 0.978, -0.046]), "BWD-R"),
         ]
         poses = []
         for pos, quat, label in SEARCH_POSES:
@@ -517,8 +522,8 @@ class WBCQPControllerNode(Node):
         )
         self._scan_scanner.reset()
         self.get_logger().info(
-            f'ACTIVE_SEARCH: {len(poses)} hardcoded poses '
-            f'(3 forward + 3 behind)')
+            f'ACTIVE_SEARCH: {len(poses)} poses '
+            f'(3 forward + 3 behind with transit)')
 
     def _tick_active_search(self) -> None:
         if self._scan_scanner is None:

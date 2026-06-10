@@ -15,17 +15,23 @@ from std_msgs.msg import Bool, Header
 import numpy as np
 
 # ============================================================
-# 6 Search Poses (from wbc_qp_controller.py)
+# 7 Search Poses (from wbc_qp_controller.py)
+# Interleave FWD-C between behind poses to prevent IK wrist-path issues.
 # ============================================================
 SEARCH_POSES = [
-    # FORWARD — FK-reader quaternions
-    ("FWD-C",  [0.144, -0.005, 0.52], [0.0182, 0.1521, -0.0217, 0.9880]),
-    ("FWD-L",  [0.067, -0.070, 0.52], [0.0906, 0.1890, -0.3976, 0.8932]),
-    ("FWD-R",  [0.057, 0.079, 0.52],  [-0.0888, 0.1933, 0.4310, 0.8769]),
-    # BEHIND — joystick-acquired (tf2_echo)
-    ("BWD-L",  [-0.052, -0.042, 0.52], [-0.208, -0.175, 0.910, -0.313]),
-    ("BWD-C",  [-0.075, -0.013, 0.52], [-0.152, -0.109, 0.982, 0.000]),
-    ("BWD-R",  [-0.159, 0.035, 0.52],  [-0.199, 0.029, 0.978, -0.046]),
+    # FORWARD
+    ("FWD-C",   [0.144, -0.005, 0.52], [0.0182, 0.1521, -0.0217, 0.9880]),
+    ("FWD-L",   [0.067, -0.070, 0.52], [0.0906, 0.1890, -0.3976, 0.8932]),
+    # BEHIND LEFT (via forward)
+    ("BWD-L",   [-0.052, -0.042, 0.52], [-0.208, -0.175, 0.910, -0.313]),
+    # TRANSIT to center
+    ("FWD-C⤓", [0.144, -0.005, 0.52], [0.0182, 0.1521, -0.0217, 0.9880]),
+    # BEHIND CENTER
+    ("BWD-C",   [-0.075, -0.013, 0.52], [-0.152, -0.109, 0.982, 0.000]),
+    # TRANSIT to center
+    ("FWD-C⤓", [0.144, -0.005, 0.52], [0.0182, 0.1521, -0.0217, 0.9880]),
+    # BEHIND RIGHT
+    ("BWD-R",   [-0.159, 0.035, 0.52], [-0.199, 0.029, 0.978, -0.046]),
 ]
 
 
@@ -67,7 +73,7 @@ class SearchPoseTester(Node):
         self._pub_enable.publish(Bool(data=True))
         self._pub_goal.publish(msg)
         self._ik_done = False
-        self.get_logger().info(f"▶ [{idx+1}/6] {name} — pos={[round(p,3) for p in pos]}  waiting for ik_done...")
+        self.get_logger().info(f"▶ [{idx+1}/{len(SEARCH_POSES)}] {name} — pos={[round(p,3) for p in pos]}  waiting for ik_done...")
 
     def _send_home(self):
         msg = PoseStamped()
