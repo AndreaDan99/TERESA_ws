@@ -185,6 +185,10 @@ class Z1YoloTorsoTracker(Node):
         self.sub_scan_seed = self.create_subscription(
             PointStamped, '/torso_scan_seed', self._cb_scan_seed, 10)
 
+        # Perception enable/disable (from WBC)
+        self.sub_perception_enable = self.create_subscription(
+            Bool, '/wbc/perception_enable', self._cb_perception_enable, 10)
+
         # ── Publishers (NUOVA FSM) ─────────────────────────────────
         self.pub_torso_ee          = self.create_publisher(PoseStamped,  '/torso_target_ee',        10)
         self.pub_torso_ee_locked   = self.create_publisher(PoseStamped,  '/torso_target_ee_locked', 10)
@@ -203,6 +207,9 @@ class Z1YoloTorsoTracker(Node):
         # ── Publisher body keypoints (exposure scan) ────────────────
         self.pub_body_kp = self.create_publisher(
             PoseArray, '/exposure/body_keypoints', 10)
+
+        # ── Percezione abilitabile/disabilitabile ──────────────────
+        self._perception_enabled = False
 
         # ── Stato interno normale ──────────────────────────────────
         self.state            = 'IDLE'
@@ -245,6 +252,9 @@ class Z1YoloTorsoTracker(Node):
     # ──────────────────────────────────────────────────────────────
     def cb_info(self, msg):
         self.cam_info = msg
+
+    def _cb_perception_enable(self, msg: Bool):
+        self._perception_enabled = msg.data
 
     def cb_tracker_reset(self, msg: Bool):
         if not msg.data:
@@ -373,6 +383,10 @@ class Z1YoloTorsoTracker(Node):
     def cb_synchronized(self, rgb_msg, depth_msg):
         if self.cam_info is None:
             self.get_logger().warn('CameraInfo non ancora ricevuta', throttle_duration_sec=2.0)
+            return
+
+        if not self._perception_enabled:
+            self.get_logger().info('Perception disabled', throttle_duration_sec=10.0)
             return
 
         # ── Misura dt reale ────────────────────────────────────────
