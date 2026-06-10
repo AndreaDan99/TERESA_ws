@@ -472,37 +472,30 @@ class WBCQPControllerNode(Node):
     # ── ACTIVE_SEARCH mode (SEARCHING) ───────────────────────────────────
 
     def _gen_cartesian_search_grid(self) -> list[PoseStamped]:
-        """6 hardcoded poses: 3 forward + 3 behind.
-
-        All poses use compute_ee_orientation_minrot() — camera looks toward +X
-        (patient direction) with 10° downward tilt. No Gram-Schmidt twisting.
+        """6 hardcoded poses: 3 forward (FK-reader quaternions, tested)
+        + 3 behind (minrot look+X 10deg down, zero twist).
         """
         home_ori = self._home_orientation.tolist()
-
-        # Look direction: +X with 10° downward tilt
         tilt = np.radians(10.0)
         look_dir = np.array([np.cos(tilt), 0.0, -np.sin(tilt)])
-        quat = compute_ee_orientation_minrot(look_dir, home_ori)
+        quat_behind = compute_ee_orientation_minrot(look_dir, home_ori)
 
-        # 6 positions — 3 forward (old FK-reader, known good) + 3 behind (symmetric)
-        SEARCH_POSITIONS = [
-            # FORWARD — from old FK-reader poses (tested, arm doesn't twist)
-            (np.array([0.144, -0.005, 0.530]),  "FWD-C"),
-            (np.array([0.067, -0.070, 0.540]),  "FWD-L"),
-            (np.array([0.057,  0.079, 0.538]),  "FWD-R"),
-            # BEHIND — symmetric to forward, negative X
-            (np.array([-0.15, -0.20, 0.53]),   "BWD-L"),
-            (np.array([-0.15,  0.00, 0.53]),   "BWD-C"),
-            (np.array([-0.15,  0.20, 0.53]),   "BWD-R"),
+        SEARCH_POSES = [
+            # FORWARD — FK-reader quaternions from real robot
+            (np.array([0.144, -0.005, 0.530]), np.array([0.0182, 0.1521, -0.0217, 0.9880]), "FWD-C"),
+            (np.array([0.067, -0.070, 0.540]), np.array([0.0906, 0.1890, -0.3976, 0.8932]), "FWD-L"),
+            (np.array([0.057, 0.079, 0.538]), np.array([-0.0888, 0.1933, 0.4310, 0.8769]), "FWD-R"),
+            # BEHIND — minrot orientation
+            (np.array([-0.15, -0.20, 0.53]), quat_behind, "BWD-L"),
+            (np.array([-0.15, 0.00, 0.53]), quat_behind, "BWD-C"),
+            (np.array([-0.15, 0.20, 0.53]), quat_behind, "BWD-R"),
         ]
-
         poses = []
-        for pos, label in SEARCH_POSITIONS:
+        for pos, quat, label in SEARCH_POSES:
             clipped, was_clipped, _ = self._ws_checker.clip_target(pos)
             poses.append(_make_pose_stamped(clipped, quat))
             if was_clipped:
                 self.get_logger().warn(f'{label} clipped: {pos} → {clipped}')
-
         return poses
 
     def _start_active_search(self) -> None:
@@ -565,18 +558,13 @@ class WBCQPControllerNode(Node):
         if not self._enabled:
             self.get_logger().warn('_send_home: QP not enabled')
             return
-
-        tilt = np.radians(10.0)
-        look_dir = np.array([np.cos(tilt), 0.0, -np.sin(tilt)])
-        quat = compute_ee_orientation_minrot(look_dir, self._home_orientation.tolist())
-
-        home_pos = np.array([0.12, -0.20, 0.53])
+        home_pos = np.array([0.067, -0.070, 0.540])
+        home_quat = np.array([0.0906, 0.1890, -0.3976, 0.8932])
         clipped, _, _ = self._ws_checker.clip_target(home_pos)
-
-        home_pose = _make_pose_stamped(clipped, quat)
+        home_pose = _make_pose_stamped(clipped, home_quat)
         self._pub_ik.publish(home_pose)
         self._pub_en.publish(Bool(data=True))
-        self.get_logger().info('🔒 Lock pose sent (search pose 1: FWD-L)')
+        self.get_logger().info('🔒 Lock pose sent (FWD-L FK-reader)')
 
     # ── PERCEPTUAL_SCAN mode (APPROACHING) ───────────────────────────────
 
