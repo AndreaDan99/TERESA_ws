@@ -1,7 +1,49 @@
 # TERESA — Changelog
 
-Storico completo delle modifiche dal 6 maggio 2026 al 6 giugno 2026.
+Storico completo delle modifiche dal 6 maggio 2026 al 10 giugno 2026.
 Per la descrizione del sistema corrente vedi [`DESCRIPTION.md`](DESCRIPTION.md).
+
+---
+
+## 10 June 2026 — WBC Fixes + Web Dashboard + Paper Updates
+
+### WBC Bug Fixes
+- **Lock home spam**: QP controller `_send_home()` was called at 10Hz during LOCKING — added `prev != 'LOCKING'` guard
+- **NLF trigger deadlock**: NLF trigger/timeout code was unreachable during LOCKING because `return` statement above skipped it. Moved to top of `_tick_locking()` so it fires regardless of LYING status
+- **QP log spam**: `📡 /wbc/state` printed at 10Hz even when state unchanged — added `msg.data != prev` guard
+- **Lock home log**: misleading message "search pose 1" → clarified to show actual pose `[0.144, -0.005, 0.530]`
+- **Ik_done arrival log**: added `✅ ik_done received` log in coordinator callback
+- **LOCKING debug logs**: throttled logs showing what's blocking (samples, ik_done, NLF prior)
+
+### Web Dashboard
+- **Component status grid**: 4-card dashboard in web UI (IK, Orbbec, RealSense, QP) with colored dots
+- **One-time event logging**: only logs on state change (no spam)
+- **New ROS topic**: `/wbc/qp_mode` (String) published by QP controller on every mode change
+- Works independently of camera panel (subscriptions in `initTopics()`, always active)
+
+### Arm Search Poses
+- **10° downward tilt**: search poses now point camera downward instead of purely horizontal
+- **Faster timeout**: search_timeout_per_point: 5.0s → 1.2s (in YAML and code default)
+
+### Paper (TERESA_RAL)
+- **Bibliography fixes**: gu2024vttb type corrected, xie2024capm authors fixed (all 6 were wrong), DOIs added, orphan entries removed (bellicoso2019, mathiassen2016), rozycki1996 cited
+- **FSM diagram**: redesigned larger — fonts `\tiny`→`\footnotesize`, nodes 2.5×0.8cm, reduced spacing, added vertical breathing room
+
+### Modified files
+| File | +/− | Changes |
+|------|-----|---------|
+| `wbc_qp_controller.py` | +12/−4 | prev guard on LOCKING, 10° tilt, timeout default 1.2s, qp_mode publisher, state debug log |
+| `wbc_coordinator.py` | +30/−20 | NLF trigger moved, ik_done arrival log, LOCKING debug logs, lock_ik_ticks counters |
+| `wbc_params.yaml` | +1/−1 | search_timeout_per_point 5.0→1.2 |
+| `teresa_control.html` | +88/−0 | CSS status grid, HTML cards, JS subscriptions for /ik_done, /wbc/qp_mode, posture, tracker, one-time logging |
+| `TERESA_RAL/references.bib` | +17/−34 | 8 fixes (gu2024vttb, isarandi2024nlf, xie2024capm, jauhri2024, casado2025navigating, sayols2024dynamic, bellicoso2019, mathiassen2016) |
+| `TERESA_RAL/sections/introduction.tex` | +1/−1 | Added `\cite{rozycki1996}` |
+| `TERESA_RAL/figures/fsm.tex` | +50/−50 | Fonts, sizes, spacing redesigned |
+
+### New topics
+| Topic | Type | Publisher | Subscriber | Purpose |
+|-------|------|-----------|------------|---------|
+| `/wbc/qp_mode` | String | wbc_qp_controller | teresa_control.html | Current QP mode (ACTIVE_SEARCH/LOOKAT/PERCEPTUAL_SCAN/IDLE) |
 
 ---
 

@@ -18,47 +18,37 @@ git status --short
 
 | Document | Contents |
 |----------|----------|
-| [`CHANGELOG.md`](CHANGELOG.md) | Changelog storico (6 May – 6 June 2026) |
+| [`CHANGELOG.md`](CHANGELOG.md) | Changelog storico (6 May – 10 June 2026) |
 | [`DESCRIPTION.md`](DESCRIPTION.md) | Architettura sistema, frame tree, FSM, build/run |
 | [`PLAN.md`](PLAN.md) | Piano futuro (exposure, injury detection, refactoring) |
 | [`web/README.md`](web/README.md) | Web control panel + camera view con YOLO overlay |
 
 ---
 
-## Current State (9 June 2026)
+## Current State (10 June 2026)
 
-### NLF Burst Streaming
-- NLF trigger redesigned from one-shot to multi-frame burst
-- Collects 2 valid detections (lying + torso non-NaN), EMA accumulation, timeout 30s
-- Publishes refined prior on `/exposure/nlf_prior` and confidence on `/exposure/nlf_confidence`
-- LOCKING blocks until NLF burst completes (or times out)
-- EXCELLENT confidence tier: if NLF bbox_score ≥ 0.80 → 100% NLF blending
+### WBC — LOCKING Deadlock Fixed
+- NLF trigger/timeout now runs at top of `_tick_locking()` — no longer skipped by early return
+- Lock home sent only once (prev guard on LOCKING state change)
+- Throttled debug logs show what's blocking LOCKING → PRE_APPROACH
+- QP `/wbc/state` debug log only fires on actual state change (no 10Hz spam)
+- `ik_done` arrival logged in coordinator callback
 
-### SEARCHING — Timed Open-Loop with 6 Symmetric Poses
+### SEARCHING — 6 Symmetric Poses with 10° Downward Tilt
 - 6 symmetric mathematically-generated poses (3 forward + 3 look-behind)
-- Orientation computed via `compute_ee_orientation()` — no FK-reader quaternions
-- Refinement best pitch saved and applied on ALL LOCKING entry paths
+- Camera tilted 10° downward for better torso view
+- search_timeout_per_point: 1.2s (was 5.0s)
+- Orientation via `compute_ee_orientation()` — no FK-reader quaternions
 
-### Search Poses
-- 6 symmetric mathematically-generated poses (3 forward + 3 look-behind)
-- Orientation computed via compute_ee_orientation() — no FK-reader quaternions
+### Web Dashboard
+- Component status grid: IK, Orbbec, RealSense, QP with colored dots (green/yellow/gray)
+- One-time event logging (no spam)
+- `/wbc/qp_mode` topic for QP controller mode
+- Works independently of camera panel
 
-### Exposure NLF Grid
-- exposure_scanner uses NLF prior for body grid when available
-- Falls back to YOLO keypoints if NLF prior not captured
-
-### Z1 WBC Dependency
-- Z1 homes on startup, then waits indefinitely for WBC coordinator
-- No standalone operation possible
-
-### Launch Fix
-- `nlf_skeleton_node` only launches with `perception_backend:=nlf`
-- With `perception_backend:=yolo` (default): NLF not started at all
-
-### Other Fixes
-- Publish suppression: `/human_pose/points_3d` blocked during active NLF burst
-- Coordinator no longer publishes `Bool(False)` on NLF timeout (NLF self-manages)
-- `nlf_timeout` extended from 10s to 30s
+### Paper (TERESA_RAL)
+- Bibliography: 8 fixes (gu2024vttb type, xie2024capm authors, DOIs, orphan entries removed, rozycki1996 cited)
+- FSM diagram redesigned larger for readability
 
 ---
 
