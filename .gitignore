@@ -58,3 +58,6 @@ TERESA_z1_progress.pdf
 
 # NLF model files
 *.torchscript
+
+# Presentations
+TERESA_WBC_v2_27May.pptx
