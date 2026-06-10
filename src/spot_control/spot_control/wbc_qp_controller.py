@@ -3,7 +3,7 @@
 WBC QP Controller — arm-only look-at + active-perception Cartesian scanning.
 
 Modes (selected automatically from /wbc/state):
-  ACTIVE_SEARCH  — SEARCHING:    6 pose ad arco attorno a HOME_POS (loop infinito)
+  ACTIVE_SEARCH  — SEARCHING:    7 pose ad arco attorno a HOME_POS (loop infinito)
   LOOKAT         — PRE_APPROACH: ω_des orientamento + null-space joint centering
   PERCEPTUAL_SCAN — APPROACHING:  6 Cartesian poses verso target, multi-angolo
 
@@ -472,8 +472,9 @@ class WBCQPControllerNode(Node):
     # ── ACTIVE_SEARCH mode (SEARCHING) ───────────────────────────────────
 
     def _gen_cartesian_search_grid(self) -> list[PoseStamped]:
-        """6 poses (3 forward + 3 behind with transit): interleave FWD-C between
-        behind poses to prevent IK from taking the wrong wrist path.
+        """7 poses (3 forward + 3 behind with transit + final return to center):
+        interleave FWD-C between behind poses to prevent IK from taking the wrong
+        wrist path. Final FWD-C returns arm to center before Spot changes yaw.
         """
         SEARCH_POSES = [
             # FORWARD
@@ -487,6 +488,8 @@ class WBCQPControllerNode(Node):
             (np.array([0.144, -0.005, 0.52]), np.array([0.0182, 0.1521, -0.0217, 0.9880]), "FWD-C"),
             # BEHIND RIGHT
             (np.array([-0.077, 0.071, 0.52]), np.array([-0.115, 0.009, 0.932, 0.345]), "BWD-R"),
+            # RETURN to center (before Spot changes yaw)
+            (np.array([0.144, -0.005, 0.52]), np.array([0.0182, 0.1521, -0.0217, 0.9880]), "FWD-C"),
         ]
         poses = []
         for pos, quat, label in SEARCH_POSES:
@@ -521,7 +524,7 @@ class WBCQPControllerNode(Node):
         self._scan_scanner.reset()
         self.get_logger().info(
             f'ACTIVE_SEARCH: {len(poses)} poses '
-            f'(3 forward + 3 behind with transit)')
+            f'(3 forward + 3 behind with transit + final return)')
 
     def _tick_active_search(self) -> None:
         if self._scan_scanner is None:

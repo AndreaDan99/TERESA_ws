@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test script for 6 search poses — manual stepping.
+Test script for 7 search poses — manual stepping.
 Publishes one pose at a time to /ik_goal_pose, waits for ik_done,
 then waits for ENTER before sending the next.
 
@@ -15,8 +15,9 @@ from std_msgs.msg import Bool, Header
 import numpy as np
 
 # ============================================================
-# 6 Search Poses (from wbc_qp_controller.py)
+# 7 Search Poses (from wbc_qp_controller.py)
 # Interleave FWD-C between behind poses to prevent IK wrist-path issues.
+# Final FWD-C returns arm to center before Spot changes yaw.
 # ============================================================
 SEARCH_POSES = [
     # FORWARD
@@ -30,6 +31,8 @@ SEARCH_POSES = [
     ("FWD-C⤓", [0.144, -0.005, 0.52], [0.0182, 0.1521, -0.0217, 0.9880]),
     # BEHIND RIGHT
     ("BWD-R",   [-0.077, 0.071, 0.52], [-0.115, 0.009, 0.932, 0.345]),
+    # RETURN to center (before Spot changes yaw)
+    ("FWD-C",   [0.144, -0.005, 0.52], [0.0182, 0.1521, -0.0217, 0.9880]),
 ]
 
 
