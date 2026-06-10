@@ -472,7 +472,7 @@ class WBCQPControllerNode(Node):
     # ── ACTIVE_SEARCH mode (SEARCHING) ───────────────────────────────────
 
     def _gen_cartesian_search_grid(self) -> list[PoseStamped]:
-        """7 poses (3 forward + 3 behind with transit): interleave FWD-C between
+        """6 poses (3 forward + 3 behind with transit): interleave FWD-C between
         behind poses to prevent IK from taking the wrong wrist path.
         """
         SEARCH_POSES = [
@@ -481,8 +481,6 @@ class WBCQPControllerNode(Node):
             (np.array([0.067, -0.070, 0.52]), np.array([0.0906, 0.1890, -0.3976, 0.8932]), "FWD-L"),
             # BEHIND LEFT (via forward)
             (np.array([-0.052, -0.042, 0.52]), np.array([-0.208, -0.175, 0.910, -0.313]), "BWD-L"),
-            # TRANSIT to center
-            (np.array([0.144, -0.005, 0.52]), np.array([0.0182, 0.1521, -0.0217, 0.9880]), "FWD-C"),
             # BEHIND CENTER
             (np.array([-0.075, -0.013, 0.52]), np.array([-0.152, -0.109, 0.982, 0.000]), "BWD-C"),
             # TRANSIT to center

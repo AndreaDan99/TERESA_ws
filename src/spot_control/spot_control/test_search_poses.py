@@ -15,7 +15,7 @@ from std_msgs.msg import Bool, Header
 import numpy as np
 
 # ============================================================
-# 7 Search Poses (from wbc_qp_controller.py)
+# 6 Search Poses (from wbc_qp_controller.py)
 # Interleave FWD-C between behind poses to prevent IK wrist-path issues.
 # ============================================================
 SEARCH_POSES = [
@@ -24,8 +24,6 @@ SEARCH_POSES = [
     ("FWD-L",   [0.067, -0.070, 0.52], [0.0906, 0.1890, -0.3976, 0.8932]),
     # BEHIND LEFT (via forward)
     ("BWD-L",   [-0.052, -0.042, 0.52], [-0.208, -0.175, 0.910, -0.313]),
-    # TRANSIT to center
-    ("FWD-C⤓", [0.144, -0.005, 0.52], [0.0182, 0.1521, -0.0217, 0.9880]),
     # BEHIND CENTER
     ("BWD-C",   [-0.075, -0.013, 0.52], [-0.152, -0.109, 0.982, 0.000]),
     # TRANSIT to center

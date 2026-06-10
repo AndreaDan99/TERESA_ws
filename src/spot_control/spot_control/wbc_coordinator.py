@@ -4,7 +4,7 @@ WBC Coordinator — phase FSM (WBC is master, Z1 FSM waits for SCANNING)
 
 States:
   WAITING_TF    waits for tf_monitor to confirm TF chains ready
-  SEARCHING     Spot alternates ±30° yaw, arm 7 poses each; after both: HOME + step forward,
+  SEARCHING     Spot alternates ±30° yaw, arm 6 poses each; after both: HOME + step forward,
                repeat. Hybrid lock: Orbbec (full) + RealSense (semi-lock guidance)
   SEMI_LOCKING  RealSense found torso → Spot rotates+tilts toward it, arm freezes, Orbbec gets 3s clean window
   LOCKING       Orbbec confirmed LYING → arm goes home, collect 5 approach_point samples
@@ -1011,14 +1011,14 @@ class WBCCoordinatorNode(Node):
             self._pub_ik_goal.publish(home_pose)
             return
 
-        # ── Waiting for arm to finish 7 poses after rotation ──────────
+        # ── Waiting for arm to finish 6 poses after rotation ──────────
         if not self._search_rotating and self._search_position_start is not None:
             if self._ik_done:
                 self._search_ik_done_count += 1
                 self._ik_done = False
-                if self._search_ik_done_count >= 7:
+                if self._search_ik_done_count >= 6:
                     self.get_logger().info(
-                        f'Search pos {self._search_position_idx+1}: arm 7 poses done → next')
+                        f'Search pos {self._search_position_idx+1}: arm 6 poses done → next')
                     self._search_position_idx += 1
                     self._search_position_start = None
                     self._search_ik_done_count = 0
@@ -1055,11 +1055,11 @@ class WBCCoordinatorNode(Node):
                 self._pub_cmd_vel.publish(Twist())
                 self._search_rotating = False
                 self._search_position_start = self.get_clock().now()
-                self._ik_done = False  # reset for arm to start 7 poses
+                self._ik_done = False  # reset for arm to start 6 poses
                 self._search_ik_done_count = 0
                 self.get_logger().info(
                     f'Search pos {self._search_position_idx+1}: rotation done '
-                    f'({elapsed:.1f}s) → arm 7 poses')
+                    f'({elapsed:.1f}s) → arm 6 poses')
                 return
             t = Twist()
             t.angular.z = float(math.copysign(self._search_max_angular_vel, pos['yaw']))
@@ -1965,7 +1965,7 @@ class WBCCoordinatorNode(Node):
 
     def _build_search_sequence(self) -> list:
         """Build search sequence from yaw_angles list (degrees, relative).
-        Each step: rotate by angle degrees, then arm does 7 poses.
+        Each step: rotate by angle degrees, then arm does 6 poses.
         Pitch sweep is handled by refinement mode when a detection triggers."""
         yaw_list = [math.radians(a) for a in self._search_yaw_angles]
         return [{'yaw': y, 'pitch': 0.0} for y in yaw_list]
