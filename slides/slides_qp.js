@@ -207,8 +207,8 @@ function slideQp3(prs) {
     "2. 11\u21926 Poses (PERCEPTUAL_SCAN)",
     "SCAN_SEQ had 11 poses with complex BodySearchScanner\n" +
     "PERCEPTUAL_SCAN uses 6 well-distributed poses\n" +
-    "Wrist sweep covers Z1 workspace better\n" +
-    "Lateral parallax provides depth information",
+    "4-point wrist grid (4cm/12cm step based on NLF prior) + 2-point lateral scan (6cm/20cm step)\n" +
+    "Deterministic Cartesian coverage vs random null-space sampling",
     10);
 
   // Row 2

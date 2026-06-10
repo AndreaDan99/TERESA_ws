@@ -86,7 +86,7 @@ function slideSearching1(prs) {
 
   // Bottom callout box
   s.addShape("rect", { x:0.40, y:4.05, w:9.20, h:0.95, fill:{color:C.OFF_WHITE}, line:{type:"none"}, rectRadius:0.06 });
-  s.addText("Improvement: ~70% faster search cycle, independent from TF health, 10 downward camera tilt",
+  s.addText("Improvement: Timed rotation + 6-pose grid \u2192 ~7s cycle, no TF dependency (was ~90s)",
     { x:0.60, y:4.10, w:8.80, h:0.40, fontFace:"Calibri", fontSize:12, bold:true, color:C.TEAL_DARK, valign:"middle" });
   s.addText("CHANGELOG: 8 June 2026 — SEARCHING rewrite",
     { x:0.60, y:4.50, w:8.80, h:0.30, fontFace:"Consolas", fontSize:8, italic:true, color:C.SEAFOAM, valign:"middle" });
@@ -154,7 +154,7 @@ function slideSearching3(prs) {
 
   // Table rows
   const rows = [
-    { metric: "Search time per cycle", may: "~90s (18 x 5s dwell)", jun: "~7s (2 yaw x 1.2s + poses)" },
+    { metric: "Search time per cycle", may: "~270s (18 x 15s dwell)", jun: "~7s (2 yaw x 1.2s + poses)" },
     { metric: "TF dependency",        may: "Requires odom to body TF", jun: "None (open-loop timing)" },
     { metric: "Arm poses",            may: "7 hardcoded (FK-reader)", jun: "6 symmetric (mathematical)" },
     { metric: "Pose generation",      may: "FK-reader file",          jun: "compute_ee_orientation()" },

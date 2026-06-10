@@ -170,7 +170,7 @@ function slideNlf2(prs) {
     C.SEAFOAM,
     "MEDIUM",
     [
-      "\u2022 50% NLF + 50% YOLO blend",
+      "\u2022 Balanced NLF-YOLO fusion",
       "\u2022 Equal weighting between backends",
       "\u2022 Balanced fusion strategy",
     ].join("\n"),
