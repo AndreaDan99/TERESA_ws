@@ -3,8 +3,6 @@
 // Consumed by the Task 9 assembler.
 //
 // Sources:
-//   CHANGELOG.md lines 50-80  (9 June 2026 — NLF Burst Streaming + LOCKING Blocking)
-//   CHANGELOG.md lines 8-47   (10 June 2026 — NLF trigger deadlock fix)
 //   DESCRIPTION.md lines 124-134 (LOCKING → PRE_APPROACH)
 // ────────────────────────────────────────────────────────────────────────
 
@@ -19,16 +17,10 @@ const C = {
   WHITE:      "FFFFFF",
 };
 
-const UNIFE_LOGO = "/Users/andrea/Documents/UNIFE/DOTTORATO/Presentazioni/Unife_logo.png";
 const SLIDE_W = 10.0;
 const SLIDE_H = 5.625;
 
 // ─── Helpers (copied from teresa_presentation.js) ───────────────────────
-
-function addFooter(slide) {
-  slide.addShape("rect", { x: 0, y: 5.17, w: SLIDE_W, h: 0.45, fill: { color: C.DARK_NAVY }, line: { type: "none" } });
-  slide.addImage({ path: UNIFE_LOGO, x: 4.46, y: 5.22, w: 1.09, h: 0.35 });
-}
 
 function darkBg(slide, circleY) {
   slide.background = { fill: C.TEAL };
@@ -48,7 +40,6 @@ function sectionSlide(prs, num, title, subtitle) {
   slide.addText(num, { x: 0.55, y: 0.25, w: 1.20, h: 0.65, fontFace: "Trebuchet MS", fontSize: 52, bold: true, color: C.WHITE });
   slide.addText(title, { x: 0.60, y: 0.95, w: 8.80, h: 0.55, fontFace: "Trebuchet MS", fontSize: 26, bold: true, color: C.WHITE });
   if (subtitle) slide.addText(subtitle, { x: 0.60, y: 1.50, w: 8.80, h: 0.35, fontFace: "Trebuchet MS", fontSize: 11, bold: true, color: C.WHITE });
-  addFooter(slide);
 }
 
 function addCard(slide, x, y, w, h, color, header, bodyLines, fontSize) {
@@ -113,10 +104,6 @@ function slideLocking1(prs) {
     { x: 0.55, y: 4.30, w: 8.90, h: 0.40, fontFace: "Consolas", fontSize: 10, color: C.TEAL_DARK, valign: "middle" }
   );
 
-  addFooter(slide);
-
-  // Source annotation (invisible, for traceability)
-  // CHANGELOG: 9-10 June 2026 — LOCKING blocking gate
 }
 
 // ─── Slide L2 — LOCKING: NLF Confidence-Driven Blending ─────────────────
@@ -194,11 +181,6 @@ function slideLocking2(prs) {
     { x: 0.55, y: 4.30, w: 8.90, h: 0.75, fontFace: "Calibri", fontSize: 10.5, color: C.TEAL_DARK, valign: "middle", lineSpacingMultiple: 1.3 }
   );
 
-  addFooter(slide);
-
-  // Source annotations (invisible, for traceability)
-  // CHANGELOG: 9 June 2026 — _filtered_goal() EXCELLENT tier
-  // CHANGELOG: 10 June 2026 — NLF trigger deadlock fix
 }
 
 // ─── Export ─────────────────────────────────────────────────────────────

@@ -1,11 +1,10 @@
-// ─── Exposure Scanning — NEW (June 2026) ────────────────────────────────
+// ─── Exposure Scanning ───────────────────────────────────────────────────
 // Slide functions for the Exposure Scanning feature (body scan + camera).
 // Consumed by the Task 9 assembler.
 //
 // Sources:
 //   DESCRIPTION.md lines 165-233 (exposure phase)
 //   DESCRIPTION.md lines 334-335 (exposure_scanner node)
-//   CHANGELOG.md lines 58-59 (NLF exposure grid)
 // ────────────────────────────────────────────────────────────────────────
 
 const C = {
@@ -19,16 +18,10 @@ const C = {
   WHITE:        "FFFFFF",
 };
 
-const UNIFE_LOGO = "/Users/andrea/Documents/UNIFE/DOTTORATO/Presentazioni/Unife_logo.png";
 const SLIDE_W = 10.0;
 const SLIDE_H = 5.625;
 
 // ─── Helpers (same as teresa_presentation.js) ───────────────────────────
-
-function addFooter(slide) {
-  slide.addShape("rect", { x: 0, y: 5.17, w: SLIDE_W, h: 0.45, fill: { color: C.DARK_NAVY }, line: { type: "none" } });
-  slide.addImage({ path: UNIFE_LOGO, x: 4.46, y: 5.22, w: 1.09, h: 0.35 });
-}
 
 function darkBg(slide, circleY) {
   slide.background = { fill: C.TEAL };
@@ -48,7 +41,6 @@ function sectionSlide(prs, num, title, subtitle) {
   slide.addText(num, { x: 0.55, y: 0.25, w: 1.20, h: 0.65, fontFace: "Trebuchet MS", fontSize: 52, bold: true, color: C.WHITE });
   slide.addText(title, { x: 0.60, y: 0.95, w: 8.80, h: 0.55, fontFace: "Trebuchet MS", fontSize: 26, bold: true, color: C.WHITE });
   if (subtitle) slide.addText(subtitle, { x: 0.60, y: 1.50, w: 8.80, h: 0.35, fontFace: "Trebuchet MS", fontSize: 11, bold: true, color: C.WHITE });
-  addFooter(slide);
 }
 
 function addCard(slide, x, y, w, h, color, header, bodyLines, fontSize) {
@@ -73,7 +65,7 @@ function slideExposure1(prs) {
 
   // Content slide
   const slide = prs.addSlide();
-  lightHeader(slide, "Exposure Scanning \u2014 NEW (June 2026)");
+  lightHeader(slide, "Exposure Scanning");
 
   // LEFT card — Full-Body Grid (TEAL)
   addCard(
@@ -124,10 +116,6 @@ function slideExposure1(prs) {
     { x: 0.55, y: 4.65, w: 8.90, h: 0.40, fontFace: "Consolas", fontSize: 9, color: C.TEAL_DARK, valign: "middle" }
   );
 
-  addFooter(slide);
-
-  // Source annotation
-  // DESCRIPTION.md:165-180
 }
 
 // ─── Slide E2 — Exposure Pipeline & Web Integration ─────────────────────
@@ -196,10 +184,6 @@ function slideExposure2(prs) {
     { x: 0.55, y: 4.65, w: 8.90, h: 0.40, fontFace: "Consolas", fontSize: 9, color: C.TEAL_DARK, valign: "middle" }
   );
 
-  addFooter(slide);
-
-  // Source annotation
-  // DESCRIPTION.md:191-197
 }
 
 // ─── Slide E3 — Exposure: FSM Integration & Review Mode ─────────────────
@@ -269,10 +253,6 @@ function slideExposure3(prs) {
     { x: 0.55, y: 4.65, w: 8.90, h: 0.40, fontFace: "Consolas", fontSize: 9, color: C.TEAL_DARK, valign: "middle" }
   );
 
-  addFooter(slide);
-
-  // Source annotation
-  // DESCRIPTION.md:200-232
 }
 
 // ─── Export ─────────────────────────────────────────────────────────────

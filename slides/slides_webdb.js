@@ -1,9 +1,8 @@
-// ─── Web Dashboard — NEW (June 2026) ────────────────────────────────────
+// ─── Web Dashboard ───────────────────────────────────────────────────────
 // Slide functions for the Web Dashboard feature.
 // Consumed by the Task 9 assembler.
 //
 // Sources:
-//   CHANGELOG.md lines 18-22, 38, 43-46 (10 June 2026 — Web Dashboard)
 //   INIT.md lines 43-47 (Web Dashboard current state)
 // ────────────────────────────────────────────────────────────────────────
 
@@ -18,16 +17,10 @@ const C = {
   WHITE:      "FFFFFF",
 };
 
-const UNIFE_LOGO = "/Users/andrea/Documents/UNIFE/DOTTORATO/Presentazioni/Unife_logo.png";
 const SLIDE_W = 10.0;
 const SLIDE_H = 5.625;
 
 // ─── Helpers (copied from teresa_presentation.js) ───────────────────────
-
-function addFooter(slide) {
-  slide.addShape("rect", { x: 0, y: 5.17, w: SLIDE_W, h: 0.45, fill: { color: C.DARK_NAVY }, line: { type: "none" } });
-  slide.addImage({ path: UNIFE_LOGO, x: 4.46, y: 5.22, w: 1.09, h: 0.35 });
-}
 
 function darkBg(slide, circleY) {
   slide.background = { fill: C.TEAL };
@@ -47,7 +40,6 @@ function sectionSlide(prs, num, title, subtitle) {
   slide.addText(num, { x: 0.55, y: 0.25, w: 1.20, h: 0.65, fontFace: "Trebuchet MS", fontSize: 52, bold: true, color: C.WHITE });
   slide.addText(title, { x: 0.60, y: 0.95, w: 8.80, h: 0.55, fontFace: "Trebuchet MS", fontSize: 26, bold: true, color: C.WHITE });
   if (subtitle) slide.addText(subtitle, { x: 0.60, y: 1.50, w: 8.80, h: 0.35, fontFace: "Trebuchet MS", fontSize: 11, bold: true, color: C.WHITE });
-  addFooter(slide);
 }
 
 function addCard(slide, x, y, w, h, color, header, bodyLines, fontSize) {
@@ -65,7 +57,7 @@ function slideWebDb1(prs) {
 
   // Content slide
   const slide = prs.addSlide();
-  lightHeader(slide, "Web Dashboard \u2014 NEW (June 2026)");
+  lightHeader(slide, "Web Dashboard");
 
   // LEFT card — Component Status Grid (TEAL)
   addCard(
@@ -116,10 +108,6 @@ function slideWebDb1(prs) {
     { x: 0.55, y: 4.65, w: 8.90, h: 0.40, fontFace: "Consolas", fontSize: 9.5, color: C.TEAL_DARK, valign: "middle" }
   );
 
-  addFooter(slide);
-
-  // Source annotation (invisible, for traceability)
-  // CHANGELOG: 10 June 2026 — Web Dashboard
 }
 
 // ─── Slide W2 — Web Dashboard: Architecture & Integration ───────────────
@@ -177,10 +165,6 @@ function slideWebDb2(prs) {
     { x: 0.55, y: 4.65, w: 8.90, h: 0.40, fontFace: "Consolas", fontSize: 9.5, color: C.TEAL_DARK, valign: "middle" }
   );
 
-  addFooter(slide);
-
-  // Source annotation (invisible, for traceability)
-  // CHANGELOG: 8-10 June 2026
 }
 
 // ─── Export ─────────────────────────────────────────────────────────────

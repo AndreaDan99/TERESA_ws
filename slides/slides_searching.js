@@ -11,16 +11,10 @@ const C = {
   WHITE:        "FFFFFF",
 };
 
-const UNIFE_LOGO = "/Users/andrea/Documents/UNIFE/DOTTORATO/Presentazioni/Unife_logo.png";
 const SLIDE_W = 10.0;
 const SLIDE_H = 5.625;
 
 // ─── Helpers ───────────────────────────────────────────────────────────
-
-function addFooter(slide) {
-  slide.addShape("rect", { x:0, y:5.17, w:SLIDE_W, h:0.45, fill:{color:C.DARK_NAVY}, line:{type:"none"} });
-  slide.addImage({ path:UNIFE_LOGO, x:4.46, y:5.22, w:1.09, h:0.35 });
-}
 
 function darkBg(slide, circleY) {
   slide.background = { fill: C.TEAL };
@@ -40,7 +34,6 @@ function sectionSlide(prs, num, title, subtitle) {
   slide.addText(num, { x:0.55, y:0.25, w:1.20, h:0.65, fontFace:"Trebuchet MS", fontSize:52, bold:true, color:C.WHITE });
   slide.addText(title, { x:0.60, y:0.95, w:8.80, h:0.55, fontFace:"Trebuchet MS", fontSize:26, bold:true, color:C.WHITE });
   if (subtitle) slide.addText(subtitle, { x:0.60, y:1.50, w:8.80, h:0.35, fontFace:"Trebuchet MS", fontSize:11, bold:true, color:C.WHITE });
-  addFooter(slide);
 }
 
 function addCard(slide, x, y, w, h, color, header, bodyLines, fontSize) {
@@ -88,10 +81,6 @@ function slideSearching1(prs) {
   s.addShape("rect", { x:0.40, y:4.05, w:9.20, h:0.95, fill:{color:C.OFF_WHITE}, line:{type:"none"}, rectRadius:0.06 });
   s.addText("Improvement: Timed rotation + 6-pose grid \u2192 ~7s cycle, no TF dependency (was ~90s)",
     { x:0.60, y:4.10, w:8.80, h:0.40, fontFace:"Calibri", fontSize:12, bold:true, color:C.TEAL_DARK, valign:"middle" });
-  s.addText("CHANGELOG: 8 June 2026 — SEARCHING rewrite",
-    { x:0.60, y:4.50, w:8.80, h:0.30, fontFace:"Consolas", fontSize:8, italic:true, color:C.SEAFOAM, valign:"middle" });
-
-  addFooter(s);
 }
 
 // ─── SLIDE S2: Arm Poses Evolution ────────────────────────────────────
@@ -128,10 +117,6 @@ function slideSearching2(prs) {
   s.addShape("rect", { x:0.40, y:4.25, w:9.20, h:0.75, fill:{color:C.OFF_WHITE}, line:{type:"none"}, rectRadius:0.06 });
   s.addText("Key change: no hardcoded quaternions, mathematically guaranteed reachability",
     { x:0.60, y:4.28, w:8.80, h:0.35, fontFace:"Calibri", fontSize:12, bold:true, color:C.TEAL_DARK, valign:"middle" });
-  s.addText("CHANGELOG: 8-10 June 2026 — unified search poses",
-    { x:0.60, y:4.62, w:8.80, h:0.28, fontFace:"Consolas", fontSize:8, italic:true, color:C.SEAFOAM, valign:"middle" });
-
-  addFooter(s);
 }
 
 // ─── SLIDE S3: Performance Comparison ─────────────────────────────────
@@ -171,11 +156,6 @@ function slideSearching3(prs) {
     s.addText(row.jun,     { x:colX[2]+0.10, y:ry, w:colW[2]-0.20, h:0.52, fontFace:"Calibri", fontSize:10, color:C.GREEN, valign:"middle" });
   });
 
-  // Source line
-  s.addText("CHANGELOG: 8 June 2026 and 10 June 2026",
-    { x:0.55, y:5.00, w:9.00, h:0.20, fontFace:"Consolas", fontSize:8, italic:true, color:C.SEAFOAM });
-
-  addFooter(s);
 }
 
 // ─── Exports ───────────────────────────────────────────────────────────

@@ -1,9 +1,8 @@
-// ─── NLF Burst Streaming — NEW (June 2026) ─────────────────────────────
+// ─── NLF Burst Streaming ────────────────────────────────────────────────
 // Slide functions for the NLF Burst Streaming + Confidence Gate feature.
 // Consumed by the Task 9 assembler.
 //
 // Sources:
-//   CHANGELOG.md lines 50-80  (9 June 2026 — NLF Burst Streaming)
 //   DESCRIPTION.md lines 19-31 (perception backends)
 // ────────────────────────────────────────────────────────────────────────
 
@@ -18,16 +17,10 @@ const C = {
   WHITE:      "FFFFFF",
 };
 
-const UNIFE_LOGO = "/Users/andrea/Documents/UNIFE/DOTTORATO/Presentazioni/Unife_logo.png";
 const SLIDE_W = 10.0;
 const SLIDE_H = 5.625;
 
 // ─── Helpers (copied from teresa_presentation.js) ───────────────────────
-
-function addFooter(slide) {
-  slide.addShape("rect", { x: 0, y: 5.17, w: SLIDE_W, h: 0.45, fill: { color: C.DARK_NAVY }, line: { type: "none" } });
-  slide.addImage({ path: UNIFE_LOGO, x: 4.46, y: 5.22, w: 1.09, h: 0.35 });
-}
 
 function darkBg(slide, circleY) {
   slide.background = { fill: C.TEAL };
@@ -47,7 +40,6 @@ function sectionSlide(prs, num, title, subtitle) {
   slide.addText(num, { x: 0.55, y: 0.25, w: 1.20, h: 0.65, fontFace: "Trebuchet MS", fontSize: 52, bold: true, color: C.WHITE });
   slide.addText(title, { x: 0.60, y: 0.95, w: 8.80, h: 0.55, fontFace: "Trebuchet MS", fontSize: 26, bold: true, color: C.WHITE });
   if (subtitle) slide.addText(subtitle, { x: 0.60, y: 1.50, w: 8.80, h: 0.35, fontFace: "Trebuchet MS", fontSize: 11, bold: true, color: C.WHITE });
-  addFooter(slide);
 }
 
 function addCard(slide, x, y, w, h, color, header, bodyLines, fontSize) {
@@ -65,7 +57,7 @@ function slideNlf1(prs) {
 
   // Content slide
   const slide = prs.addSlide();
-  lightHeader(slide, "NLF Burst Streaming \u2014 NEW (June 2026)");
+  lightHeader(slide, "NLF Burst Streaming");
 
   // LEFT card — Burst Mechanism (TEAL)
   addCard(
@@ -115,17 +107,13 @@ function slideNlf1(prs) {
     { x: 0.55, y: 4.65, w: 8.90, h: 0.40, fontFace: "Consolas", fontSize: 10, color: C.TEAL_DARK, valign: "middle" }
   );
 
-  addFooter(slide);
-
-  // Source annotation (invisible, for traceability)
-  // CHANGELOG: 9 June 2026 — NLF Burst Streaming
 }
 
 // ─── Slide N2 — NLF Confidence Gate ─────────────────────────────────────
 
 function slideNlf2(prs) {
   const slide = prs.addSlide();
-  lightHeader(slide, "NLF Confidence Gate \u2014 NEW (June 2026)");
+  lightHeader(slide, "NLF Confidence Gate");
 
   // Four confidence tier cards in a 2x2 grid
   const cardW = 4.40;
@@ -197,10 +185,6 @@ function slideNlf2(prs) {
     { x: 0.55, y: 4.65, w: 8.90, h: 0.40, fontFace: "Consolas", fontSize: 9.5, color: C.TEAL_DARK, valign: "middle" }
   );
 
-  addFooter(slide);
-
-  // Source annotation (invisible, for traceability)
-  // CHANGELOG: 9 June 2026 — EXCELLENT confidence tier
 }
 
 // ─── Export ─────────────────────────────────────────────────────────────
