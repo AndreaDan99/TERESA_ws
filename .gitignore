@@ -61,3 +61,10 @@ TERESA_z1_progress.pdf
 
 # Presentations
 TERESA_WBC_v2_27May.pptx
+
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
