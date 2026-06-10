@@ -319,6 +319,10 @@ class NLFSkeletonNode(Node):
            'vertices3d': (6890,3) meters|None, 'box_id': int}
         """
         if not self._nlf_ready:
+            self.get_logger().debug(
+                'NLF inference skipped — model not loaded',
+                throttle_duration_sec=10.0
+            )
             return []
 
         try:
@@ -405,6 +409,10 @@ class NLFSkeletonNode(Node):
 
         # ── Pause guard: skip inference when streaming is paused ──────────
         if self._streaming_paused:
+            self.get_logger().debug(
+                f'NLF streaming paused — frame {self._frame_count} skipped',
+                throttle_duration_sec=5.0
+            )
             return
 
         # ── Frame-skip: only run NLF every N frames ───────────────────────
@@ -414,9 +422,17 @@ class NLFSkeletonNode(Node):
         if not self._nlf_ready and not self._nlf_stub_warned:
             self._init_model()
         if self.cam_info is None:
+            self.get_logger().warn(
+                'NLF waiting for camera info — /orbbec/color/camera_info not received yet',
+                throttle_duration_sec=10.0
+            )
             return
 
-        img = self.bridge.imgmsg_to_cv2(msg, "rgb8")
+        try:
+            img = self.bridge.imgmsg_to_cv2(msg, "rgb8")
+        except Exception as e:
+            self.get_logger().error(f'NLF CvBridge conversion failed: {e}', throttle_duration_sec=5.0)
+            return
         detections = self._run_nlf_inference(img)
 
         # ── EMA smoothing per person ──────────────────────────────────────
@@ -482,6 +498,12 @@ class NLFSkeletonNode(Node):
         # ── Burst detection counting ──────────────────────────────────────────
         if self._burst_active:
             target = next((d for d in processed if d["id"] == self._target_id), None)
+            if target is None:
+                self.get_logger().debug(
+                    f'NLF burst: no target in frame {self._frame_count} '
+                    f'(detections: {len(detections)})',
+                    throttle_duration_sec=2.0
+                )
             if target is not None:
                 pts = target["pts_3d"]
                 # Check 4 torso joints are valid (non-NaN)
@@ -513,6 +535,12 @@ class NLFSkeletonNode(Node):
 
         # ── Suppress publish during active burst ──────────────────────────────
         if self._burst_active:
+            elapsed = time.time() - self._burst_start_time
+            self.get_logger().debug(
+                f'NLF burst in progress: {self._burst_detection_count}/'
+                f'{self._burst_min_detections} detections, {elapsed:.1f}s elapsed',
+                throttle_duration_sec=2.0
+            )
             return  # skip _publish_target_pose, _publish_all_markers, mesh publish
 
         # ── Publish target pose ───────────────────────────────────────────

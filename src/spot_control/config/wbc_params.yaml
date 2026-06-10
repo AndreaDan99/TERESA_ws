@@ -46,10 +46,6 @@ wbc_qp_controller:
     #   "gram_schmidt" → Gram-Schmidt Y_ee ∥ home Y (prevents twist, may force wrist rotation)
     orientation_mode: "minrot"
 
-    # Home pose Z elevation during LOCKING [m].
-    # Raised above normal HOME_POS (0.44) to give RealSense a better vantage point.
-    home_lock_z: 0.60
-
     # Workspace safety margin [m] — keep in sync with z1_fsm_params.yaml
     # Uses the same WorkspaceChecker class (z1_vision.workspace_checker).
     # EE goals are clipped to max_reach - safety_margin.

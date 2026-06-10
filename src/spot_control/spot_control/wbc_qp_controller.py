@@ -105,7 +105,6 @@ class WBCQPControllerNode(Node):
         self.declare_parameter('joint_states_topic', '/joint_states')
         self.declare_parameter('home_orientation', [-0.0062, 0.4107, 0.0021, 0.9118])
         self.declare_parameter('orientation_mode', 'minrot')
-        self.declare_parameter('home_lock_z', 0.60)
 
         p = lambda n: self.get_parameter(n).value
         self._dry_run       = bool(p('dry_run'))
@@ -129,7 +128,6 @@ class WBCQPControllerNode(Node):
         self._update_period        = float(p('update_period'))
         self._home_orientation = np.array([float(x) for x in p('home_orientation')])
         self._orientation_mode = p('orientation_mode')
-        self._home_lock_z      = float(p('home_lock_z'))
 
         # ── Pinocchio ─────────────────────────────────────────────────────
         urdf = p('urdf_path')
@@ -570,12 +568,16 @@ class WBCQPControllerNode(Node):
         self._pub_en.publish(Bool(data=re_enable))
 
     def _send_home(self) -> None:
-        home_pos = np.array([0.144, -0.005, 0.530])
-        home_quat = np.array([0.0182, 0.1521, -0.0217, 0.9880])
+        """Send first search pose (Forward Left) with 10° downward camera tilt."""
+        if not self._enabled:
+            self.get_logger().warn('_send_home skipped: node not enabled')
+            return
+        home_pos = np.array([0.12, -0.20, 0.53])
+        home_quat = np.array([-0.0055, 0.0872, 0.0005, 0.9962])
         home_pose = _make_pose_stamped(home_pos, home_quat)
         self._pub_ik.publish(home_pose)
         self._pub_en.publish(Bool(data=True))
-        self.get_logger().info('🔒 Lock home pose sent [0.144, -0.005, 0.530]')
+        self.get_logger().info('🔒 Lock pose sent (search pose 1) [0.12, -0.20, 0.53]')
 
     # ── PERCEPTUAL_SCAN mode (APPROACHING) ───────────────────────────────
 
