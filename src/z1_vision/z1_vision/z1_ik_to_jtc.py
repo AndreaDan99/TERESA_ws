@@ -71,6 +71,7 @@ class Z1IKToJTC(Node):
         self.ik_enabled = False
         self.busy = False
         self.last_goal: PoseStamped | None = None
+        self._use_current_js = True
 
         self.declare_parameter("traj_points", 25)  # >=3
         self.traj_points = int(self.get_parameter("traj_points").value)
@@ -148,8 +149,9 @@ class Z1IKToJTC(Node):
         target_SE3 = pin.SE3(T[:3, :3], T[:3, 3])
 
         q = self.q.copy()
-        if self.have_js and self.q_meas is not None:
+        if self._use_current_js and self.have_js and self.q_meas is not None:
             q[:6] = self.q_meas
+            self._use_current_js = False
         for i in range(self.max_iter):
 
             pin.forwardKinematics(self.model, self.data, q)
@@ -297,6 +299,7 @@ class Z1IKToJTC(Node):
             self.busy = False
             self.last_goal = None
             self.ik_enabled = False
+            self._use_current_js = True
             return
 
         ok = self.send_trajectory(q_target)
@@ -306,6 +309,7 @@ class Z1IKToJTC(Node):
             self.busy = False
             self.last_goal = None
             self.ik_enabled = False
+            self._use_current_js = True
 
     def goal_response_callback(self, future):
         goal_handle = future.result()
@@ -314,6 +318,7 @@ class Z1IKToJTC(Node):
             self.busy = False
             self.last_goal = None
             self.ik_enabled = False
+            self._use_current_js = True
             return
 
         self.get_logger().info("✅ Goal accepted")
@@ -344,6 +349,7 @@ class Z1IKToJTC(Node):
         self.busy = False
         self.last_goal = None
         self.ik_enabled = False
+        self._use_current_js = True
 
     # ==========================================================
     def goal_callback(self, msg: PoseStamped):
