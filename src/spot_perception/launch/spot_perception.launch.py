@@ -155,6 +155,8 @@ def generate_launch_description():
             'knee_angle_stand_min': 160.0,
             'knee_angle_sit_max': 120.0,
             'torso_angle_lying_min': 65.0,
+            'verticality_ratio_lying_max': 0.30,
+            'knee_angle_lying_bonus_max': 140.0,
         }]
     )
 

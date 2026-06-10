@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 import math
+from collections import deque
+
 import numpy as np
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, DurabilityPolicy
 
 from geometry_msgs.msg import PoseArray, Point
 from visualization_msgs.msg import Marker
-from std_msgs.msg import String, Float32
+from std_msgs.msg import String, Float32, Bool
 
 
 # ============================================================
@@ -65,18 +68,35 @@ class HumanPostureAnalyzerSpot(Node):
         self.declare_parameter("knee_angle_sit_max", 120.0)
         self.declare_parameter("torso_angle_lying_min", 65.0)
         self.declare_parameter("hip_knee_ratio_sit_max", 0.8)
+        self.declare_parameter("verticality_ratio_lying_max", 0.30)
+        self.declare_parameter("knee_angle_lying_bonus_max", 140.0)
 
         self.knee_stand = float(self.get_parameter("knee_angle_stand_min").value)
         self.knee_sit = float(self.get_parameter("knee_angle_sit_max").value)
         self.torso_lying = float(self.get_parameter("torso_angle_lying_min").value)
         self.hip_knee_ratio = float(self.get_parameter("hip_knee_ratio_sit_max").value)
+        self.verticality_ratio_lying_max = float(self.get_parameter("verticality_ratio_lying_max").value)
+        self.knee_lying_bonus = float(self.get_parameter("knee_angle_lying_bonus_max").value)
 
-        # Subscriber
+        # Temporal smoothing: 5-frame deque majority voting
+        self._posture_history = deque(maxlen=5)
+
+        # Perception enable flag (disabled by default)
+        self._perception_enabled = False
+        self._last_enabled_state = False
+
+        # Subscriber — human pose points
         self.sub = self.create_subscription(
             PoseArray,
             "/human_pose/points_3d",
             self.cb_points,
             10
+        )
+
+        # Subscriber — perception enable toggle (transient_local = latched)
+        qos_transient_local = QoSProfile(depth=10, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self._perception_sub = self.create_subscription(
+            Bool, "/wbc/perception_enable", self._cb_perception_enable, qos_transient_local
         )
 
         # Publishers
@@ -93,6 +113,14 @@ class HumanPostureAnalyzerSpot(Node):
     # ============================================================
 
     def cb_points(self, msg: PoseArray):
+        if not self._perception_enabled:
+            self.pub_posture.publish(String(data="UNKNOWN"))
+            self.pub_conf.publish(Float32(data=0.0))
+            self.pub_height.publish(Float32(data=nan()))
+            self.pub_angle.publish(Float32(data=nan()))
+            self.get_logger().info("Perception disabled", throttle_duration_sec=10.0)
+            return
+
         pts = []
         for p in msg.poses:
             if math.isnan(p.position.x):
@@ -102,20 +130,37 @@ class HumanPostureAnalyzerSpot(Node):
 
         posture, conf, height, angle, origin, vec = self.estimate_posture(pts)
 
-        self.pub_posture.publish(String(data=posture))
-        self.pub_conf.publish(Float32(data=conf))
-        self.pub_height.publish(Float32(data=height if height is not None else nan()))
-        self.pub_angle.publish(Float32(data=angle if angle is not None else nan()))
+        # Temporal smoothing: 5-frame deque majority voting
+        if len(self._posture_history) == 0:
+            for _ in range(self._posture_history.maxlen):
+                self._posture_history.append(posture)
+        else:
+            self._posture_history.append(posture)
 
-        if origin is not None and vec is not None:
-            self.publish_torso_marker(origin, vec, msg.header.stamp)
+        if self._posture_history.count(posture) >= 3:
+            self.pub_posture.publish(String(data=posture))
+            self.pub_conf.publish(Float32(data=conf))
+            self.pub_height.publish(Float32(data=height if height is not None else nan()))
+            self.pub_angle.publish(Float32(data=angle if angle is not None else nan()))
 
-        if conf > 0.5:
-            h_str = f"{height:.2f}m" if height is not None else "N/A"
-            self.get_logger().info(
-                f"Posture: {posture} (conf: {conf:.2f}, height: {h_str}, angle: {angle:.1f}°)",
-                throttle_duration_sec=2.0
-            )
+            if origin is not None and vec is not None:
+                self.publish_torso_marker(origin, vec, msg.header.stamp)
+
+            if conf > 0.5:
+                h_str = f"{height:.2f}m" if height is not None else "N/A"
+                self.get_logger().info(
+                    f"Posture: {posture} (conf: {conf:.2f}, height: {h_str}, angle: {angle:.1f}°)",
+                    throttle_duration_sec=2.0
+                )
+
+    def _cb_perception_enable(self, msg: Bool):
+        was_enabled = self._perception_enabled
+        self._perception_enabled = msg.data
+        if not was_enabled and self._perception_enabled:
+            self._posture_history.clear()
+            self.get_logger().info("🔓 Perception ENABLED")
+        elif was_enabled and not self._perception_enabled:
+            self.get_logger().info("🔒 Perception DISABLED — publishing UNKNOWN")
 
     # ============================================================
     # Core logic
@@ -154,6 +199,7 @@ class HumanPostureAnalyzerSpot(Node):
             if pts[KNEE_RIGHT] is not None:
                 feet.append(pts[KNEE_RIGHT])
 
+        feet_mid = None
         if len(shoulders) > 0 and len(feet) > 0:
             sh_mid = np.mean(shoulders, axis=0)
             feet_mid = np.mean(feet, axis=0)
@@ -195,6 +241,20 @@ class HumanPostureAnalyzerSpot(Node):
             return "UNKNOWN", 0.0, height, None, None, None
 
         sh_mid = np.mean(shoulders, axis=0)
+
+        # --------------------------------------------------
+        # Body length (Euclidean distance, distance-invariant)
+        # --------------------------------------------------
+        body_length = None
+        if feet_mid is not None:
+            body_length = float(np.linalg.norm(sh_mid - feet_mid))
+        elif knee_mid is not None:
+            body_length = float(np.linalg.norm(sh_mid - knee_mid))
+
+        # Verticality ratio (distance-invariant: standing≈1.0, lying≈0.0)
+        verticality_ratio = None
+        if height is not None and body_length is not None and body_length > 1e-9:
+            verticality_ratio = height / body_length
 
         # SPINE vector (SPINE1→SPINE3) preferred for torso angle
         if pts[SPINE1] is not None and pts[SPINE3] is not None:
@@ -246,11 +306,14 @@ class HumanPostureAnalyzerSpot(Node):
         posture = "UNKNOWN"
         score = 0.0
 
-        # LYING
-        if torso_angle > self.torso_lying and (height is None or height < 0.50):
+        # LYING: distance-invariant verticality ratio + adaptive torso threshold
+        effective_torso_lying = self.torso_lying + (10.0 if body_length is not None and body_length < 0.5 else 0.0)
+        if torso_angle > effective_torso_lying and (
+            height is None or (verticality_ratio is not None and verticality_ratio < self.verticality_ratio_lying_max)
+        ):
             posture = "LYING"
             score = 0.85
-            if avg_knee_angle is not None and avg_knee_angle < 140:
+            if avg_knee_angle is not None and avg_knee_angle < self.knee_lying_bonus:
                 score += 0.05
 
         # SITTING

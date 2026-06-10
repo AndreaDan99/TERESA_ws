@@ -429,6 +429,11 @@ body{
     <button id="btn-manual" disabled onclick="ctrl.toggleManualGate()">MANUAL</button>
     <button id="btn-auto" disabled onclick="ctrl.toggleManualGate()">AUTO</button>
   </div>
+  <div class="btn-group" id="perception-toggle">
+    <span style="color:var(--text-dim);font-size:11px;padding:5px 0;">Perception:</span>
+    <button id="btn-perc-on" disabled onclick="ctrl.togglePerception()">ON</button>
+    <button id="btn-perc-off" disabled onclick="ctrl.togglePerception()">OFF</button>
+  </div>
 </div>
 
 <script src="https://unpkg.com/roslib@1.4.0/build/roslib.min.js"></script>
@@ -445,7 +450,7 @@ class TeresaController{
     this.odomFrame='my_spot/odom';this.bodyFrame='my_spot/body';this.updateRate=10;
     // control state
     this.hasStartPose=false;this.startPose=null;this.goalPose=null;
-    this.isReturning=false;this.kcState='IDLE';this.tfSystemReady=false;this._tfWasReady=false;this.bodyInOdom=null;this.manualScanGate=true;this._topicsReady=false;
+    this.isReturning=false;this.kcState='IDLE';this.tfSystemReady=false;this._tfWasReady=false;this.bodyInOdom=null;this.manualScanGate=true;this.perceptionEnabled=false;this._topicsReady=false;
     // camera state
     this.camerasOpen=false;this.paused=false;
     this.orbbecHidden=false;this.rsHidden=false;this.orbbecReady=false;this.rsReady=false;
@@ -568,7 +573,7 @@ class TeresaController{
     this.ros.on('connection',()=>{
       $('ros-dot').className='dot online';$('ros-status').textContent='connected';
       this.log('Rosbridge connected','info');this.initTopics();
-      this.renderGateToggle();
+      this.renderGateToggle();this.renderPerceptionToggle();
     });
     this.ros.on('close',()=>{
       $('ros-dot').className='dot offline';$('ros-status').textContent='disconnected';
@@ -614,12 +619,19 @@ class TeresaController{
       this.manualScanGate = msg.data;
       this.renderGateToggle();
     });
+    this.perceptionPub = new ROSLIB.Topic({ros: this.ros, name: '/wbc/perception_enable', messageType: 'std_msgs/Bool'});
+    this.perceptionSub = new ROSLIB.Topic({ros: this.ros, name: '/wbc/perception_enable', messageType: 'std_msgs/Bool'});
+    this.perceptionSub.subscribe(msg => {
+      this.perceptionEnabled = msg.data;
+      this.renderPerceptionToggle();
+    });
+    this.perceptionEnabled = false; // default OFF
     this.tfReadySub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/tf_ready',messageType:'std_msgs/Bool'});
     this.tfReadySub.subscribe(msg=>{
       this.tfSystemReady=msg.data;
       if(msg.data){
         $('tf-dot').className='dot online';$('tf-status').textContent='ready';
-        this.enableMissionButtons();this.renderGateToggle();
+        this.enableMissionButtons();this.renderGateToggle();this.renderPerceptionToggle();
         if(!this._tfWasReady){this._tfWasReady=true;this.log('TF READY','info');$('state-detail').textContent='SpotCore connected. Press START or "s" to begin.';}
       }else{
         $('tf-dot').className='dot offline';$('tf-status').textContent='LOST';
@@ -1140,11 +1152,11 @@ class TeresaController{
   }
   getCurrentYaw(){if(!this.bodyInOdom)return 0;const r=this.bodyInOdom.rotation;return Math.atan2(2*(r.w*r.z+r.x*r.y),1-2*(r.y*r.y+r.z*r.z));}
   clamp(v,lo,hi){return Math.max(lo,Math.min(hi,v));}
-  disableAll(){['btn-start','btn-return','btn-update','btn-step','btn-stand','btn-sit','btn-pon','btn-poff','btn-stop','pause-btn'].forEach(id=>$(id).disabled=true);$('btn-manual').disabled=true;$('btn-auto').disabled=true;}
+  disableAll(){['btn-start','btn-return','btn-update','btn-step','btn-stand','btn-sit','btn-pon','btn-poff','btn-stop','pause-btn'].forEach(id=>$(id).disabled=true);$('btn-manual').disabled=true;$('btn-auto').disabled=true;$('btn-perc-on').disabled=true;$('btn-perc-off').disabled=true;}
 
   enableAlways(){$('btn-stop').disabled=false;$('btn-stand').disabled=false;$('btn-sit').disabled=false;$('btn-pon').disabled=false;$('btn-poff').disabled=false;$('pause-btn').disabled=false;}
 
-  enableMissionButtons(){['btn-start','btn-return','btn-update','btn-step','btn-stop','btn-stand','btn-sit','btn-pon','btn-poff','pause-btn'].forEach(id=>$(id).disabled=false);$('btn-manual').disabled=false;$('btn-auto').disabled=false;}
+  enableMissionButtons(){['btn-start','btn-return','btn-update','btn-step','btn-stop','btn-stand','btn-sit','btn-pon','btn-poff','pause-btn'].forEach(id=>$(id).disabled=false);$('btn-manual').disabled=false;$('btn-auto').disabled=false;$('btn-perc-on').disabled=false;$('btn-perc-off').disabled=false;}
 
   /* ── Joystick ─────────────────────────────── */
   setJoystickMode(m){
@@ -1239,6 +1251,16 @@ class TeresaController{
   renderGateToggle(){
     $('btn-manual').classList.toggle('active', this.manualScanGate);
     $('btn-auto').classList.toggle('active', !this.manualScanGate);
+  }
+  togglePerception(){
+    this.perceptionEnabled = !this.perceptionEnabled;
+    this.perceptionPub.publish({data: this.perceptionEnabled});
+    this.renderPerceptionToggle();
+    this.log('Perception → '+(this.perceptionEnabled?'ON':'OFF'),'info');
+  }
+  renderPerceptionToggle(){
+    $('btn-perc-on').classList.toggle('active', this.perceptionEnabled);
+    $('btn-perc-off').classList.toggle('active', !this.perceptionEnabled);
   }
   onStand(){this.standSrv.callService(new ROSLIB.ServiceRequest(),r=>{this.log('Stand: '+(r&&r.success?'OK':'FAILED'),r&&r.success?'info':'error');});}
   onSit(){this.sitSrv.callService(new ROSLIB.ServiceRequest(),r=>{this.log('Sit: '+(r&&r.success?'OK':'FAILED'),r&&r.success?'info':'error');});}
