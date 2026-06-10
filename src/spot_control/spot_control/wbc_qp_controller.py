@@ -488,7 +488,7 @@ class WBCQPControllerNode(Node):
             # TRANSIT to center
             (np.array([0.144, -0.005, 0.52]), np.array([0.0182, 0.1521, -0.0217, 0.9880]), "FWD-C"),
             # BEHIND RIGHT
-            (np.array([-0.067, 0.070, 0.52]), np.array([0.0906, -0.1890, -0.3976, 0.8932]), "BWD-R"),
+            (np.array([-0.077, 0.071, 0.52]), np.array([-0.115, 0.009, 0.932, 0.345]), "BWD-R"),
         ]
         poses = []
         for pos, quat, label in SEARCH_POSES:
