@@ -66,14 +66,21 @@ from spot_perception.sml_pose_indices import (
     NUM_JOINTS,
 )
 
-from teresa_utils.orientation import compute_ee_orientation
+import tf_transformations
 
-def compute_exposure_orientation(look_dir: np.ndarray) -> np.ndarray:
-    # Z1_realsense approach: X_ee straight DOWN (-Z in URDF standalone convention)
-    # Gram-Schmidt with Y_home reference keeps wrist near home config.
-    # Same as _orientation_for_xee from Z1_realsense branch — proven to work.
-    home_ori = [-0.0062, 0.4107, 0.0021, 0.9118]
-    return compute_ee_orientation(np.array([-1.0, 0.0, 0.0]), home_ori)
+def compute_exposure_orientation() -> np.ndarray:
+    # X_ee = DOWN [-1,0,0] — wrist points toward body
+    # Y_ee = BACKWARD [0,0,-1] — forces optical Z = -Y_ee = FORWARD toward body
+    # Z_ee = X × Y = [0,1,0] = LEFT
+    x_ee = np.array([-1.0, 0.0, 0.0])
+    y_ee = np.array([0.0, 0.0, -1.0])
+    z_ee = np.cross(x_ee, y_ee)
+    T = np.eye(4)
+    T[:3, 0] = x_ee
+    T[:3, 1] = y_ee
+    T[:3, 2] = z_ee
+    import tf_transformations
+    return tf_transformations.quaternion_from_matrix(T)
 
 
 # ── Home pose position (arm stowed, from wbc_qp_controller FWD-C) ─────────
@@ -695,7 +702,7 @@ class ExposurePoseTester(Node):
         # look_dir = surface - camera = direction camera should look.
         # So optical Z = look_dir, Y_ee = -look_dir.
         # X_ee points DOWN (-X in link00), orthogonalized to Y_ee.
-        quat = compute_exposure_orientation(ep.look_dir)
+        quat = compute_exposure_orientation()
 
         if self._spot_enabled and self._best_h is not None and self._camera_link00 is not None:
             cx, cy, cz = (
