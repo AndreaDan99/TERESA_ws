@@ -522,6 +522,7 @@ class ExposurePoseTester(Node):
         self._best_h: float | None = None
         self._best_p: float | None = None
         self._camera_link00: np.ndarray | None = None
+        self._spot_reset_pending: int | None = None
 
         # Generate virtual body and exposure grid
         kp = make_virtual_body(self._offset_x, self._offset_y, self._offset_z,
@@ -852,6 +853,28 @@ class ExposurePoseTester(Node):
                 if self._settling:
                     if self.get_clock().now() >= self._settle_deadline:
                         self._settling = False
+
+                        # Check if this was a Spot reset settle
+                        if self._spot_reset_pending is not None:
+                            idx = self._spot_reset_pending
+                            self._spot_reset_pending = None
+                            ep = self._points[idx]
+                            self.get_logger().info(
+                                f'🔍 Optimizing Spot body pose for point {idx+1} (after reset)...')
+                            camera_odom = (ep.camera_xyz[0] + self._z1_mount_x,
+                                           ep.camera_xyz[1],
+                                           ep.camera_xyz[2] + self._z1_mount_z)
+                            h, p = self._optimize_body_pose(camera_odom, idx)
+                            self._apply_body_pose(h, p)
+                            self._settling = True
+                            self._settle_deadline = (
+                                self.get_clock().now()
+                                + rclpy.duration.Duration(
+                                    seconds=self._body_settle_s))
+                            self.get_logger().info(
+                                f'⏳ Settling for {self._body_settle_s:.1f}s...')
+                            continue
+
                         if self._goto_idx is not None:
                             self.get_logger().info(
                                 f'  ✅ Settle complete — sending IK goal for point {self._goto_idx}')
@@ -885,6 +908,22 @@ class ExposurePoseTester(Node):
                             if self._ik_done or self._current_idx == 0:
                                 if self._current_idx < len(self._points):
                                     if self._spot_enabled:
+                                        # Reset Spot to default pose before optimization
+                                        # if it was moved by a previous point
+                                        if self._best_h is not None and (abs(self._best_h) > 1e-6 or abs(self._best_p) > 1e-6):
+                                            self.get_logger().info(
+                                                '↩  Resetting Spot to default pose...')
+                                            self._apply_body_pose(0.0, 0.0)
+                                            self._settling = True
+                                            self._settle_deadline = (
+                                                self.get_clock().now()
+                                                + rclpy.duration.Duration(
+                                                    seconds=1.0))
+                                            self._goto_idx = None
+                                            self._spot_reset_pending = self._current_idx
+                                            self.get_logger().info(
+                                                '⏳ Waiting for Spot reset settle...')
+                                            continue
                                         ep = self._points[self._current_idx]
                                         self.get_logger().info(
                                             f'🔍 Optimizing Spot body pose for point '
