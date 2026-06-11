@@ -751,6 +751,11 @@ class ExposurePoseTester(Node):
         )
 
     def _send_home(self):
+        # Reset Spot body pose to default
+        if self._spot_enabled:
+            self._apply_body_pose(0.0, 0.0)
+            self.get_logger().info('🏠 Spot reset to default (h=0, p=0)')
+        
         msg = PoseStamped()
         msg.header.frame_id = 'link00'
         msg.header.stamp = self.get_clock().now().to_msg()
