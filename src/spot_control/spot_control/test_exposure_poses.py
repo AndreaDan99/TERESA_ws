@@ -506,11 +506,11 @@ class ExposurePoseTester(Node):
         if self._spot_enabled:
             self._body_scale = 1.0
         else:
-            self._body_scale = 0.20
-            self._offset_x = 0.25   # camera vicina a home X=0.14
+            self._body_scale = 0.30
+            self._offset_x = 0.25   # corpo vicino
             self._offset_y = 0.0
             self._offset_z = 0.0
-            self._standoff = 0.50   # stessa Z di home (~0.51)
+            self._standoff = 0.30   # camera più bassa: Z≈0.31 (sweet spot)
             self.get_logger().info(
                 f'  Body scale: {self._body_scale:.2f}, offset_x: {self._offset_x:.2f}, offset_y: {self._offset_y:.2f}, standoff: {self._standoff:.2f} (arm-only)')
 
