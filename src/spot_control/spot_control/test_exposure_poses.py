@@ -634,8 +634,8 @@ class ExposurePoseTester(Node):
         Returns:
             (best_height, best_pitch) in meters and radians.
         """
-heights = [-0.25, -0.20, -0.15, -0.10, -0.05, 0.0]
-pitches = [0.0, 0.087, 0.17, 0.26, 0.35]  # 0°, 5°, 10°, 15°, 20° in rad
+        heights = [-0.25, -0.20, -0.15, -0.10, -0.05, 0.0]
+        pitches = [0.0, 0.087, 0.17, 0.26, 0.35]  # 0°, 5°, 10°, 15°, 20° in rad
         sweet_spot = np.array([0.35, 0.0, 0.30])
         mx, mz = self._z1_mount_x, self._z1_mount_z
 
