@@ -35,6 +35,7 @@ setup(
     entry_points={
         'console_scripts': [            
             'impedance_controller_realsense = z1_vision.impedance_controller_realsense:main',
+            'fk_reader = z1_vision.fk_reader:main',
             'realsense_surface_node = z1_vision.realsense_surface_node:main',
             'trajectory_manager = z1_vision.trajectory_manager:main',
             'z1_yolo_torso_tracker = z1_vision.z1_yolo_torso_tracker:main',

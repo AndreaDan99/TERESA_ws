@@ -50,5 +50,9 @@ class FKReader(Node):
             f'   👉 home_orientation: [{quat[0]:.4f}, {quat[1]:.4f}, {quat[2]:.4f}, {quat[3]:.4f}]'
         )
 
-rclpy.init()
-rclpy.spin(FKReader())
+def main():
+    rclpy.init()
+    rclpy.spin(FKReader())
+
+if __name__ == '__main__':
+    main()
