@@ -480,7 +480,7 @@ class ExposurePoseTester(Node):
             self._body_scale = 1.0
         else:
             self._body_scale = 0.30
-            self._offset_x = 0.45
+            self._offset_x = 0.55
             self._standoff = 0.35
             self.get_logger().info(
                 f'  Body scale: {self._body_scale:.2f}, offset_x: {self._offset_x:.2f}, standoff: {self._standoff:.2f} (arm-only)')
