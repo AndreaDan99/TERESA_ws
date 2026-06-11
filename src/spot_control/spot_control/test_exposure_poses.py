@@ -229,8 +229,12 @@ def make_virtual_body(offset_x: float, offset_y: float,
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _gen_exposure_grid(kp: dict[int, np.ndarray],
-                       standoff: float) -> list[ExposurePoint]:
-    z_off = np.array([-standoff, 0.0, 0.0])
+                       standoff: float,
+                       standoff_vertical: bool = True) -> list[ExposurePoint]:
+    if standoff_vertical:
+        z_off = np.array([0.0, 0.0, standoff])
+    else:
+        z_off = np.array([-standoff, 0.0, 0.0])
     points: list[ExposurePoint] = []
 
     for region in REGION_ORDER:
@@ -425,6 +429,9 @@ class ExposurePoseTester(Node):
         self._standoff = float(
             self.declare_parameter('standoff', 0.50)
             .get_parameter_value().double_value)
+        self._standoff_vertical = bool(
+            self.declare_parameter('standoff_vertical', True)
+            .get_parameter_value().bool_value)
 
         # Spot body pose parameters
         self._spot_enabled = bool(
@@ -487,7 +494,7 @@ class ExposurePoseTester(Node):
         kp = make_virtual_body(self._offset_x, self._offset_y, self._offset_z,
                                 self._orientation, self._body_scale)
         self._virtual_kp = kp
-        self._points = _gen_exposure_grid(kp, self._standoff)
+        self._points = _gen_exposure_grid(kp, self._standoff, self._standoff_vertical)
 
         # Timers
         self._grid_timer = self.create_timer(0.2, self._publish_grid_markers)
@@ -500,7 +507,10 @@ class ExposurePoseTester(Node):
             f'({self._offset_x:.1f}, {self._offset_y:.1f}, {self._offset_z:.1f})'
         )
         self.get_logger().info(f'  Orientation: {self._orientation}')
-        self.get_logger().info(f'  Standoff: {self._standoff:.2f}m')
+        if self._standoff_vertical:
+            self.get_logger().info(f'  Standoff: VERTICAL ({self._standoff:.2f}m, EE down toward body)')
+        else:
+            self.get_logger().info(f'  Standoff: HORIZONTAL ({self._standoff:.2f}m, EE forward along body)')
         if self._spot_enabled:
             self.get_logger().info(
                 f'  Spot body pose: ENABLED '
