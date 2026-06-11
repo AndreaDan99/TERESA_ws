@@ -756,25 +756,25 @@ class ExposurePoseTester(Node):
             m.pose.position.y = float(ep.camera_xyz[1])
             m.pose.position.z = float(ep.camera_xyz[2])
             if i == self._current_idx and self._running and not self._paused:
-                m.scale.x = 0.05
-                m.scale.y = 0.05
-                m.scale.z = 0.05
+                m.scale.x = 0.025
+                m.scale.y = 0.025
+                m.scale.z = 0.025
                 m.color.r = cr
                 m.color.g = cg
                 m.color.b = cb
                 m.color.a = 1.0
             elif i < self._current_idx:
-                m.scale.x = 0.03
-                m.scale.y = 0.03
-                m.scale.z = 0.03
+                m.scale.x = 0.015
+                m.scale.y = 0.015
+                m.scale.z = 0.015
                 m.color.r = cr
                 m.color.g = cg
                 m.color.b = cb
                 m.color.a = 0.4
             else:
-                m.scale.x = 0.03
-                m.scale.y = 0.03
-                m.scale.z = 0.03
+                m.scale.x = 0.015
+                m.scale.y = 0.015
+                m.scale.z = 0.015
                 m.color.r = cr
                 m.color.g = cg
                 m.color.b = cb
