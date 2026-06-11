@@ -698,11 +698,21 @@ class ExposurePoseTester(Node):
         quat = compute_exposure_orientation()
 
         if self._spot_enabled and self._best_h is not None and self._camera_link00 is not None:
-            cx, cy, cz = (
-                float(self._camera_link00[0]),
-                float(self._camera_link00[1]),
-                float(self._camera_link00[2]),
-            )
+            # Optimization transforms camera from odom to link00 frame.
+            # Our camera_xyz is already in link00 frame. When h=0,p=0
+            # (no body movement), use original coordinates directly.
+            if abs(self._best_h) < 1e-6 and abs(self._best_p) < 1e-6:
+                cx, cy, cz = (
+                    float(ep.camera_xyz[0]),
+                    float(ep.camera_xyz[1]),
+                    float(ep.camera_xyz[2]),
+                )
+            else:
+                cx, cy, cz = (
+                    float(self._camera_link00[0]),
+                    float(self._camera_link00[1]),
+                    float(self._camera_link00[2]),
+                )
         else:
             cx = float(ep.camera_xyz[0])
             cy = float(ep.camera_xyz[1])
