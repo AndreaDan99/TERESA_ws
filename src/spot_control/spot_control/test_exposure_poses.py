@@ -202,7 +202,8 @@ _VIRTUAL_BODY_LYING: dict[int, tuple[float, float, float]] = {
 
 def make_virtual_body(offset_x: float, offset_y: float,
                       offset_z: float,
-                      orientation: str = 'lying') -> dict[int, np.ndarray]:
+                      orientation: str = 'lying',
+                      body_scale: float = 1.0) -> dict[int, np.ndarray]:
     """Return dict {SMPL_index: world_xyz} for a virtual body at given offset.
 
     Args:
@@ -210,6 +211,7 @@ def make_virtual_body(offset_x: float, offset_y: float,
         offset_y: Lateral offset in world frame.
         offset_z: Vertical offset in world frame.
         orientation: 'lying' (body horizontal along Y) or 'standing' (body vertical).
+        body_scale: Scale factor for body span (1.0=full size, 0.35=fit Z1 workspace).
     """
     if orientation == 'standing':
         body = _VIRTUAL_BODY_STANDING
@@ -218,7 +220,7 @@ def make_virtual_body(offset_x: float, offset_y: float,
     kp: dict[int, np.ndarray] = {}
     base = np.array([offset_x, offset_y, offset_z], dtype=float)
     for idx, rel in body.items():
-        kp[idx] = base + np.array(rel, dtype=float)
+        kp[idx] = base + np.array(rel, dtype=float) * body_scale
     return kp
 
 
@@ -466,6 +468,14 @@ class ExposurePoseTester(Node):
         self._goto_idx: int | None = None
         self._point_body_pose: dict[int, tuple[float, float, np.ndarray]] = {}
 
+        # Auto-scale body for arm-only mode
+        if self._spot_enabled:
+            self._body_scale = 1.0
+        else:
+            self._body_scale = 0.35
+            self.get_logger().info(
+                f'  Body scale: {self._body_scale:.2f} (arm-only — shrunk to fit Z1 workspace)')
+
         # Spot body pose state
         self._settling = False
         self._settle_deadline = None
@@ -475,7 +485,7 @@ class ExposurePoseTester(Node):
 
         # Generate virtual body and exposure grid
         kp = make_virtual_body(self._offset_x, self._offset_y, self._offset_z,
-                                self._orientation)
+                                self._orientation, self._body_scale)
         self._virtual_kp = kp
         self._points = _gen_exposure_grid(kp, self._standoff)
 
