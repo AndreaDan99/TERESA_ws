@@ -57,7 +57,6 @@ from geometry_msgs.msg import Pose, PoseArray, PoseStamped, Twist
 from std_msgs.msg import Bool, Int32
 from visualization_msgs.msg import Marker, MarkerArray
 
-from teresa_utils.orientation import compute_ee_orientation_minrot
 from spot_perception.sml_pose_indices import (
     PELVIS, HIP_LEFT, HIP_RIGHT, SPINE1, KNEE_LEFT, KNEE_RIGHT,
     SPINE2, ANKLE_LEFT, ANKLE_RIGHT, SPINE3, FOOT_LEFT, FOOT_RIGHT,
@@ -67,8 +66,53 @@ from spot_perception.sml_pose_indices import (
     NUM_JOINTS,
 )
 
-# ── Home orientation (from exposure_scanner.py) ──────────────────────────
-HOME_ORI = np.array([-0.0062, 0.4107, 0.0021, 0.9118])
+def compute_exposure_orientation(look_dir: np.ndarray) -> np.ndarray:
+    """
+    Compute EE orientation for exposure scan.
+
+    Camera optical Z (view direction) = look_dir.
+    From TF analysis: optical Z = -Y_ee, so Y_ee = -look_dir.
+    X_ee points DOWN (-X in link00) = [-1, 0, 0], orthogonalized to Y_ee.
+    Z_ee = X_ee × Y_ee (right-handed).
+
+    Args:
+        look_dir: (3,) desired camera view direction (optical Z) — normalized internally.
+
+    Returns:
+        [x, y, z, w] quaternion as numpy array.
+    """
+    look_dir = look_dir / np.linalg.norm(look_dir)
+
+    # Y_ee = -look_dir (since optical Z = -Y_ee)
+    y_desired = -look_dir
+
+    # X_ee: point DOWN (-X in link00)
+    x_desired = np.array([-1.0, 0.0, 0.0])
+
+    # Gram-Schmidt: make X_ee orthogonal to Y_ee
+    x_ee = x_desired - np.dot(x_desired, y_desired) * y_desired
+    x_norm = float(np.linalg.norm(x_ee))
+    if x_norm < 1e-6:
+        # Fallback: use Z from cross product
+        z_temp = np.cross(y_desired, x_desired)
+        x_ee = np.cross(z_temp, y_desired)
+        x_norm = float(np.linalg.norm(x_ee))
+    x_ee /= x_norm
+
+    # Y_ee = y_desired (already orthogonal to X_ee after Gram-Schmidt)
+    y_ee = y_desired
+
+    # Z_ee = X_ee × Y_ee (right-handed)
+    z_ee = np.cross(x_ee, y_ee)
+
+    # Build rotation matrix and convert to quaternion
+    import tf_transformations
+    T = np.eye(4)
+    T[:3, 0] = x_ee
+    T[:3, 1] = y_ee
+    T[:3, 2] = z_ee
+    return tf_transformations.quaternion_from_matrix(T)
+
 
 # ── Home pose position (arm stowed, from wbc_qp_controller FWD-C) ─────────
 HOME_POS = np.array([0.144, -0.005, 0.52])
@@ -686,8 +730,11 @@ class ExposurePoseTester(Node):
 
     def _send_ik_goal(self, idx: int):
         ep = self._points[idx]
-        x_ee = ep.look_dir
-        quat = compute_ee_orientation_minrot(x_ee, HOME_ORI.tolist())
+        # Camera optical Z = -Y_ee (from TF analysis).
+        # look_dir = surface - camera = direction camera should look.
+        # So optical Z = look_dir, Y_ee = -look_dir.
+        # X_ee points DOWN (-X in link00), orthogonalized to Y_ee.
+        quat = compute_exposure_orientation(ep.look_dir)
 
         if self._spot_enabled and self._best_h is not None and self._camera_link00 is not None:
             cx, cy, cz = (
