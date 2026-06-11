@@ -51,7 +51,7 @@ from geometry_msgs.msg import Pose, PoseArray, PoseStamped, Twist
 from std_msgs.msg import Bool, Int32
 from visualization_msgs.msg import Marker, MarkerArray
 
-from teresa_utils.orientation import compute_ee_orientation
+from teresa_utils.orientation import compute_ee_orientation_minrot
 from spot_perception.sml_pose_indices import (
     PELVIS, HIP_LEFT, HIP_RIGHT, SPINE1, KNEE_LEFT, KNEE_RIGHT,
     SPINE2, ANKLE_LEFT, ANKLE_RIGHT, SPINE3, FOOT_LEFT, FOOT_RIGHT,
@@ -660,7 +660,7 @@ class ExposurePoseTester(Node):
     def _send_ik_goal(self, idx: int):
         ep = self._points[idx]
         x_ee = ep.look_dir
-        quat = compute_ee_orientation(x_ee, HOME_ORI.tolist())
+        quat = compute_ee_orientation_minrot(x_ee, HOME_ORI.tolist())
 
         if self._spot_enabled and self._best_h is not None and self._camera_link00 is not None:
             cx, cy, cz = (
