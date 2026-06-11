@@ -668,11 +668,10 @@ class ExposurePoseTester(Node):
                 float(self._camera_link00[2]),
             )
         else:
-            cx, cy, cz = (
-                float(ep.camera_xyz[0]),
-                float(ep.camera_xyz[1]),
-                float(ep.camera_xyz[2]),
-            )
+            # Arm-only: camera_xyz is in world frame, convert to link00
+            cx = float(ep.camera_xyz[0] - self._z1_mount_x)
+            cy = float(ep.camera_xyz[1])
+            cz = float(ep.camera_xyz[2] - self._z1_mount_z)
 
         goal = PoseStamped()
         goal.header.frame_id = 'link00'
