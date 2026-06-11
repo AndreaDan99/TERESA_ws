@@ -70,9 +70,9 @@ def compute_exposure_orientation(look_dir: np.ndarray) -> np.ndarray:
     """
     Compute EE orientation for exposure scan.
 
-    Camera optical Z (view direction) = look_dir.
+    Camera optical Z (view direction) = look_dir (should point DOWN at body).
     From TF analysis: optical Z = -Y_ee, so Y_ee = -look_dir.
-    X_ee points DOWN (-X in link00) = [-1, 0, 0], orthogonalized to Y_ee.
+    X_ee points FORWARD (+Z in link00) toward patient = [0, 0, 1], orthogonalized.
     Z_ee = X_ee × Y_ee (right-handed).
 
     Args:
@@ -84,10 +84,11 @@ def compute_exposure_orientation(look_dir: np.ndarray) -> np.ndarray:
     look_dir = look_dir / np.linalg.norm(look_dir)
 
     # Y_ee = -look_dir (since optical Z = -Y_ee)
+    # For camera looking DOWN (-X): look_dir = [-1,0,0], Y_ee = [1,0,0] = UP
     y_desired = -look_dir
 
-    # X_ee: point DOWN (-X in link00)
-    x_desired = np.array([-1.0, 0.0, 0.0])
+    # X_ee: point FORWARD (+Z in link00) toward patient
+    x_desired = np.array([0.0, 0.0, 1.0])
 
     # Gram-Schmidt: make X_ee orthogonal to Y_ee
     x_ee = x_desired - np.dot(x_desired, y_desired) * y_desired
