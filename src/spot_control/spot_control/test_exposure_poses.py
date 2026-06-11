@@ -7,13 +7,13 @@ hardcoded virtual SMPL-24 keypoints instead of real body detection.
 Interactive stepping: press ENTER to send each point to the IK solver,
 with h=home, p=pause, r=resume, q=quit.
 
-Real world frame (matches RViz):
-  X = UP (vertical, red)    — camera above body, EE points down (-X)
-  Y = head→feet (green)     — grid spans head→feet along Y
-  Z = side→side (blue)      — grid spans body width along Z
+URDF frame (matches IK solver / link00):
+  X = forward (toward patient, red)  — camera slightly behind (-X), EE points down (-Z)
+  Y = left (head→feet, green)        — grid spans head→feet along Y
+  Z = UP (blue)                      — camera above (+Z), EE points down (-Z)
 
-Spot is beside the body, near the torso (Y≈0 in world).
-Lying body: on Y-Z plane (ground), X≈0 (body thickness).
+Spot is beside the body, near the torso (Y≈0 in URDF frame).
+Lying body: on ground (Z≈0), extends along Y (head→feet).
 
 Two modes:
   arm-only (enable_spot_body_pose=False): Direct IK goals. Current behavior.
@@ -24,7 +24,7 @@ Two modes:
 Key 'b' bypasses Spot body pose for the current point when Spot mode is active.
 
 Two body orientations:
-  lying (default):  Body on Y-Z plane (ground), X=up (~1.70m span along Y).
+  lying (default):  Body on ground (Z≈0), extends along Y (head→feet, ~1.70m span).
                     Head/feet require Spot body pose optimization (height+pitch)
                     to reach. Best for testing full exposure scan with Spot reconfig.
   standing:         Body vertical along Y (head at Y=1.60m). Requires Spot
@@ -168,40 +168,38 @@ _VIRTUAL_BODY_STANDING: dict[int, tuple[float, float, float]] = {
     COLLAR_RIGHT:   (0.0, 1.40,  0.15),
 }
 
-# ── Lying orientation (body on Y-Z plane, X=up) ─────────────────────────
-# Real world frame: X=UP, Y=head→feet, Z=side→side
-# Body on ground (X≈0), Spot beside torso (Y≈0).
-# Head at Y=+0.85, feet at Y=-0.85. Camera above (+X) looking down (-X).
-# Grid spans Y (head→feet) and Z (side→side).
+# ── Lying orientation (URDF frame: X=forward, Y=left, Z=UP) ────────────
+# URDF frame: X=forward (toward patient), Y=left (head→feet), Z=UP.
+# Body on ground (Z≈0), extends along Y (head→feet).
+# Body width along X (across body). Spot beside body.
 _VIRTUAL_BODY_LYING: dict[int, tuple[float, float, float]] = {
-    # Real frame: X=UP(thickness), Y=head→feet, Z=side→side
-    # Body on ground (X≈0), Spot beside torso (Y≈0).
-    # Head at Y=+0.85 (far from Spot), feet at Y=-0.85 (other side of Spot).
-    # Body width along Z: shoulders ±0.20, hips ±0.15.
-    HEAD:           (0.05, 0.85,  0.00),
-    NECK:           (0.05, 0.70,  0.00),
-    SHOULDER_LEFT:  (0.05, 0.60, -0.20),
-    SHOULDER_RIGHT: (0.05, 0.60,  0.20),
-    ELBOW_LEFT:     (0.00, 0.35, -0.22),
-    ELBOW_RIGHT:    (0.00, 0.35,  0.22),
-    WRIST_LEFT:     (0.00, 0.10, -0.22),
-    WRIST_RIGHT:    (0.00, 0.10,  0.22),
-    HAND_LEFT:      (0.00,-0.05, -0.22),
-    HAND_RIGHT:     (0.00,-0.05,  0.22),
-    HIP_LEFT:       (0.05,-0.15, -0.15),
-    HIP_RIGHT:      (0.05,-0.15,  0.15),
-    KNEE_LEFT:      (0.00,-0.45, -0.15),
-    KNEE_RIGHT:     (0.00,-0.45,  0.15),
-    ANKLE_LEFT:     (0.00,-0.75, -0.12),
-    ANKLE_RIGHT:    (0.00,-0.75,  0.12),
-    FOOT_LEFT:      (0.00,-0.85, -0.12),
-    FOOT_RIGHT:     (0.00,-0.85,  0.12),
-    SPINE1:         (0.03, 0.40,  0.00),
-    SPINE2:         (0.03, 0.20,  0.00),
-    SPINE3:         (0.03, 0.00,  0.00),
-    PELVIS:         (0.03,-0.15,  0.00),
-    COLLAR_LEFT:    (0.04, 0.63, -0.15),
-    COLLAR_RIGHT:   (0.04, 0.63,  0.15),
+    # URDF frame: X=forward(toward patient), Y=left(head→feet), Z=UP
+    # Body on ground (Z≈0), extends along Y (head→feet).
+    # Body width along X (across body). Spot beside body.
+    HEAD:           (0.00, 0.85, 0.05),
+    NECK:           (0.00, 0.70, 0.05),
+    SHOULDER_LEFT:  (-0.20, 0.60, 0.05),
+    SHOULDER_RIGHT: (0.20, 0.60, 0.05),
+    ELBOW_LEFT:     (-0.22, 0.35, 0.00),
+    ELBOW_RIGHT:    (0.22, 0.35, 0.00),
+    WRIST_LEFT:     (-0.22, 0.10, 0.00),
+    WRIST_RIGHT:    (0.22, 0.10, 0.00),
+    HAND_LEFT:      (-0.22, -0.05, 0.00),
+    HAND_RIGHT:     (0.22, -0.05, 0.00),
+    HIP_LEFT:       (-0.15, -0.15, 0.05),
+    HIP_RIGHT:      (0.15, -0.15, 0.05),
+    KNEE_LEFT:      (-0.15, -0.45, 0.00),
+    KNEE_RIGHT:     (0.15, -0.45, 0.00),
+    ANKLE_LEFT:     (-0.12, -0.75, 0.00),
+    ANKLE_RIGHT:    (0.12, -0.75, 0.00),
+    FOOT_LEFT:      (-0.12, -0.85, 0.00),
+    FOOT_RIGHT:     (0.12, -0.85, 0.00),
+    SPINE1:         (0.00, 0.40, 0.03),
+    SPINE2:         (0.00, 0.20, 0.03),
+    SPINE3:         (0.00, 0.00, 0.03),
+    PELVIS:         (0.00, -0.15, 0.03),
+    COLLAR_LEFT:    (-0.15, 0.63, 0.04),
+    COLLAR_RIGHT:   (0.15, 0.63, 0.04),
 }
 
 
@@ -211,13 +209,13 @@ def make_virtual_body(offset_x: float, offset_y: float,
                       body_scale: float = 1.0) -> dict[int, np.ndarray]:
     """Return dict {SMPL_index: world_xyz} for a virtual body at given offset.
 
-    Real world frame: X=UP, Y=head→feet, Z=side→side.
+    URDF frame: X=forward (toward patient), Y=left (head→feet), Z=UP.
 
     Args:
-        offset_x: Vertical offset (X axis, up/down) in world frame.
-        offset_y: Head→feet offset (Y axis) in world frame.
-        offset_z: Side→side offset (Z axis) in world frame.
-        orientation: 'lying' (body on Y-Z plane, X=up) or 'standing' (body vertical).
+        offset_x: Forward/backward offset (X axis) in URDF frame.
+        offset_y: Left/right offset (Y axis, head→feet) in URDF frame.
+        offset_z: Vertical offset (Z axis, up/down) in URDF frame.
+        orientation: 'lying' (body on ground, Z=up) or 'standing' (body vertical).
         body_scale: Scale factor for body span (1.0=full size, 0.35=fit Z1 workspace).
     """
     if orientation == 'standing':
@@ -225,6 +223,7 @@ def make_virtual_body(offset_x: float, offset_y: float,
     else:
         body = _VIRTUAL_BODY_LYING
     kp: dict[int, np.ndarray] = {}
+    # URDF frame: base = [forward, left, up]; body centered at X=0, Y≈0, Z=0 (ground)
     base = np.array([offset_x, offset_y, offset_z], dtype=float)
     for idx, rel in body.items():
         kp[idx] = base + np.array(rel, dtype=float) * body_scale
@@ -240,8 +239,9 @@ def _gen_exposure_grid(kp: dict[int, np.ndarray],
                        standoff_vertical: bool = True,
                        regions: str = 'all') -> list[ExposurePoint]:
     if standoff_vertical:
-        # Camera ABOVE body (+X), slight forward lean in +Y direction
-        z_off = np.array([standoff, -standoff * 0.20, 0.0])
+        # Camera ABOVE (+Z) and slightly BEHIND (-X) surface.
+        # look_dir = [lean, 0, -standoff] normalized = [0.20, 0, -0.98] matches FK reader!
+        z_off = np.array([-standoff * 0.20, 0.0, standoff])
     else:
         # Camera BESIDE body (offset in -Y, looking along +Y)
         z_off = np.array([0.0, -standoff, 0.0])
@@ -495,15 +495,16 @@ class ExposurePoseTester(Node):
         self._goto_idx: int | None = None
         self._point_body_pose: dict[int, tuple[float, float, np.ndarray]] = {}
 
-        # Auto-scale body for arm-only mode
+        # Auto-scale body for arm-only mode (URDF frame: X=forward, Y=left, Z=UP)
         if self._spot_enabled:
             self._body_scale = 1.0
         else:
             self._body_scale = 0.30
-            self._offset_y = 0.07
+            self._offset_x = 0.0   # body centered on X=0 (forward/backward)
+            self._offset_y = 0.07  # body centered near Y=0 (left/right, torso sweet spot)
             self._standoff = 0.35
             self.get_logger().info(
-                f'  Body scale: {self._body_scale:.2f}, offset_y: {self._offset_y:.2f}, standoff: {self._standoff:.2f} (arm-only)')
+                f'  Body scale: {self._body_scale:.2f}, offset_x: {self._offset_x:.2f}, offset_y: {self._offset_y:.2f}, standoff: {self._standoff:.2f} (arm-only)')
 
         # Spot body pose state
         self._settling = False
@@ -526,11 +527,12 @@ class ExposurePoseTester(Node):
         self.get_logger().info('=' * 60)
         self.get_logger().info(
             f'EXPOSURE POSE TESTER — virtual body at '
-            f'({self._offset_x:.1f}, {self._offset_y:.1f}, {self._offset_z:.1f})'
+            f'({self._offset_x:.1f}, {self._offset_y:.1f}, {self._offset_z:.1f}) '
+            f'(URDF frame: X=forward, Y=left, Z=UP)'
         )
         self.get_logger().info(f'  Orientation: {self._orientation}')
         if self._standoff_vertical:
-            self.get_logger().info(f'  Standoff: VERTICAL ({self._standoff:.2f}m, camera above +X, EE down -X)')
+            self.get_logger().info(f'  Standoff: VERTICAL ({self._standoff:.2f}m, camera above +Z, EE down -Z)')
         else:
             self.get_logger().info(f'  Standoff: HORIZONTAL ({self._standoff:.2f}m, camera beside body in -Y)')
         if self._spot_enabled:
