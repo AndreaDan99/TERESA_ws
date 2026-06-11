@@ -479,9 +479,10 @@ class ExposurePoseTester(Node):
         if self._spot_enabled:
             self._body_scale = 1.0
         else:
-            self._body_scale = 0.35
+            self._body_scale = 0.30
+            self._offset_x = 0.40
             self.get_logger().info(
-                f'  Body scale: {self._body_scale:.2f} (arm-only — shrunk to fit Z1 workspace)')
+                f'  Body scale: {self._body_scale:.2f}, offset_x: {self._offset_x:.2f} (arm-only)')
 
         # Spot body pose state
         self._settling = False
@@ -668,10 +669,9 @@ class ExposurePoseTester(Node):
                 float(self._camera_link00[2]),
             )
         else:
-            # Arm-only: camera_xyz is in world frame, convert to link00
-            cx = float(ep.camera_xyz[0] - self._z1_mount_x)
+            cx = float(ep.camera_xyz[0])
             cy = float(ep.camera_xyz[1])
-            cz = float(ep.camera_xyz[2] - self._z1_mount_z)
+            cz = float(ep.camera_xyz[2])
 
         goal = PoseStamped()
         goal.header.frame_id = 'link00'
