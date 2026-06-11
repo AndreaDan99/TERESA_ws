@@ -40,6 +40,7 @@ setup(
             'exposure_scanner    = spot_control.exposure_scanner:main',
             'exposure_snapshot   = spot_control.exposure_snapshot:main',
             'test_search_poses   = spot_control.test_search_poses:main',
+            'test_exposure_poses = spot_control.test_exposure_poses:main',
         ],
     },
 )
