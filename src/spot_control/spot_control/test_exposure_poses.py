@@ -73,11 +73,9 @@ from spot_perception.sml_pose_indices import (
 from teresa_utils.orientation import compute_ee_orientation
 
 def compute_exposure_orientation() -> np.ndarray:
-    # Exact same orientation as Z1_realsense FAST ultrasound.
-    # X_ee = [0,0,-1] = DOWN (Z=UP convention), Gram-Schmidt (Y_home reference).
-    # Proven to work — identical to _orientation_for_xee from z1_FSM.py.
+    # X_ee with 11.6° forward lean — matches FK reader demo [0.20, 0, -0.98]
     home_ori = [-0.0062, 0.4107, 0.0021, 0.9118]
-    return compute_ee_orientation(np.array([0.0, 0.0, -1.0]), home_ori)
+    return compute_ee_orientation(np.array([0.20, 0.0, -0.98]), home_ori)
 
 
 # ── Home pose position (arm stowed, from wbc_qp_controller FWD-C) ─────────
