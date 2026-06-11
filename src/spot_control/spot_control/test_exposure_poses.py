@@ -7,7 +7,13 @@ hardcoded virtual SMPL-24 keypoints instead of real body detection.
 Interactive stepping: press ENTER to send each point to the IK solver,
 with h=home, p=pause, r=resume, q=quit.
 
-Frame: world (coincident with link00). X=toward patient, Y=head→feet, Z=right→left.
+Real world frame (matches RViz):
+  X = UP (vertical, red)    — camera above body, EE points down (-X)
+  Y = head→feet (green)     — grid spans head→feet along Y
+  Z = side→side (blue)      — grid spans body width along Z
+
+Spot is beside the body, near the torso (Y≈0 in world).
+Lying body: on Y-Z plane (ground), X≈0 (body thickness).
 
 Two modes:
   arm-only (enable_spot_body_pose=False): Direct IK goals. Current behavior.
@@ -18,15 +24,15 @@ Two modes:
 Key 'b' bypasses Spot body pose for the current point when Spot mode is active.
 
 Two body orientations:
-  lying (default):  Body horizontal along X (~1.70m span). Head/feet require
-                     Spot body pose optimization (height+pitch) to reach.
-                     Best for testing full exposure scan with Spot reconfig.
+  lying (default):  Body on Y-Z plane (ground), X=up (~1.70m span along Y).
+                    Head/feet require Spot body pose optimization (height+pitch)
+                    to reach. Best for testing full exposure scan with Spot reconfig.
   standing:         Body vertical along Y (head at Y=1.60m). Requires Spot
                     body pose optimization (height/pitch) to reach upper body.
                     Simulates real exposure scan for STANDING patients.
 
-For lying: realistic 1.70m body along X axis. Body pose optimization
-           uses pitch to reach head (X=+0.85) and feet (X=-0.85).
+For lying: realistic 1.70m body along Y axis (head→feet). Body pose optimization
+           uses pitch to reach head (Y=+0.85) and feet (Y=-0.85).
 For standing: set virtual_body_x=0.60 for lower body; upper body needs Spot.
 
 Usage:
@@ -162,41 +168,40 @@ _VIRTUAL_BODY_STANDING: dict[int, tuple[float, float, float]] = {
     COLLAR_RIGHT:   (0.0, 1.40,  0.15),
 }
 
-# ── Lying orientation (body horizontal along X, head→feet = X axis) ─────
-# Realistic proportions: ~1.70m span, head at X=+0.85, feet at X=-0.85.
-# Body centered at Y=0, torso near X=0 (Spot positioned near torso).
-# Pitch rotation around Y tilts Spot forward/backward → can extend X reach.
-# Head (X=+0.85): needs forward tilt (pitch ~10-15°). Feet (X=-0.85): needs
-# Spot to lower and tilt to reach backward. Body pose optimization WORKS.
+# ── Lying orientation (body on Y-Z plane, X=up) ─────────────────────────
+# Real world frame: X=UP, Y=head→feet, Z=side→side
+# Body on ground (X≈0), Spot beside torso (Y≈0).
+# Head at Y=+0.85, feet at Y=-0.85. Camera above (+X) looking down (-X).
+# Grid spans Y (head→feet) and Z (side→side).
 _VIRTUAL_BODY_LYING: dict[int, tuple[float, float, float]] = {
-    # ── Lying orientation (body horizontal along X, head→feet = X axis) ──
-    # Realistic proportions: ~1.70m span from head (X=+0.85) to feet (X=-0.85).
-    # X=head→feet (forward=toward head), Y=body width, Z=body thickness (up).
-    # Pitch rotation (around Y) tilts Spot to extend X reach → optimization works.
-    HEAD:           ( 0.85, 0.00, 0.05),
-    NECK:           ( 0.70, 0.00, 0.05),
-    SHOULDER_LEFT:  ( 0.60,-0.20, 0.05),
-    SHOULDER_RIGHT: ( 0.60, 0.20, 0.05),
-    ELBOW_LEFT:     ( 0.35,-0.22, 0.00),
-    ELBOW_RIGHT:    ( 0.35, 0.22, 0.00),
-    WRIST_LEFT:     ( 0.10,-0.22, 0.00),
-    WRIST_RIGHT:    ( 0.10, 0.22, 0.00),
-    HAND_LEFT:      (-0.05,-0.22, 0.00),
-    HAND_RIGHT:     (-0.05, 0.22, 0.00),
-    HIP_LEFT:       (-0.15,-0.15, 0.05),
-    HIP_RIGHT:      (-0.15, 0.15, 0.05),
-    KNEE_LEFT:      (-0.45,-0.15, 0.00),
-    KNEE_RIGHT:     (-0.45, 0.15, 0.00),
-    ANKLE_LEFT:     (-0.75,-0.12, 0.00),
-    ANKLE_RIGHT:    (-0.75, 0.12, 0.00),
-    FOOT_LEFT:      (-0.85,-0.12, 0.00),
-    FOOT_RIGHT:     (-0.85, 0.12, 0.00),
-    SPINE1:         ( 0.40, 0.00, 0.03),
-    SPINE2:         ( 0.20, 0.00, 0.03),
-    SPINE3:         ( 0.00, 0.00, 0.03),
-    PELVIS:         (-0.15, 0.00, 0.03),
-    COLLAR_LEFT:    ( 0.63,-0.15, 0.04),
-    COLLAR_RIGHT:   ( 0.63, 0.15, 0.04),
+    # Real frame: X=UP(thickness), Y=head→feet, Z=side→side
+    # Body on ground (X≈0), Spot beside torso (Y≈0).
+    # Head at Y=+0.85 (far from Spot), feet at Y=-0.85 (other side of Spot).
+    # Body width along Z: shoulders ±0.20, hips ±0.15.
+    HEAD:           (0.05, 0.85,  0.00),
+    NECK:           (0.05, 0.70,  0.00),
+    SHOULDER_LEFT:  (0.05, 0.60, -0.20),
+    SHOULDER_RIGHT: (0.05, 0.60,  0.20),
+    ELBOW_LEFT:     (0.00, 0.35, -0.22),
+    ELBOW_RIGHT:    (0.00, 0.35,  0.22),
+    WRIST_LEFT:     (0.00, 0.10, -0.22),
+    WRIST_RIGHT:    (0.00, 0.10,  0.22),
+    HAND_LEFT:      (0.00,-0.05, -0.22),
+    HAND_RIGHT:     (0.00,-0.05,  0.22),
+    HIP_LEFT:       (0.05,-0.15, -0.15),
+    HIP_RIGHT:      (0.05,-0.15,  0.15),
+    KNEE_LEFT:      (0.00,-0.45, -0.15),
+    KNEE_RIGHT:     (0.00,-0.45,  0.15),
+    ANKLE_LEFT:     (0.00,-0.75, -0.12),
+    ANKLE_RIGHT:    (0.00,-0.75,  0.12),
+    FOOT_LEFT:      (0.00,-0.85, -0.12),
+    FOOT_RIGHT:     (0.00,-0.85,  0.12),
+    SPINE1:         (0.03, 0.40,  0.00),
+    SPINE2:         (0.03, 0.20,  0.00),
+    SPINE3:         (0.03, 0.00,  0.00),
+    PELVIS:         (0.03,-0.15,  0.00),
+    COLLAR_LEFT:    (0.04, 0.63, -0.15),
+    COLLAR_RIGHT:   (0.04, 0.63,  0.15),
 }
 
 
@@ -206,11 +211,13 @@ def make_virtual_body(offset_x: float, offset_y: float,
                       body_scale: float = 1.0) -> dict[int, np.ndarray]:
     """Return dict {SMPL_index: world_xyz} for a virtual body at given offset.
 
+    Real world frame: X=UP, Y=head→feet, Z=side→side.
+
     Args:
-        offset_x: Forward offset (toward patient) in world frame.
-        offset_y: Lateral offset in world frame.
-        offset_z: Vertical offset in world frame.
-        orientation: 'lying' (body horizontal along Y) or 'standing' (body vertical).
+        offset_x: Vertical offset (X axis, up/down) in world frame.
+        offset_y: Head→feet offset (Y axis) in world frame.
+        offset_z: Side→side offset (Z axis) in world frame.
+        orientation: 'lying' (body on Y-Z plane, X=up) or 'standing' (body vertical).
         body_scale: Scale factor for body span (1.0=full size, 0.35=fit Z1 workspace).
     """
     if orientation == 'standing':
@@ -232,9 +239,11 @@ def _gen_exposure_grid(kp: dict[int, np.ndarray],
                        standoff: float,
                        standoff_vertical: bool = True) -> list[ExposurePoint]:
     if standoff_vertical:
-        z_off = np.array([-standoff * 0.20, 0.0, standoff])
+        # Camera ABOVE body (+X), slight forward lean in +Y direction
+        z_off = np.array([standoff, -standoff * 0.20, 0.0])
     else:
-        z_off = np.array([-standoff, 0.0, 0.0])
+        # Camera BESIDE body (offset in -Y, looking along +Y)
+        z_off = np.array([0.0, -standoff, 0.0])
     points: list[ExposurePoint] = []
 
     for region in REGION_ORDER:
@@ -480,10 +489,10 @@ class ExposurePoseTester(Node):
             self._body_scale = 1.0
         else:
             self._body_scale = 0.30
-            self._offset_x = 0.55
+            self._offset_y = 0.07
             self._standoff = 0.35
             self.get_logger().info(
-                f'  Body scale: {self._body_scale:.2f}, offset_x: {self._offset_x:.2f}, standoff: {self._standoff:.2f} (arm-only)')
+                f'  Body scale: {self._body_scale:.2f}, offset_y: {self._offset_y:.2f}, standoff: {self._standoff:.2f} (arm-only)')
 
         # Spot body pose state
         self._settling = False
@@ -510,9 +519,9 @@ class ExposurePoseTester(Node):
         )
         self.get_logger().info(f'  Orientation: {self._orientation}')
         if self._standoff_vertical:
-            self.get_logger().info(f'  Standoff: VERTICAL ({self._standoff:.2f}m, EE down toward body)')
+            self.get_logger().info(f'  Standoff: VERTICAL ({self._standoff:.2f}m, camera above +X, EE down -X)')
         else:
-            self.get_logger().info(f'  Standoff: HORIZONTAL ({self._standoff:.2f}m, EE forward along body)')
+            self.get_logger().info(f'  Standoff: HORIZONTAL ({self._standoff:.2f}m, camera beside body in -Y)')
         if self._spot_enabled:
             self.get_logger().info(
                 f'  Spot body pose: ENABLED '
