@@ -237,16 +237,24 @@ def make_virtual_body(offset_x: float, offset_y: float,
 
 def _gen_exposure_grid(kp: dict[int, np.ndarray],
                        standoff: float,
-                       standoff_vertical: bool = True) -> list[ExposurePoint]:
+                       standoff_vertical: bool = True,
+                       regions: str = 'all') -> list[ExposurePoint]:
     if standoff_vertical:
         # Camera ABOVE body (+X), slight forward lean in +Y direction
         z_off = np.array([standoff, -standoff * 0.20, 0.0])
     else:
         # Camera BESIDE body (offset in -Y, looking along +Y)
         z_off = np.array([0.0, -standoff, 0.0])
+
+    if regions != 'all':
+        allowed = set(r.strip() for r in regions.split(','))
+        region_order = [r for r in REGION_ORDER if r.value in allowed]
+    else:
+        region_order = REGION_ORDER
+
     points: list[ExposurePoint] = []
 
-    for region in REGION_ORDER:
+    for region in region_order:
         region_points = _gen_region(region, kp, z_off)
         if region_points:
             points.extend(region_points)
@@ -441,6 +449,9 @@ class ExposurePoseTester(Node):
         self._standoff_vertical = bool(
             self.declare_parameter('standoff_vertical', True)
             .get_parameter_value().bool_value)
+        self._regions = str(
+            self.declare_parameter('regions', 'all')
+            .get_parameter_value().string_value)
 
         # Spot body pose parameters
         self._spot_enabled = bool(
@@ -505,7 +516,7 @@ class ExposurePoseTester(Node):
         kp = make_virtual_body(self._offset_x, self._offset_y, self._offset_z,
                                 self._orientation, self._body_scale)
         self._virtual_kp = kp
-        self._points = _gen_exposure_grid(kp, self._standoff, self._standoff_vertical)
+        self._points = _gen_exposure_grid(kp, self._standoff, self._standoff_vertical, self._regions)
 
         # Timers
         self._grid_timer = self.create_timer(0.2, self._publish_grid_markers)
