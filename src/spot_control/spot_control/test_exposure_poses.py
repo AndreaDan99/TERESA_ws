@@ -66,23 +66,14 @@ from spot_perception.sml_pose_indices import (
     NUM_JOINTS,
 )
 
-from teresa_utils.orientation import compute_ee_orientation_minrot
+from teresa_utils.orientation import compute_ee_orientation
 
 def compute_exposure_orientation(look_dir: np.ndarray) -> np.ndarray:
-    # FAST approach: X_ee = look_dir, Y_ee near home LEFT via minrot
-    q_minrot = compute_ee_orientation_minrot(look_dir, [-0.0062, 0.4107, 0.0021, 0.9118])
-    # Camera optical Z = -Y_ee. Home Y ≈ LEFT, so camera looks RIGHT.
-    # Rotate 90° around X_ee to swing Y_ee from LEFT → BACKWARD,
-    # making optical Z = -BACKWARD = FORWARD (toward body).
-    import tf_transformations
-    import math
-    R = tf_transformations.quaternion_matrix(q_minrot)
-    x_ee = R[:3, 0]
-    # Quaternion for 90° rotation around X_ee
-    half = math.pi / 4.0
-    q_rot = np.array([x_ee[0] * math.sin(half), x_ee[1] * math.sin(half),
-                       x_ee[2] * math.sin(half), math.cos(half)])
-    return tf_transformations.quaternion_multiply(q_rot, q_minrot)
+    # Z1_realsense approach: X_ee straight DOWN (-Z in URDF standalone convention)
+    # Gram-Schmidt with Y_home reference keeps wrist near home config.
+    # Same as _orientation_for_xee from Z1_realsense branch — proven to work.
+    home_ori = [-0.0062, 0.4107, 0.0021, 0.9118]
+    return compute_ee_orientation(np.array([0.0, 0.0, -1.0]), home_ori)
 
 
 # ── Home pose position (arm stowed, from wbc_qp_controller FWD-C) ─────────
