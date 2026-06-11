@@ -232,7 +232,7 @@ def _gen_exposure_grid(kp: dict[int, np.ndarray],
                        standoff: float,
                        standoff_vertical: bool = True) -> list[ExposurePoint]:
     if standoff_vertical:
-        z_off = np.array([0.0, 0.0, standoff])
+        z_off = np.array([-standoff * 0.20, 0.0, standoff])
     else:
         z_off = np.array([-standoff, 0.0, 0.0])
     points: list[ExposurePoint] = []
