@@ -180,31 +180,33 @@ _VIRTUAL_BODY_STANDING: dict[int, tuple[float, float, float]] = {
 # Body on ground (X≈0), extends along Y (head→feet).
 # Body width along Z (across body). Spot beside body at Y≈0, Z≈0.
 _VIRTUAL_BODY_LYING: dict[int, tuple[float, float, float]] = {
-    # link00 frame: X=UP, Y=left(head→feet), Z=forward(toward patient)
-    HEAD:           (0.05, 0.85, 0.00),
-    NECK:           (0.05, 0.70, 0.00),
-    SHOULDER_LEFT:  (0.05, 0.60, -0.20),
-    SHOULDER_RIGHT: (0.05, 0.60, 0.20),
-    ELBOW_LEFT:     (0.00, 0.35, -0.22),
-    ELBOW_RIGHT:    (0.00, 0.35, 0.22),
-    WRIST_LEFT:     (0.00, 0.10, -0.22),
-    WRIST_RIGHT:    (0.00, 0.10, 0.22),
-    HAND_LEFT:      (0.00, -0.05, -0.22),
-    HAND_RIGHT:     (0.00, -0.05, 0.22),
-    HIP_LEFT:       (0.05, -0.15, -0.15),
-    HIP_RIGHT:      (0.05, -0.15, 0.15),
-    KNEE_LEFT:      (0.00, -0.45, -0.15),
-    KNEE_RIGHT:     (0.00, -0.45, 0.15),
-    ANKLE_LEFT:     (0.00, -0.75, -0.12),
-    ANKLE_RIGHT:    (0.00, -0.75, 0.12),
-    FOOT_LEFT:      (0.00, -0.85, -0.12),
-    FOOT_RIGHT:     (0.00, -0.85, 0.12),
-    SPINE1:         (0.03, 0.40, 0.00),
-    SPINE2:         (0.03, 0.20, 0.00),
-    SPINE3:         (0.03, 0.00, 0.00),
-    PELVIS:         (0.03, -0.15, 0.00),
-    COLLAR_LEFT:    (0.04, 0.63, -0.15),
-    COLLAR_RIGHT:   (0.04, 0.63, 0.15),
+    # URDF standalone convention: X=forward(toward patient), Y=left(head→feet), Z=UP
+    # Body on ground (Z≈0), extends along Y (head→feet).
+    # Body width along X (across body). Spot beside body.
+    HEAD:           (0.00, 0.85, 0.05),
+    NECK:           (0.00, 0.70, 0.05),
+    SHOULDER_LEFT:  (-0.20, 0.60, 0.05),
+    SHOULDER_RIGHT: (0.20, 0.60, 0.05),
+    ELBOW_LEFT:     (-0.22, 0.35, 0.00),
+    ELBOW_RIGHT:    (0.22, 0.35, 0.00),
+    WRIST_LEFT:     (-0.22, 0.10, 0.00),
+    WRIST_RIGHT:    (0.22, 0.10, 0.00),
+    HAND_LEFT:      (-0.22, -0.05, 0.00),
+    HAND_RIGHT:     (0.22, -0.05, 0.00),
+    HIP_LEFT:       (-0.15, -0.15, 0.05),
+    HIP_RIGHT:      (0.15, -0.15, 0.05),
+    KNEE_LEFT:      (-0.15, -0.45, 0.00),
+    KNEE_RIGHT:     (0.15, -0.45, 0.00),
+    ANKLE_LEFT:     (-0.12, -0.75, 0.00),
+    ANKLE_RIGHT:    (0.12, -0.75, 0.00),
+    FOOT_LEFT:      (-0.12, -0.85, 0.00),
+    FOOT_RIGHT:     (0.12, -0.85, 0.00),
+    SPINE1:         (0.00, 0.40, 0.03),
+    SPINE2:         (0.00, 0.20, 0.03),
+    SPINE3:         (0.00, 0.00, 0.03),
+    PELVIS:         (0.00, -0.15, 0.03),
+    COLLAR_LEFT:    (-0.15, 0.63, 0.04),
+    COLLAR_RIGHT:   (0.15, 0.63, 0.04),
 }
 
 
@@ -245,11 +247,8 @@ def _gen_exposure_grid(kp: dict[int, np.ndarray],
                        regions: str = 'all') -> list[ExposurePoint]:
     if standoff_vertical:
         # Camera ABOVE (+X) and slightly BEHIND (-Z) surface.
-        # link00 frame: X=UP, Y=left, Z=forward.
-        # z_off = [standoff, 0, -standoff*0.20] → camera = surface + [0.35 high, 0, -0.07 back]
-        # look_dir = [-0.35, 0, 0.07] normalized = [-0.98, 0, 0.20]
-        # X_ee = [-0.98, 0, 0.20] → mostly DOWN (-X), slightly FORWARD (+Z)
-        z_off = np.array([standoff, 0.0, -standoff * 0.20])
+        # URDF standalone: Z=UP. Camera above body (+Z).
+        z_off = np.array([0.0, 0.0, standoff])
     else:
         # Camera BESIDE body (offset in -Y, looking along +Y)
         z_off = np.array([0.0, -standoff, 0.0])
@@ -508,10 +507,10 @@ class ExposurePoseTester(Node):
             self._body_scale = 1.0
         else:
             self._body_scale = 0.30
-            self._offset_z = 0.40   # puts camera at Z≈0.30 (sweet spot)
+            self._offset_x = 0.40   # body 40cm forward (X=forward toward patient)
             self._offset_y = 0.0    # centered on Y (left/right)
-            self._offset_x = -0.17  # puts camera at X≈0.35 (sweet spot)
-            self._standoff = 0.50   # camera 50cm above body surface
+            self._offset_z = 0.0    # on ground (Z=UP, Z≈0)
+            self._standoff = 0.50   # camera 50cm above body (+Z)
             self.get_logger().info(
                 f'  Body scale: {self._body_scale:.2f}, offset_z: {self._offset_z:.2f}, offset_y: {self._offset_y:.2f}, standoff: {self._standoff:.2f} (arm-only)')
 
