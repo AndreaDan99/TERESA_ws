@@ -904,10 +904,10 @@ class ExposurePoseTester(Node):
                                 if self._current_idx < len(self._points):
                                     if self._spot_enabled:
                                         ep = self._points[self._current_idx]
+                                        y_walk = ep.camera_xyz[1]
                                         self.get_logger().info(
-                                            f'🔍 Optimizing Spot body pose for point '
-                                            f'{self._current_idx + 1}...')
-                                        # Convert camera_xyz to odom using current Spot body pose
+                                            f'🚶 Y-walk {y_walk:+.2f}m → optimizing body pose '
+                                            f'for point {self._current_idx + 1}...')
                                         c = math.cos(self._spot_p)
                                         s = math.sin(self._spot_p)
                                         mx, mz = self._z1_mount_x, self._z1_mount_z
@@ -915,7 +915,7 @@ class ExposurePoseTester(Node):
                                         link00_z = self._spot_h - s * mx + c * mz
                                         camera_odom = np.array([
                                             ep.camera_xyz[0] + link00_x,
-                                            ep.camera_xyz[1],
+                                            0.0,  # Y centered by simulated walk
                                             ep.camera_xyz[2] + link00_z,
                                         ])
                                         h, p = self._optimize_body_pose(camera_odom, self._current_idx)
