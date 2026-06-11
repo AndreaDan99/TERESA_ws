@@ -589,7 +589,10 @@ class ExposurePoseTester(Node):
         # If spot enabled, optimize and apply body pose for this point
         if self._spot_enabled:
             self.get_logger().info(f'🔍 Re-optimizing Spot body pose for point {idx}...')
-            h, p = self._optimize_body_pose(ep.camera_xyz, idx)
+            camera_odom = (ep.camera_xyz[0] + self._z1_mount_x,
+                           ep.camera_xyz[1],
+                           ep.camera_xyz[2] + self._z1_mount_z)
+            h, p = self._optimize_body_pose(camera_odom, idx)
             self._apply_body_pose(h, p)
             self._settling = True
             self._settle_deadline = (
@@ -886,7 +889,10 @@ class ExposurePoseTester(Node):
                                         self.get_logger().info(
                                             f'🔍 Optimizing Spot body pose for point '
                                             f'{self._current_idx + 1}...')
-                                        h, p = self._optimize_body_pose(ep.camera_xyz, self._current_idx)
+                                        camera_odom = (ep.camera_xyz[0] + self._z1_mount_x,
+                                                       ep.camera_xyz[1],
+                                                       ep.camera_xyz[2] + self._z1_mount_z)
+                                        h, p = self._optimize_body_pose(camera_odom, self._current_idx)
                                         self._apply_body_pose(h, p)
                                         self._settling = True
                                         self._settle_deadline = (
