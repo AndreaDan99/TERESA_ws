@@ -449,9 +449,9 @@ class ExposurePoseTester(Node):
 
         # Publishers
         self._pub_goal = self.create_publisher(
-            PoseStamped, '/z1/ik_goal_pose', 10)
+            PoseStamped, '/ik_goal_pose', 10)
         self._pub_enable = self.create_publisher(
-            Bool, '/z1/ik_enable', 10)
+            Bool, '/ik_enable', 10)
         self._pub_grid = self.create_publisher(
             MarkerArray, '/exposure/grid_markers', 10)
         self._pub_body_pose = self.create_publisher(
