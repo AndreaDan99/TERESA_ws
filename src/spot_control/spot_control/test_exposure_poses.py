@@ -655,7 +655,7 @@ class ExposurePoseTester(Node):
             )
 
         goal = PoseStamped()
-        goal.header.frame_id = 'world'
+        goal.header.frame_id = 'link00'
         goal.header.stamp = self.get_clock().now().to_msg()
         goal.pose.position.x = cx
         goal.pose.position.y = cy
@@ -678,7 +678,7 @@ class ExposurePoseTester(Node):
 
     def _send_home(self):
         msg = PoseStamped()
-        msg.header.frame_id = 'world'
+        msg.header.frame_id = 'link00'
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.pose.position.x = float(HOME_POS[0])
         msg.pose.position.y = float(HOME_POS[1])
@@ -702,7 +702,7 @@ class ExposurePoseTester(Node):
 
     def _publish_virtual_skeleton(self):
         pa = PoseArray()
-        pa.header.frame_id = 'world'
+        pa.header.frame_id = 'link00'
         pa.header.stamp = self.get_clock().now().to_msg()
         for i in range(NUM_JOINTS):
             pose = Pose()
@@ -726,7 +726,7 @@ class ExposurePoseTester(Node):
         for i, ep in enumerate(self._points):
             cr, cg, cb = REGION_COLORS.get(ep.region, (0.5, 0.5, 0.5))
             m = Marker()
-            m.header.frame_id = 'world'
+            m.header.frame_id = 'link00'
             m.header.stamp = self.get_clock().now().to_msg()
             m.ns = f'exposure_grid_{ep.region.value}'
             m.id = i
