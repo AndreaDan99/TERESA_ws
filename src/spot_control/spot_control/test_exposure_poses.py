@@ -522,7 +522,8 @@ class ExposurePoseTester(Node):
         self._best_h: float | None = None
         self._best_p: float | None = None
         self._camera_link00: np.ndarray | None = None
-        self._spot_reset_pending: int | None = None
+        self._spot_h = 0.0  # current Spot height (tracked after each IK goal)
+        self._spot_p = 0.0  # current Spot pitch (tracked after each IK goal)
 
         # Generate virtual body and exposure grid
         kp = make_virtual_body(self._offset_x, self._offset_y, self._offset_z,
@@ -590,9 +591,17 @@ class ExposurePoseTester(Node):
         # If spot enabled, optimize and apply body pose for this point
         if self._spot_enabled:
             self.get_logger().info(f'🔍 Re-optimizing Spot body pose for point {idx}...')
-            camera_odom = (ep.camera_xyz[0] + self._z1_mount_x,
-                           ep.camera_xyz[1],
-                           ep.camera_xyz[2] + self._z1_mount_z)
+            # Convert camera_xyz to odom using current Spot body pose
+            c = math.cos(self._spot_p)
+            s = math.sin(self._spot_p)
+            mx, mz = self._z1_mount_x, self._z1_mount_z
+            link00_x = c * mx + s * mz
+            link00_z = self._spot_h - s * mx + c * mz
+            camera_odom = np.array([
+                ep.camera_xyz[0] + link00_x,
+                ep.camera_xyz[1],
+                ep.camera_xyz[2] + link00_z,
+            ])
             h, p = self._optimize_body_pose(camera_odom, idx)
             self._apply_body_pose(h, p)
             self._settling = True
@@ -615,6 +624,9 @@ class ExposurePoseTester(Node):
         (link00: X=forward, Y=left, Z=UP).
         For each (height, pitch) combination, computes the camera position in
         the link00 frame and measures distance to the sweet spot.
+
+        The camera_odom is already in odom frame (converted from camera_xyz using
+        the current Spot body pose), so the optimization is independent of h_curr/p_curr.
 
         Args:
             camera_odom: Camera position in odom frame [x, y, z].
@@ -704,21 +716,11 @@ class ExposurePoseTester(Node):
         quat = compute_exposure_orientation()
 
         if self._spot_enabled and self._best_h is not None and self._camera_link00 is not None:
-            # Optimization transforms camera from odom to link00 frame.
-            # Our camera_xyz is already in link00 frame. When h=0,p=0
-            # (no body movement), use original coordinates directly.
-            if abs(self._best_h) < 1e-6 and abs(self._best_p) < 1e-6:
-                cx, cy, cz = (
-                    float(ep.camera_xyz[0]),
-                    float(ep.camera_xyz[1]),
-                    float(ep.camera_xyz[2]),
-                )
-            else:
-                cx, cy, cz = (
-                    float(self._camera_link00[0]),
-                    float(self._camera_link00[1]),
-                    float(self._camera_link00[2]),
-                )
+            cx, cy, cz = (
+                float(self._camera_link00[0]),
+                float(self._camera_link00[1]),
+                float(self._camera_link00[2]),
+            )
         else:
             cx = float(ep.camera_xyz[0])
             cy = float(ep.camera_xyz[1])
@@ -854,27 +856,6 @@ class ExposurePoseTester(Node):
                     if self.get_clock().now() >= self._settle_deadline:
                         self._settling = False
 
-                        # Check if this was a Spot reset settle
-                        if self._spot_reset_pending is not None:
-                            idx = self._spot_reset_pending
-                            self._spot_reset_pending = None
-                            ep = self._points[idx]
-                            self.get_logger().info(
-                                f'🔍 Optimizing Spot body pose for point {idx+1} (after reset)...')
-                            camera_odom = (ep.camera_xyz[0] + self._z1_mount_x,
-                                           ep.camera_xyz[1],
-                                           ep.camera_xyz[2] + self._z1_mount_z)
-                            h, p = self._optimize_body_pose(camera_odom, idx)
-                            self._apply_body_pose(h, p)
-                            self._settling = True
-                            self._settle_deadline = (
-                                self.get_clock().now()
-                                + rclpy.duration.Duration(
-                                    seconds=self._body_settle_s))
-                            self.get_logger().info(
-                                f'⏳ Settling for {self._body_settle_s:.1f}s...')
-                            continue
-
                         if self._goto_idx is not None:
                             self.get_logger().info(
                                 f'  ✅ Settle complete — sending IK goal for point {self._goto_idx}')
@@ -885,6 +866,10 @@ class ExposurePoseTester(Node):
                                 '  ✅ Settle complete — sending IK goal')
                             self._send_ik_goal(self._current_idx)
                             self._current_idx += 1
+
+                        # Track the new Spot body pose after settle
+                        self._spot_h = self._best_h if self._best_h is not None else self._spot_h
+                        self._spot_p = self._best_p if self._best_p is not None else self._spot_p
 
                 # Check ik_done (only when not settling)
                 if not self._settling:
@@ -908,29 +893,21 @@ class ExposurePoseTester(Node):
                             if self._ik_done or self._current_idx == 0:
                                 if self._current_idx < len(self._points):
                                     if self._spot_enabled:
-                                        # Reset Spot to default pose before optimization
-                                        # if it was moved by a previous point
-                                        if self._best_h is not None and (abs(self._best_h) > 1e-6 or abs(self._best_p) > 1e-6):
-                                            self.get_logger().info(
-                                                '↩  Resetting Spot to default pose...')
-                                            self._apply_body_pose(0.0, 0.0)
-                                            self._settling = True
-                                            self._settle_deadline = (
-                                                self.get_clock().now()
-                                                + rclpy.duration.Duration(
-                                                    seconds=1.0))
-                                            self._goto_idx = None
-                                            self._spot_reset_pending = self._current_idx
-                                            self.get_logger().info(
-                                                '⏳ Waiting for Spot reset settle...')
-                                            continue
                                         ep = self._points[self._current_idx]
                                         self.get_logger().info(
                                             f'🔍 Optimizing Spot body pose for point '
                                             f'{self._current_idx + 1}...')
-                                        camera_odom = (ep.camera_xyz[0] + self._z1_mount_x,
-                                                       ep.camera_xyz[1],
-                                                       ep.camera_xyz[2] + self._z1_mount_z)
+                                        # Convert camera_xyz to odom using current Spot body pose
+                                        c = math.cos(self._spot_p)
+                                        s = math.sin(self._spot_p)
+                                        mx, mz = self._z1_mount_x, self._z1_mount_z
+                                        link00_x = c * mx + s * mz
+                                        link00_z = self._spot_h - s * mx + c * mz
+                                        camera_odom = np.array([
+                                            ep.camera_xyz[0] + link00_x,
+                                            ep.camera_xyz[1],
+                                            ep.camera_xyz[2] + link00_z,
+                                        ])
                                         h, p = self._optimize_body_pose(camera_odom, self._current_idx)
                                         self._apply_body_pose(h, p)
                                         self._settling = True
