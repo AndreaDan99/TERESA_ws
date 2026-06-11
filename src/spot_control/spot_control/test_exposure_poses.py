@@ -507,7 +507,7 @@ class ExposurePoseTester(Node):
             self._body_scale = 1.0
         else:
             self._body_scale = 0.30
-            self._offset_x = 0.25   # corpo vicino
+            self._offset_x = 0.40   # corpo più avanti
             self._offset_y = 0.0
             self._offset_z = 0.0
             self._standoff = 0.30   # camera più bassa: Z≈0.31 (sweet spot)
