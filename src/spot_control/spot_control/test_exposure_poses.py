@@ -866,24 +866,29 @@ class ExposurePoseTester(Node):
                     if self.get_clock().now() >= self._settle_deadline:
                         # Handle Spot reset settle
                         if self._resetting:
-                            self._resetting = False
-                            self._settling = False
-                            idx = self._reset_done_idx
-                            self._reset_done_idx = None
-                            ep = self._points[idx]
-                            self.get_logger().info(
-                                f'🔍 Optimizing Spot body pose for point {idx+1} (after reset)...')
-                            cam_odom = np.array([ep.camera_xyz[0] + self._z1_mount_x,
-                                                 ep.camera_xyz[1],
-                                                 ep.camera_xyz[2] + self._z1_mount_z])
-                            self._optimize_body_pose(cam_odom, idx)
-                            self._apply_body_pose(self._best_h, self._best_p)
-                            self._spot_h = self._best_h
-                            self._spot_p = self._best_p
-                            self._settling = True
-                            self._settle_deadline = (
-                                self.get_clock().now()
-                                + rclpy.duration.Duration(seconds=self._body_settle_s))
+                            try:
+                                self._resetting = False
+                                self._settling = False
+                                idx = self._reset_done_idx
+                                self._reset_done_idx = None
+                                ep = self._points[idx]
+                                self.get_logger().info(
+                                    f'🔍 Optimizing Spot body pose for point {idx+1} (after reset)...')
+                                cam_odom = np.array([ep.camera_xyz[0] + self._z1_mount_x,
+                                                     ep.camera_xyz[1],
+                                                     ep.camera_xyz[2] + self._z1_mount_z])
+                                self._optimize_body_pose(cam_odom, idx)
+                                self._apply_body_pose(self._best_h, self._best_p)
+                                self._spot_h = self._best_h
+                                self._spot_p = self._best_p
+                                self._settling = True
+                                self._settle_deadline = (
+                                    self.get_clock().now()
+                                    + rclpy.duration.Duration(seconds=self._body_settle_s))
+                            except Exception as e:
+                                self.get_logger().error(f'❌ Reset settle error: {e}')
+                                self._resetting = False
+                                self._settling = False
                             return
 
                         self._settling = False
@@ -939,7 +944,8 @@ class ExposurePoseTester(Node):
                                                 + rclpy.duration.Duration(seconds=1.0))
                                             self._resetting = True
                                             self._reset_done_idx = self._current_idx
-                                            return  # wait for reset settle, then come back
+                                            self.get_logger().info('  ⏳ Reset settle started, returning...')
+                                            return
 
                                         ep = self._points[self._current_idx]
                                         self.get_logger().info(
