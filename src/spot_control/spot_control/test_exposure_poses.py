@@ -500,7 +500,7 @@ class ExposurePoseTester(Node):
             self._body_scale = 1.0
         else:
             self._body_scale = 0.30
-            self._offset_x = 0.0   # body centered on X=0 (forward/backward)
+            self._offset_x = 0.50   # body in front of Spot (X=forward)
             self._offset_y = 0.07  # body centered near Y=0 (left/right, torso sweet spot)
             self._standoff = 0.35
             self.get_logger().info(
