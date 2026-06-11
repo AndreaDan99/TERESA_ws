@@ -727,7 +727,7 @@ class ExposurePoseTester(Node):
             cz = float(ep.camera_xyz[2])
 
         goal = PoseStamped()
-        goal.header.frame_id = 'link00'
+        goal.header.frame_id = 'world'
         goal.header.stamp = self.get_clock().now().to_msg()
         goal.pose.position.x = cx
         goal.pose.position.y = cy
