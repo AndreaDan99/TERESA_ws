@@ -504,7 +504,7 @@ class ExposurePoseTester(Node):
 
         # Auto-scale body for arm-only mode (link00 frame: X=forward, Y=left, Z=UP)
         if self._spot_enabled:
-            self._body_scale = 0.50    # corpo ~85cm, Spot deve muoversi
+            self._body_scale = 0.55    # corpo 94cm, head at X=0.82 needs Spot
             self._offset_x = 0.35
             self._standoff = 0.30
         else:
