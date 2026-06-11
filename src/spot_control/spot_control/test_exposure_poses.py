@@ -502,10 +502,10 @@ class ExposurePoseTester(Node):
             self._body_scale = 1.0
         else:
             self._body_scale = 0.30
-            self._offset_z = 0.30   # body 30cm forward (closer to Spot)
+            self._offset_z = 0.30   # body 30cm forward (Z=forward toward patient)
             self._offset_y = 0.0    # centered on Y (left/right)
-            self._offset_x = 0.0    # on ground (X=UP, X≈0)
-            self._standoff = 0.25   # reduced standoff
+            self._offset_x = -0.60  # body BELOW link00 (on ground, Spot standing)
+            self._standoff = 0.50   # camera 50cm above body → at X≈-0.10 near link00
             self.get_logger().info(
                 f'  Body scale: {self._body_scale:.2f}, offset_z: {self._offset_z:.2f}, offset_y: {self._offset_y:.2f}, standoff: {self._standoff:.2f} (arm-only)')
 
