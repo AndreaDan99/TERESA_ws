@@ -465,10 +465,10 @@ class ExposurePoseTester(Node):
             self.declare_parameter('enable_spot_body_pose', True)
             .get_parameter_value().bool_value)
         self._z1_mount_x = float(
-            self.declare_parameter('z1_mount_x', 0.30)
+            self.declare_parameter('z1_mount_x', 0.20)
             .get_parameter_value().double_value)
         self._z1_mount_z = float(
-            self.declare_parameter('z1_mount_z', 0.15)
+            self.declare_parameter('z1_mount_z', 0.20)
             .get_parameter_value().double_value)
         self._body_settle_s = float(
             self.declare_parameter('body_settle_s', 1.5)
