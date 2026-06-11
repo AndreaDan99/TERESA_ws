@@ -66,53 +66,10 @@ from spot_perception.sml_pose_indices import (
     NUM_JOINTS,
 )
 
+from teresa_utils.orientation import compute_ee_orientation_minrot
+
 def compute_exposure_orientation(look_dir: np.ndarray) -> np.ndarray:
-    """
-    Compute EE orientation for exposure scan.
-
-    Camera optical Z (view direction) = look_dir (should point DOWN at body).
-    From TF analysis: optical Z = -Y_ee, so Y_ee = -look_dir.
-    X_ee points FORWARD (+Z in link00) toward patient = [0, 0, 1], orthogonalized.
-    Z_ee = X_ee × Y_ee (right-handed).
-
-    Args:
-        look_dir: (3,) desired camera view direction (optical Z) — normalized internally.
-
-    Returns:
-        [x, y, z, w] quaternion as numpy array.
-    """
-    look_dir = look_dir / np.linalg.norm(look_dir)
-
-    # Y_ee = -look_dir (since optical Z = -Y_ee)
-    # For camera looking DOWN (-X): look_dir = [-1,0,0], Y_ee = [1,0,0] = UP
-    y_desired = -look_dir
-
-    # X_ee: point FORWARD (+Z in link00) toward patient
-    x_desired = np.array([0.0, 0.0, 1.0])
-
-    # Gram-Schmidt: make X_ee orthogonal to Y_ee
-    x_ee = x_desired - np.dot(x_desired, y_desired) * y_desired
-    x_norm = float(np.linalg.norm(x_ee))
-    if x_norm < 1e-6:
-        # Fallback: use Z from cross product
-        z_temp = np.cross(y_desired, x_desired)
-        x_ee = np.cross(z_temp, y_desired)
-        x_norm = float(np.linalg.norm(x_ee))
-    x_ee /= x_norm
-
-    # Y_ee = y_desired (already orthogonal to X_ee after Gram-Schmidt)
-    y_ee = y_desired
-
-    # Z_ee = X_ee × Y_ee (right-handed)
-    z_ee = np.cross(x_ee, y_ee)
-
-    # Build rotation matrix and convert to quaternion
-    import tf_transformations
-    T = np.eye(4)
-    T[:3, 0] = x_ee
-    T[:3, 1] = y_ee
-    T[:3, 2] = z_ee
-    return tf_transformations.quaternion_from_matrix(T)
+    return compute_ee_orientation_minrot(look_dir, [-0.0062, 0.4107, 0.0021, 0.9118])
 
 
 # ── Home pose position (arm stowed, from wbc_qp_controller FWD-C) ─────────
