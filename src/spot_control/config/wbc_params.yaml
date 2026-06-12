@@ -150,6 +150,8 @@ wbc_coordinator:
 
 wbc_spot_navigator:
   ros__parameters:
+    mode: 'approaching'       # 'approaching' (rotate→drive) or 'exposure' (P-controller X+Y)
+
     # Forward navigation (APPROACHING)
     goal_topic: '/wbc/ee_goal'
     goal_tolerance: 0.15
@@ -159,10 +161,9 @@ wbc_spot_navigator:
     kp_lin: 0.5
     kp_ang: 0.8
 
-    # Lateral Y navigation (EXPOSURE) — matching test_exposure_poses.py
-    lateral_goal_topic: '/body_pose_optimizer/navigator_goal'
+    # Exposure navigation — matching test_exposure_poses.py
     nav_y_speed: 0.15       # [m/s] max lateral speed
     nav_y_gain: 0.3         # P-gain (speed = min(|dy|*gain, max_speed))
     nav_y_min_speed: 0.12   # [m/s] min speed, above Spot deadband (~0.10)
     nav_y_tolerance: 0.05   # [m] arrival tolerance
-    nav_y_timeout: 10.0     # [s] max lateral nav time
+    nav_y_timeout: 10.0     # [s] max exposure nav time

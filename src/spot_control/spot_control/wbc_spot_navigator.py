@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """
-WBC Spot Navigator — point-to-point navigation for WBC APPROACHING + EXPOSURE.
+WBC Spot Navigator — point-to-point navigation with two modes:
 
-Two navigation modes:
-  1. Forward (X + yaw):  rotate → drive → stop, used during APPROACHING.
-  2. Lateral  (Y):       P-controller on cmd_vel.linear.y, used during
-     exposure scanning for walking Spot along the patient's body.
+  APPROACHING  — rotate → drive → stop (forward nav, used during approach)
+  EXPOSURE     — direct P-controller on linear.x + linear.y (no rotation,
+                 used during exposure scanning for small body-frame corrections)
 
-Subscribes to /wbc/ee_goal (forward) and ~/lateral_goal (lateral, from
-body_pose_optimizer).  Enabled/disabled via /wbc/spot_control.
+Enabled/disabled via /wbc/spot_control.  Mode selected by parameter.
 """
 
 import math
@@ -27,7 +25,6 @@ class _Params:
     def __init__(self, node: Node):
         p = lambda n: node.get_parameter(n).value
         self.goal_topic          = p('goal_topic')
-        self.lateral_goal_topic  = p('lateral_goal_topic')
         self.cmd_vel_topic       = p('cmd_vel_topic')
         self.goal_tolerance      = float(p('goal_tolerance'))
         self.angular_speed_max   = float(p('angular_speed_max'))
@@ -38,7 +35,7 @@ class _Params:
         self.update_rate         = float(p('update_rate'))
         self.kp_lin              = float(p('kp_lin'))
         self.kp_ang              = float(p('kp_ang'))
-        # Lateral (Y) navigation — matching test_exposure_poses.py
+        self.mode                = p('mode')
         self.nav_y_speed         = float(p('nav_y_speed'))
         self.nav_y_gain          = float(p('nav_y_gain'))
         self.nav_y_min_speed     = float(p('nav_y_min_speed'))
@@ -51,9 +48,7 @@ class WBCSpotNavigator(Node):
     def __init__(self):
         super().__init__('wbc_spot_navigator')
 
-        # ── Parameters ─────────────────────────────────────────────────
         self.declare_parameter('goal_topic',          '/wbc/ee_goal')
-        self.declare_parameter('lateral_goal_topic',  '/body_pose_optimizer/navigator_goal')
         self.declare_parameter('cmd_vel_topic',       '/my_spot/cmd_vel')
         self.declare_parameter('goal_tolerance',       0.15)
         self.declare_parameter('angular_speed_max',    0.4)
@@ -64,7 +59,7 @@ class WBCSpotNavigator(Node):
         self.declare_parameter('update_rate',          10.0)
         self.declare_parameter('kp_lin',               0.5)
         self.declare_parameter('kp_ang',               0.8)
-        # Lateral Y-nav (matching test_exposure_poses.py defaults)
+        self.declare_parameter('mode',                 'approaching')
         self.declare_parameter('nav_y_speed',          0.15)
         self.declare_parameter('nav_y_gain',           0.3)
         self.declare_parameter('nav_y_min_speed',      0.12)
@@ -72,100 +67,36 @@ class WBCSpotNavigator(Node):
         self.declare_parameter('nav_y_timeout',        10.0)
         self._p = _Params(self)
 
-        # ── TF ─────────────────────────────────────────────────────────
         self._tf = Buffer()
         TransformListener(self._tf, self)
 
-        # ── Sub / Pub ──────────────────────────────────────────────────
         self.create_subscription(
             PoseStamped, self._p.goal_topic, self._cb_goal, 10)
-        self.create_subscription(
-            PoseStamped, self._p.lateral_goal_topic, self._cb_lateral_goal, 10)
         self.create_subscription(
             Bool, '/wbc/spot_control', self._cb_spot_control, 10)
         self._pub_vel = self.create_publisher(
             Twist, self._p.cmd_vel_topic, 10)
 
-        # ── Forward-nav state ──────────────────────────────────────────
-        self._state = 'IDLE'          # IDLE | ROTATING | DRIVING | STOPPED
+        self._state = 'IDLE'
         self._goal_odom: PoseStamped | None = None
         self._latest_goal: PoseStamped | None = None
-
-        # ── Lateral-nav state ──────────────────────────────────────────
-        self._lateral_target_y: float | None = None
-        self._lateral_start_time: rclpy.time.Time | None = None
-        self._lateral_active = False
-
-        # ── Enable ─────────────────────────────────────────────────────
-        self._spot_control = True  # enabled by default
+        self._exp_target_y: float | None = None
+        self._exp_start_time: rclpy.time.Time | None = None
+        self._exp_active = False
+        self._spot_control = True
 
         period = 1.0 / self._p.update_rate
         self.create_timer(period, self._control_loop)
 
         self.get_logger().info(
-            f'WBC Spot Navigator ready.  '
-            f'forward={self._p.goal_topic}  lateral={self._p.lateral_goal_topic}  '
-            f'cmd_vel={self._p.cmd_vel_topic}')
-
-    # ═══════════════════════════════════════════════════════════════════
-    #  Callbacks
-    # ═══════════════════════════════════════════════════════════════════
+            f'WBC Spot Navigator ready — mode={self._p.mode}  '
+            f'goal={self._p.goal_topic}')
 
     def _cb_goal(self, msg: PoseStamped) -> None:
         self._latest_goal = msg
 
-    def _cb_lateral_goal(self, msg: PoseStamped) -> None:
-        """Receive lateral navigation goal from body_pose_optimizer.
-
-        Sets both the lateral Y target (for fine Y-correction via P-controller)
-        and the forward goal (for X positioning via rotate→drive). The forward
-        nav handles dx, the lateral nav handles dy — both compose one Twist.
-        """
-        # Extract (x, y) in odom frame
-        goal_x, goal_y = None, None
-        if msg.header.frame_id == self._p.odom_frame:
-            goal_x = msg.pose.position.x
-            goal_y = msg.pose.position.y
-        else:
-            pt = PointStamped()
-            pt.header.frame_id = msg.header.frame_id
-            pt.header.stamp = rclpy.time.Time().to_msg()
-            pt.point.x = msg.pose.position.x
-            pt.point.y = msg.pose.position.y
-            pt.point.z = msg.pose.position.z
-            try:
-                t = self._tf.transform(
-                    pt, self._p.odom_frame,
-                    timeout=rclpy.duration.Duration(seconds=0.2))
-                goal_x = t.point.x
-                goal_y = t.point.y
-            except TransformException:
-                return
-
-        # Set lateral Y target for P-controller
-        if goal_y is not None:
-            self._lateral_target_y = goal_y
-            self._lateral_active = True
-            self._lateral_start_time = self.get_clock().now()
-
-        # Set forward goal for X positioning (handles dx_body)
-        if goal_x is not None:
-            self._latest_goal = PoseStamped()
-            self._latest_goal.header.frame_id = self._p.odom_frame
-            self._latest_goal.pose.position.x = goal_x
-            self._latest_goal.pose.position.y = goal_y or 0.0
-            self._latest_goal.pose.position.z = 0.0
-            self._state = 'IDLE'  # restart forward nav
-
-        self.get_logger().info(
-            f'Lateral goal: x={goal_x:.3f}, y={goal_y:.3f}')
-
     def _cb_spot_control(self, msg: Bool) -> None:
         self._spot_control = msg.data
-
-    # ═══════════════════════════════════════════════════════════════════
-    #  Forward navigation (X + yaw)
-    # ═══════════════════════════════════════════════════════════════════
 
     def _update_goal_odom(self) -> None:
         goal_raw = self._latest_goal
@@ -192,12 +123,11 @@ class WBCSpotNavigator(Node):
         except TransformException:
             pass
 
-    def _tick_forward_nav(self, twist: Twist) -> bool:
-        """Run forward navigation. Returns True if active (skip lateral)."""
+    def _tick_approaching(self) -> None:
         self._update_goal_odom()
         goal = self._goal_odom
         if goal is None:
-            return False
+            return
 
         gb_pt = PointStamped()
         gb_pt.header.frame_id = self._p.odom_frame
@@ -211,12 +141,13 @@ class WBCSpotNavigator(Node):
                 timeout=rclpy.duration.Duration(seconds=0.1))
         except TransformException:
             self._pub_vel.publish(Twist())
-            return False
+            return
 
         dx = pt.point.x
         dy = pt.point.y
         dist = math.hypot(dx, dy)
         angle = math.atan2(dy, dx)
+        twist = Twist()
 
         if self._state == 'IDLE':
             self._state = 'ROTATING'
@@ -230,14 +161,14 @@ class WBCSpotNavigator(Node):
                     min(self._p.angular_speed_max, self._p.kp_ang * angle)))
                 twist.angular.z = wz
                 self._pub_vel.publish(twist)
-                return True
+                return
 
         if self._state == 'DRIVING':
             if dist < self._p.goal_tolerance:
                 self._state = 'STOPPED'
-                self.get_logger().info('Forward goal reached — STOPPED')
+                self.get_logger().info('Goal reached — STOPPED')
                 self._pub_vel.publish(Twist())
-                return False
+                return
             twist.linear.x = float(max(
                 0.0, min(self._p.linear_speed_max, self._p.kp_lin * dist)))
             wz = float(max(
@@ -245,78 +176,79 @@ class WBCSpotNavigator(Node):
                 min(0.5 * self._p.angular_speed_max, self._p.kp_ang * angle)))
             twist.angular.z = wz
             self._pub_vel.publish(twist)
-            return True
+            return
 
         if self._state == 'STOPPED':
             if dist > self._p.goal_tolerance:
                 self._state = 'ROTATING'
-                self.get_logger().info('New forward goal — restarting')
+                self.get_logger().info('New goal — restarting')
             else:
                 self._pub_vel.publish(Twist())
-            return False
 
-        return False
-
-    # ═══════════════════════════════════════════════════════════════════
-    #  Lateral navigation (Y) — P-controller, matching test_exposure_poses.py
-    # ═══════════════════════════════════════════════════════════════════
-
-    def _tick_lateral_nav(self, twist: Twist) -> None:
-        """P-controller for lateral (Y) Spot movement."""
-        if not self._lateral_active or self._lateral_target_y is None:
-            return
+    def _tick_exposure(self) -> None:
+        self._update_goal_odom()
+        goal = self._goal_odom
 
         try:
             t = self._tf.lookup_transform(
                 self._p.odom_frame, self._p.robot_frame, rclpy.time.Time())
+            current_x = t.transform.translation.x
             current_y = t.transform.translation.y
         except TransformException:
-            self.get_logger().warn(
-                'TF lookup failed during lateral nav — skipping')
-            self._lateral_active = False
             self._pub_vel.publish(Twist())
             return
 
-        dy = self._lateral_target_y - current_y
-        now = self.get_clock().now()
+        twist = Twist()
 
-        if abs(dy) < self._p.nav_y_tolerance:
-            self.get_logger().info(
-                f'✅ Lateral nav arrived: target={self._lateral_target_y:.3f}, actual={current_y:.3f}')
-            self._lateral_active = False
-            self._lateral_target_y = None
-            self._pub_vel.publish(Twist())
-        elif (self._lateral_start_time is not None
-              and (now - self._lateral_start_time) > rclpy.duration.Duration(
-                  seconds=self._p.nav_y_timeout)):
-            self._lateral_active = False
-            self._lateral_target_y = None
-            self._pub_vel.publish(Twist())
-            self.get_logger().warn(
-                f'⏰ Lateral nav timeout after {self._p.nav_y_timeout}s: '
-                f'target={self._lateral_target_y:.3f}, actual={current_y:.3f}')
-        else:
-            speed = min(abs(dy) * self._p.nav_y_gain, self._p.nav_y_speed)
-            # Spot cmd_vel.linear.y convention is inverted (positive = right)
-            twist.linear.y = -math.copysign(
-                max(speed, self._p.nav_y_min_speed), dy)
-            self._pub_vel.publish(twist)
+        if goal is not None:
+            self._exp_target_y = goal.pose.position.y
+            if not self._exp_active:
+                self._exp_active = True
+                self._exp_start_time = self.get_clock().now()
 
-    # ═══════════════════════════════════════════════════════════════════
-    #  Main control loop
-    # ═══════════════════════════════════════════════════════════════════
+            dx_body = goal.pose.position.x - current_x
+            dy_odom = goal.pose.position.y - current_y
+
+            if abs(dx_body) > self._p.goal_tolerance:
+                speed_x = min(abs(dx_body) * self._p.kp_lin, self._p.linear_speed_max)
+                twist.linear.x = speed_x if dx_body > 0 else -speed_x
+
+            if abs(dy_odom) > self._p.nav_y_tolerance:
+                speed_y = min(abs(dy_odom) * self._p.nav_y_gain, self._p.nav_y_speed)
+                twist.linear.y = -math.copysign(max(speed_y, self._p.nav_y_min_speed), dy_odom)
+
+            if (abs(dx_body) <= self._p.goal_tolerance
+                    and abs(dy_odom) <= self._p.nav_y_tolerance):
+                self._exp_active = False
+                self._goal_odom = None
+                self.get_logger().info(
+                    f'Exposure nav arrived: x={current_x:.3f}, y={current_y:.3f}')
+                self._pub_vel.publish(Twist())
+                return
+
+        if self._exp_active and self._exp_start_time is not None:
+            now = self.get_clock().now()
+            if (now - self._exp_start_time) > rclpy.duration.Duration(
+                    seconds=self._p.nav_y_timeout):
+                self._exp_active = False
+                self._goal_odom = None
+                self.get_logger().warn(
+                    f'Exposure nav timeout after {self._p.nav_y_timeout}s')
+                self._pub_vel.publish(Twist())
+                return
+
+        self._pub_vel.publish(twist)
 
     def _control_loop(self) -> None:
         if not self._spot_control:
             self._pub_vel.publish(Twist())
             self._state = 'IDLE'
-            self._lateral_active = False
             return
 
-        twist = Twist()
-        forward_active = self._tick_forward_nav(twist)
-        if not forward_active:
-            self._tick_lateral_nav(twist)
+        if self._p.mode == 'exposure':
+            self._tick_exposure()
+        else:
+            self._tick_approaching()
 
 
 def main(args=None):
