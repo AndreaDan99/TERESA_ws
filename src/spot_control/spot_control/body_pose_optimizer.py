@@ -84,6 +84,9 @@ class BodyPoseOptimizer(Node):
         self._mount_z = (
             self.declare_parameter('mount_z', 0.20)
             .get_parameter_value().double_value)
+        self._spot_y_penalty = (
+            self.declare_parameter('spot_y_penalty', 0.50)  # cost = dist + penalty * |dy_body|
+            .get_parameter_value().double_value)
 
         # ── Subscribers ───────────────────────────────────────────────────────
         self._sub_approach_point = self.create_subscription(
@@ -477,6 +480,7 @@ class BodyPoseOptimizer(Node):
         for idx in needs_escalation:
             target_odom = target_points_odom[idx]
             best_dy, best_h, best_p, best_dist = 0.0, 0.0, 0.0, float('inf')
+            best_cost = float('inf')
 
             for dy_body in dy_body_values:
                 # Convert body-frame Y displacement to odom-frame vector
@@ -490,7 +494,10 @@ class BodyPoseOptimizer(Node):
                         target_link00 = self._odom_to_link00_vec(
                             target_odom, link00_odom, body_yaw, p)
                         dist = float(np.linalg.norm(target_link00 - sweet))
-                        if dist < best_dist:
+                        cost = dist + self._spot_y_penalty * abs(dy_body)
+                        if cost < best_cost:
+                            best_cost = cost
+                            best_dist = dist
                             best_dy = float(dy_body)
                             best_h = float(h)
                             best_p = float(p)
@@ -552,6 +559,7 @@ class BodyPoseOptimizer(Node):
             target_odom = target_points_odom[idx]
             best_dx, best_dy = 0.0, 0.0
             best_h, best_p, best_dist = 0.0, 0.0, float('inf')
+            best_cost = float('inf')
 
             for dx_body in dx_range:
                 for dy_body in dy_range:
@@ -565,7 +573,10 @@ class BodyPoseOptimizer(Node):
                             target_link00 = self._odom_to_link00_vec(
                                 target_odom, link00_odom, body_yaw, p)
                             dist = float(np.linalg.norm(target_link00 - sweet))
-                            if dist < best_dist:
+                            cost = dist + self._spot_y_penalty * (abs(dx_body) + abs(dy_body))
+                            if cost < best_cost:
+                                best_cost = cost
+                                best_dist = dist
                                 best_dx = float(dx_body)
                                 best_dy = float(dy_body)
                                 best_h = float(h)

@@ -105,6 +105,7 @@ wbc_coordinator:
     body_grid_pitches: [0.0, 0.087, 0.17, 0.26]    # [rad] 0°, 5°, 10°, 15°
     body_sweet_spot: [0.35, 0.0, 0.30]              # [m] centro workspace Z1 in link00
     body_settle_time: 1.5                             # [s] attesa dopo body_pose
+    spot_y_penalty: 0.50                             # cost = dist + penalty * |dy_body| (0=no penalty)
 
     # WS_EXTENSION grid search (h, p, dx, dy) — fallback when (h,p) alone insufficient
     ws_ext_dx_steps: 5                         # number of lateral/fwd grid steps
