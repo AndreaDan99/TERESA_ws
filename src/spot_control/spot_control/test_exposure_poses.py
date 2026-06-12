@@ -676,7 +676,7 @@ class ExposurePoseTester(Node):
         Returns:
             (best_spot_y, best_height, best_pitch) in meters and radians.
         """
-        spot_y_values = np.arange(-0.68, 0.69, 0.10)  # 15 values, ±80% of body span at scale 1.0
+        spot_y_values = np.arange(-0.68, 0.73, 0.10)  # 15 values, ±80% of body span at scale 1.0
         heights = [-0.25, -0.20, -0.15, -0.10, -0.05, 0.0, 0.05, 0.10]
         pitches = [0.0, 0.087, 0.17, 0.26, 0.35]  # 0°, 5°, 10°, 15°, 20° in rad
         sweet_spot = np.array([0.35, 0.0, 0.30])
