@@ -73,9 +73,16 @@ from spot_perception.sml_pose_indices import (
 
 from teresa_utils.orientation import compute_ee_orientation
 
-def compute_exposure_orientation() -> np.ndarray:
+def compute_exposure_orientation(look_dir: np.ndarray | None = None) -> np.ndarray:
+    """Compute EE orientation for exposure scan.
+
+    If look_dir is provided, the camera's optical axis (X_ee) points
+    toward the body surface. Otherwise defaults to straight down [0,0,-1].
+    """
     home_ori = [-0.0062, 0.4107, 0.0021, 0.9118]
-    return compute_ee_orientation(np.array([0.0, 0.0, -1.0]), home_ori)
+    if look_dir is None:
+        look_dir = np.array([0.0, 0.0, -1.0])
+    return compute_ee_orientation(look_dir, home_ori)
 
 
 # ── Home pose position (arm stowed, from wbc_qp_controller FWD-C) ─────────
@@ -845,7 +852,7 @@ class ExposurePoseTester(Node):
         # look_dir = surface - camera = direction camera should look.
         # So optical Z = look_dir, Y_ee = -look_dir.
         # X_ee points DOWN (-Z in link00), orthogonalized to Y_ee.
-        quat = compute_exposure_orientation()
+        quat = compute_exposure_orientation(ep.look_dir)
 
         if self._spot_enabled and self._best_h is not None and self._camera_link00 is not None:
             cx, cy, cz = (
