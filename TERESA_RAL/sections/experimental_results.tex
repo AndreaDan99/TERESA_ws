@@ -45,39 +45,30 @@ localisation confirmation.
 
 \subsection{Search Phase: Whole-Body Coverage and Dual-Sensor Lock}
 
-To isolate the arm's contribution to the search phase, we conducted an ablation
-experiment comparing the full \ac{TERESA} configuration against a Spot-only
-baseline where the Z1 arm was disabled, leaving only the front-facing Orbbec
-camera active. Fifty trials were performed with a subject lying at five body yaw
-angles ($0\degree$ to $180\degree$, five repetitions per angle per
-configuration), measuring time from search initiation until Orbbec posture
-confidence exceeded \num{0.70}.
+We isolated the arm's contribution to search through an ablation experiment:
+\ac{TERESA} (full system) versus a Spot-only baseline with the Z1 arm disabled
+and only the front-facing Orbbec active. Fifty trials were conducted at five
+body yaw angles ($0\degree$--$180\degree$, five repetitions each), measuring
+time to Orbbec posture confidence $\geq$ \num{0.70}.
 
-In the \ac{TERESA} configuration, the Z1 arm's seven scanning poses, each
-separated by approximately \SI{51}{\degree} with the camera's
-\SI{87}{\degree} field of view, provided full \SI{360}{\degree} coverage from a
-single base yaw position, eliminating the need for base rotation entirely.
-Patients at frontal angles ($0\degree$--$45\degree$) were detected near-instantly
-by the body camera (\SIrange{0.6}{1.7}{\second}); those at lateral and rear
-angles were found during the arm scan, with detection latency proportional to
-angular offset. The mean search time was \SI{2.8}{\second}. In the Orbbec-only
-configuration, the fixed camera's effective \SI{77}{\degree} field of view forced
-the base to rotate through five discrete yaw positions---each rotation adding
-\SI{6.7}{\second} at the robot's \SI{0.2}{\radian\per\second} safe operating
-speed, plus \SI{2.0}{\second} dwell per position---yielding a mean search time of
-\SI{15.5}{\second}, a \textbf{5.5}$\times$ slowdown. A \num{10000}-trial Monte
-Carlo simulation with the same measured timing parameters confirmed this ratio
-across all possible patient orientations.
+With the arm's seven scanning poses providing full \SI{360}{\degree} coverage
+from a single base position, \ac{TERESA} required no base rotation: frontal
+patients were detected near-instantly (\SIrange{0.6}{1.7}{\second}), the rest
+during the scan, yielding a mean of \SI{2.8}{\second}. Without the arm, the
+fixed camera's \SI{77}{\degree} effective field of view forced five discrete
+base rotations (\SI{6.7}{\second} each at \SI{0.2}{\radian\per\second}, plus
+\SI{2.0}{\second} dwell), giving \SI{15.5}{\second}---a \textbf{5.5}$\times$
+slowdown. A \num{10000}-trial Monte Carlo simulation confirmed this ratio across
+all patient orientations.
 
-Beyond speed, the dual-sensor architecture added robustness: in \SI{28}{\percent}
-of trials the Orbbec body camera alone failed to lock, but the arm-mounted
-RealSense detected partial torso keypoints, triggering the semi-locking phase
-that guided the base toward the body and gave the Orbbec a clean observation
-window. Without this redundancy, these trials would have resumed the coarse
-search cycle, adding \SI{14}{\second}~$\pm$~\SI{4}{\second}. The arm thus serves
-two roles during search: its \SI{360}{\degree} coverage eliminates the
-base-rotation bottleneck, while its active camera provides the sensor redundancy
-that prevents detection failures.
+The dual-sensor architecture added robustness independently of speed: in
+\SI{28}{\percent} of trials, the Orbbec alone failed to lock, but the
+arm-mounted RealSense detected partial keypoints and guided the base toward the
+body, preventing a search-cycle restart that would have added
+\SI{14}{\second}~$\pm$~\SI{4}{\second}. The arm thus serves two complementary
+roles: its \SI{360}{\degree} coverage eliminates the base-rotation bottleneck,
+while its active camera prevents detection failures that a single-sensor system
+would incur.
 
 \subsection{End-to-End Mission Performance}
 
