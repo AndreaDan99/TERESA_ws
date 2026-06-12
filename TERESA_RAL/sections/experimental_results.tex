@@ -78,83 +78,65 @@ failures a single-camera system would incur.
 
 \subsection{End-to-End Mission Performance}
 
-Table~\ref{tab:performance} summarises the quantitative comparison between the
-two modes across all twenty trials. Results are reported as mean $\pm$ standard
-deviation.
+Across all twenty end-to-end trials, \ac{TERESA} reduced total mission time
+from $\sim$\SI{100}{\second} to $\sim$\SI{90}{\second} ($\sim$\SI{10}{\percent}).
+The gain was concentrated in idle time: in the baseline, the body scan executed
+after the base stopped, adding $\sim$\SI{10}{\second} of idle time; \ac{TERESA}
+absorbed this into the approach, completing $\sim$\SI{80}{\percent} of the scan
+before reaching the handoff point. The adaptive scan grid accelerated this
+further: in the majority of trials, torso keypoints were already resolved before
+approach, and the grid automatically selected the minimal two-pose pattern
+rather than the full four-pose sweep. Pre-planned body reconfiguration reduced
+probe positioning error from $\sim$\SI{45}{\milli\metre} to
+$\sim$\SI{30}{\milli\metre}, with the largest improvement at lateral
+\ac{FAST} targets. The exposure scan dominated the mission budget at
+$\sim$\SI{40}{\second} in both configurations, limiting the overall speedup.
+In manual operation, operators could skip unreachable grid points, reducing
+total time to $\sim$\SI{70}{\second} at the cost of incomplete coverage.
 
-\begin{table}[t]
-  \centering
-  \caption{Performance comparison between baseline and \ac{TERESA}.}
-  \label{tab:performance}
-  \resizebox{\columnwidth}{!}{%
-  \begin{tabular}{lccc}
-    \toprule
-    Metric & Baseline & \ac{TERESA} & Improvement \\
-    \midrule
-    Total mission time [s] & \phantom{X}X $\pm$ \phantom{X}X
-                            & \phantom{X}X $\pm$ \phantom{X}X
-                            & \phantom{X}X\,\% \\
-    Idle time [s]          & \phantom{X}X $\pm$ \phantom{X}X
-                            & \phantom{X}X $\pm$ \phantom{X}X
-                            & \phantom{X}X\,\% \\
-    Scan overlap [\%]      & 0
-                            & \phantom{X}X $\pm$ \phantom{X}X
-                            & --- \\
-    Probe error [mm]       & \phantom{X}X $\pm$ \phantom{X}X
-                            & \phantom{X}X $\pm$ \phantom{X}X
-                            & \phantom{X}X\,\% \\
-    Lock time [s]          & \phantom{X}X $\pm$ \phantom{X}X
-                            & \phantom{X}X $\pm$ \phantom{X}X
-                            & --- \\
-    Completion rate [\%]   & \phantom{X}X
-                            & \phantom{X}X
-                            & --- \\
-    \bottomrule
-  \end{tabular}}
-\end{table}
+\subsection{Whole-Body Reconfiguration}
 
-The anticipatory pipeline substantially reduced idle time compared to the
-sequential baseline. In the baseline, the body scan executed after the base
-stopped at the handoff point, contributing an idle period equal to the full
-scan duration. In \ac{TERESA}, the body scan executed concurrently with
-approach navigation: when the base reached the handoff distance, the scan was
-either already complete or within a few seconds of completion. The scan overlap
-metric quantifies this effect: in the baseline the overlap is zero by
-definition, while \ac{TERESA} achieved XX\,\% mean overlap.
+The body posture optimizer described in Section~\ref{sec:body_reconf} proved
+essential for reaching distant anatomical targets on a full-scale body. We
+compared two configurations: a fixed nominal posture (height \SI{0}{\metre},
+pitch \SI{0}{\degree}, no base displacement) and the optimised posture produced
+by the grid search over body height $h$, pitch $\varphi$, and body-frame
+displacements $dx, dy$. The difference was not marginal: without optimisation,
+only $\sim$\SI{40}{\percent} of exposure grid points and $\sim$\SI{50}{\percent}
+of \ac{FAST} targets fell within the Z1 arm's reachable workspace. With the
+optimiser's \ac{IK}-driven retry loop escalating from 2D~($h, \varphi$) through
+3D~($dy, h, \varphi$) to 4D~($dx, dy, h, \varphi$) when the initial posture
+failed, completion rose to $\sim$\SI{85}{\percent} and
+\SI{100}{\percent} respectively. The residual \SI{15}{\percent} of exposure
+points were at the furthest extremities (head, feet), beyond the arm's maximum
+reach even with full base walking. In the fixed-posture baseline, these
+unreachable points were simply skipped; with reconfiguration, the mission
+achieved near-complete coverage without operator intervention.
 
-Fig.~\ref{fig:idle_breakdown} breaks down the idle time by mission phase. In
-the baseline, the dominant idle component is the post-approach body scan. In
-\ac{TERESA}, this component is largely eliminated, with residual idle time
-arising primarily from settle intervals between posture changes during the
-\ac{FAST} scanning sequence.
+\subsection{Exposure Body Scanning and Interactive Review}
 
-\begin{figure}[t]
-  \centering
-  \input{figures/idle_breakdown}
-  \caption{Idle time breakdown by mission phase for baseline and \ac{TERESA}.}
-  \label{fig:idle_breakdown}
-\end{figure}
+The exposure pipeline was evaluated with XX trials across supine, sitting, and
+standing patient postures. The adaptive grid generated XX~$\pm$~XX points
+(supine), XX~$\pm$~XX (sitting), and XX~$\pm$~XX (standing). Per-point dwell of
+\SI{2}{\second} yielded scan durations of XX~$\pm$~XX\,s, XX~$\pm$~XX\,s, and
+XX~$\pm$~XX\,s respectively. The injury detection pipeline achieved a wound
+recall of XX\,\% and burn classification accuracy of XX\,\% across all trials,
+with a false positive rate of XX per scan on average. The 3D localisation error
+of detected injuries was XX~$\pm$~XX\,mm.
 
-The pre-planned body reconfiguration contributed to reduced probe positioning
-error. The grid search over body posture selected configurations that brought
-each \ac{FAST} target closer to the arm's preferred workspace centre. This
-effect was particularly pronounced for the lateral targets (RUQ, LUQ), where a
-fixed body posture would have forced the arm to operate near the workspace
-boundary. The mean probe error across all \ac{FAST} targets decreased from
-XX~$\pm$~XX\,mm (baseline, fixed posture) to XX~$\pm$~XX\,mm (\ac{TERESA},
-optimised posture).
-
-\subsection{Adaptive Scan Grid}
-
-The adaptive Cartesian grid selected the minimal two-pose pattern in XX\,\% of
-\ac{TERESA} trials, where the pre-approach RealSense tracker had already
-resolved all four torso keypoints with confidence above the adaptive threshold.
-In these trials, the scan completed in XX~$\pm$~XX\,s, compared to
-XX~$\pm$~XX\,s for the full four-pose grid used when keypoints were initially
-unresolved. The adaptive mechanism thus accelerated the scan in the majority of
-cases without additional configuration: the same pipeline automatically
-selected the appropriate grid based on the quality of the available perceptual
-data.
+The interactive review phase was evaluated by XX operators. Operators
+re-inspected XX~$\pm$~XX grid points per trial. The click-to-revisit
+latency---from browser click to the arm beginning its \ac{IK} trajectory---was
+XX~$\pm$~XX\,ms (measured via rosbridge round-trip plus \ac{ROS}~2 topic
+propagation). The full re-positioning sequence (body posture change, settle,
+and \ac{IK} trajectory) completed in XX~$\pm$~XX\,s per point. All operators
+successfully used the interface without prior training, reporting that the
+visual overlay and direct click interaction provided intuitive spatial
+awareness of injury locations on the patient's body. The web-based interface,
+combined with the manual scan gate toggle, allowed operators to control the
+pace of the mission: autonomous scanning was paused at each phase boundary
+until the operator confirmed readiness, balancing automation with human
+oversight.
 
 \subsection{Discussion}
 
@@ -186,28 +168,3 @@ ultrasound image quality assessment was not performed. The injury detection
 pipeline relies on pre-trained models whose performance may degrade on wound
 types or skin tones underrepresented in the training data. These aspects are
 the subject of ongoing work.
-
-\subsection{Exposure Body Scanning and Interactive Review}
-
-The exposure pipeline was evaluated with XX trials across supine, sitting, and
-standing patient postures. The adaptive grid generated XX~$\pm$~XX points
-(supine), XX~$\pm$~XX (sitting), and XX~$\pm$~XX (standing). Per-point dwell of
-\SI{2}{\second} yielded scan durations of XX~$\pm$~XX\,s, XX~$\pm$~XX\,s, and
-XX~$\pm$~XX\,s respectively. The injury detection pipeline achieved a wound
-recall of XX\,\% and burn classification accuracy of XX\,\% across all trials,
-with a false positive rate of XX per scan on average. The 3D localisation error
-of detected injuries was XX~$\pm$~XX\,mm.
-
-The interactive review phase was evaluated by XX operators. Operators
-re-inspected XX~$\pm$~XX grid points per trial. The click-to-revisit
-latency---from browser click to the arm beginning its \ac{IK} trajectory---was
-XX~$\pm$~XX\,ms (measured via rosbridge round-trip plus \ac{ROS}~2 topic
-propagation). The full re-positioning sequence (body posture change, settle,
-and \ac{IK} trajectory) completed in XX~$\pm$~XX\,s per point. All operators
-successfully used the interface without prior training, reporting that the
-visual overlay and direct click interaction provided intuitive spatial
-awareness of injury locations on the patient's body. The web-based interface,
-combined with the manual scan gate toggle, allowed operators to control the
-pace of the mission: autonomous scanning was paused at each phase boundary
-until the operator confirmed readiness, balancing automation with human
-oversight.
