@@ -1005,7 +1005,8 @@ class ExposurePoseTester(Node):
                             f'target={self._target_y:.3f}, actual={current_y:.3f}')
                     else:
                         twist = Twist()
-                        twist.linear.y = math.copysign(self._nav_y_speed, dy)
+                        speed = min(abs(dy) * 0.8, self._nav_y_speed)   # P-controller: slow down near target
+                        twist.linear.y = math.copysign(max(speed, 0.05), dy)  # min 0.05 m/s to overcome stiction
                         twist.angular.z = 0.0
                         self._pub_cmd_vel.publish(twist)
 
