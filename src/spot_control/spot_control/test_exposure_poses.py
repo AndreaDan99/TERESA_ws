@@ -494,7 +494,7 @@ class ExposurePoseTester(Node):
             self.declare_parameter('spot_y_penalty', 1.0)  # cost = dist + penalty * |spot_y|
             .get_parameter_value().double_value)
         self._nav_y_speed = float(
-            self.declare_parameter('nav_y_speed', 0.20)
+            self.declare_parameter('nav_y_speed', 0.15)
             .get_parameter_value().double_value)
 
         # Publishers
@@ -1046,7 +1046,7 @@ class ExposurePoseTester(Node):
                             f'target={self._target_y:.3f}, actual={current_y:.3f}')
                     else:
                         twist = Twist()
-                        speed = min(abs(dy) * 0.6, self._nav_y_speed)
+                        speed = min(abs(dy) * 0.3, self._nav_y_speed)
                         twist.linear.y = -math.copysign(max(speed, 0.12), dy)  # min 0.12 m/s (Spot deadband ~0.10)
                         twist.angular.z = 0.0
                         self._pub_cmd_vel.publish(twist)
