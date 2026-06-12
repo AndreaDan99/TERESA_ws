@@ -259,6 +259,7 @@ class WBCCoordinatorNode(Node):
         self._max_reach_val          = float(p('max_workspace_reach'))
         self._scan_timeout          = float(p('scan_timeout'))
         self._manual_scan_gate      = bool(p('manual_scan_gate'))
+        self._navigator_timeout      = float(p('navigator_timeout'))
 
         # ── Body pose publisher (height + pitch via /my_spot/body_pose) ──
         self._pub_body_pose = self.create_publisher(Pose, '/my_spot/body_pose', 10)
@@ -331,14 +332,10 @@ class WBCCoordinatorNode(Node):
         self._refine_best_approach: np.ndarray | None = None
         self._refine_dwell_start: float = 0.0
 
-        # FAST body pose optimization + WS_EXTENSION
+        # FAST body pose optimization
         self._fast_points: PoseArray | None = None
-        self._optimal_poses: list = []                # [(h, p, dist), ...] per point
-        self._needs_ws_ext: set = set()               # point indices needing WS_EXT
+        self._optimizer_results: list = []            # [(h, p, dx, dy), ...] from optimizer
         self._body_settle_start: float | None = None  # timestamp when settle started
-        self._ws_ext_driving: bool = False            # True while navigator drives to WS_EXT goal
-        self._ws_ext_drive_start: float | None = None # timestamp when drive started
-        self._ws_ext_failed: set = set()              # point indices where WS_EXT failed
 
         # NLF prior (from /exposure/nlf_prior, 24 SMPL joints in odom)
         self._nlf_prior = None               # list[np.ndarray] | 'timeout' | None
@@ -347,9 +344,8 @@ class WBCCoordinatorNode(Node):
         self._nlf_low_ticks = 0              # consecutive LOW-coherence ticks
         self._nlf_confidence = 0.0           # mean bbox_score from NLF burst
 
-        # Exposure body pose optimization (same grid search as FAST)
+        # Exposure grid points (for body pose optimization)
         self._exposure_grid_points: list | None = None  # list of np.ndarray in world frame
-        self._exposure_optimal_poses: list = []         # [(h, p, dist), ...] per point
 
         # ── Sub / Pub ─────────────────────────────────────────────────
         self.create_subscription(String,       '/human_pose/posture',        self._cb_posture,    10)
@@ -373,6 +369,7 @@ class WBCCoordinatorNode(Node):
         self.create_subscription(PoseArray,      '/exposure/nlf_prior',       self._cb_nlf_prior,         10)
         self.create_subscription(Float32,        '/exposure/nlf_confidence',  self._cb_nlf_confidence,    10)
         self.create_subscription(PoseArray,      '/human_pose/points_3d',     self._cb_skeleton_stream,   10)
+        self.create_subscription(PoseArray,      '~/optimize_result',         self._cb_optimizer_result,  10)
 
         self._pub_goal     = self.create_publisher(PoseStamped, p('wbc_goal_topic'),        10)
         self._pub_nlf_trigger = self.create_publisher(Bool, '/nlf/trigger', 10)
@@ -384,6 +381,7 @@ class WBCCoordinatorNode(Node):
         self._pub_spot_ctrl = self.create_publisher(Bool,       '/wbc/spot_control',       10)
         self._pub_dbg_marker = self.create_publisher(Marker, '/wbc/debug_marker', 10)
         self._pub_body_ready = self.create_publisher(Bool, '/wbc/body_ready', 10)
+        self._pub_optimize_request = self.create_publisher(PoseArray, '~/optimize_request', 10)
         self._pub_step_pending = self.create_publisher(String, '/wbc/step_pending', 10)
         self._pub_guidance = self.create_publisher(Bool, '/tracker_guidance_mode', 10)
         self._pub_handoff  = self.create_publisher(Bool, '/wbc/handoff_reached', 10)
@@ -662,9 +660,9 @@ class WBCCoordinatorNode(Node):
             for pose in msg.poses:
                 points.append(np.array([pose.position.x, pose.position.y, pose.position.z]))
             self._exposure_grid_points = points
-            self._optimize_exposure_body_poses()
+            self._pub_optimize_request.publish(msg)
             self.get_logger().info(
-                f'Exposure grid points received ({len(points)}), optimized')
+                f'Exposure grid points received ({len(points)}), published to optimizer')
 
     def _cb_terminate_exposure(self, msg: Bool) -> None:
         with self._lock:
@@ -1473,9 +1471,28 @@ class WBCCoordinatorNode(Node):
                 return
             self._fast_points = msg
             self.get_logger().info(f'FAST points received ({len(msg.poses)} poses)')
-            self._optimize_body_poses()
-            if self._state == CoordState.SCANNING:
-                self._apply_fast_body_pose(0)
+            self._pub_optimize_request.publish(msg)
+            self.get_logger().info(
+                f'Published {len(msg.poses)} points to ~/optimize_request')
+
+    def _cb_optimizer_result(self, msg: PoseArray) -> None:
+        """Receive optimizer results: PoseArray where each Pose encodes (h, p, dx, dy).
+
+        pose.position.x → h  (body height offset)
+        pose.position.y → p  (body pitch)
+        pose.position.z → dx (lateral displacement)
+        pose.orientation.x → dy (forward/backward displacement)
+        """
+        with self._lock:
+            self._optimizer_results = []
+            for pose in msg.poses:
+                h = float(pose.position.x)
+                p = float(pose.position.y)
+                dx = float(pose.position.z)
+                dy = float(pose.orientation.x)
+                self._optimizer_results.append((h, p, dx, dy))
+            self.get_logger().info(
+                f'Optimizer results received ({len(self._optimizer_results)} poses)')
 
     def _cb_next_point(self, msg: Int32) -> None:
         with self._lock:
@@ -1486,285 +1503,22 @@ class WBCCoordinatorNode(Node):
                 self._set_body_pose(self._handoff_body_height, 0.0)
                 self._pub_body_ready.publish(Bool(data=True))
                 return
-            if self._state == CoordState.SCANNING:
-                self._apply_fast_body_pose(idx)
-            elif self._state == CoordState.EXPOSURE_SCANNING:
-                self._apply_exposure_body_pose(idx)
-
-    def _optimize_body_poses(self) -> None:
-        """Grid search: for each FAST point, find optimal (h, p)."""
-        if self._fast_points is None:
-            return
-
-        heights = self._body_grid_heights
-        pitches = self._body_grid_pitches
-        sweet = self._body_sweet_spot
-
-        body_tf = self._tf_lookup(self._odom_frame, self._body_frame)
-        if body_tf is None:
-            return
-
-        body_yaw = _yaw_from_quat(body_tf.transform.rotation)
-        body_pos = np.array([body_tf.transform.translation.x,
-                             body_tf.transform.translation.y,
-                             body_tf.transform.translation.z])
-
-        self._optimal_poses = []
-        self._needs_ws_ext.clear()
-
-        for i, target_pose in enumerate(self._fast_points.poses):
-            target_link00 = np.array([target_pose.position.x,
-                                      target_pose.position.y,
-                                      target_pose.position.z])
-
-            best_h, best_p, best_dist = 0.0, 0.0, float('inf')
-            for h in heights:
-                for p in pitches:
-                    link00_odom, _ = self._simulate_link00(body_pos, body_yaw, h, p)
-                    target_odom = self._link00_to_odom_vec(body_tf, target_link00)
-                    target_new_link00 = self._odom_to_link00_vec(target_odom, link00_odom, body_yaw, p)
-                    dist = float(np.linalg.norm(target_new_link00 - sweet))
-                    if dist < best_dist:
-                        best_h, best_p, best_dist = h, p, dist
-
-            self._optimal_poses.append((best_h, best_p, best_dist))
-            self.get_logger().info(
-                f'FAST pt[{i}]: best (h={best_h:.2f}m, p={math.degrees(best_p):.1f}°)'
-                f' → sweet_dist={best_dist:.3f}m')
-
-            if best_dist > self._max_workspace_reach():
-                self._needs_ws_ext.add(i)  # will trigger WS_EXT on apply
-
-    def _optimize_exposure_body_poses(self) -> None:
-        heights = self._body_grid_heights
-        pitches = self._body_grid_pitches
-        sweet = self._body_sweet_spot
-
-        if self._exposure_grid_points is None:
-            return
-
-        body_tf = self._tf_lookup(self._odom_frame, self._body_frame)
-        if body_tf is None:
-            return
-
-        body_yaw = _yaw_from_quat(body_tf.transform.rotation)
-        body_pos = np.array([body_tf.transform.translation.x,
-                              body_tf.transform.translation.y,
-                              body_tf.transform.translation.z])
-
-        self._exposure_optimal_poses = []
-        for i, point_world in enumerate(self._exposure_grid_points):
-            target_link00 = point_world
-
-            best_h, best_p, best_dist = 0.0, 0.0, float('inf')
-            for h in heights:
-                for p in pitches:
-                    link00_odom, _ = self._simulate_link00(body_pos, body_yaw, h, p)
-                    target_odom = self._link00_to_odom_vec(body_tf, target_link00)
-                    target_new_link00 = self._odom_to_link00_vec(
-                        target_odom, link00_odom, body_yaw, p)
-                    dist = float(np.linalg.norm(target_new_link00 - sweet))
-                    if dist < best_dist:
-                        best_h, best_p, best_dist = h, p, dist
-
-            self._exposure_optimal_poses.append((best_h, best_p, best_dist))
-            self.get_logger().info(
-                f'Exposure pt[{i}]: best (h={best_h:.2f}m, '
-                f'p={math.degrees(best_p):.1f}°) → sweet_dist={best_dist:.3f}m')
+            if self._optimizer_results and idx < len(self._optimizer_results):
+                h, p, dx, dy = self._optimizer_results[idx]
+                self.get_logger().info(
+                    f'Point {idx} body pose from optimizer: '
+                    f'h={h:.2f}m, p={math.degrees(p):.1f}°')
+                self._set_body_pose(h, p)
+                self._body_settle_start = self.get_clock().now().nanoseconds * 1e-9
+            else:
+                self._pub_body_ready.publish(Bool(data=True))
 
     def _max_workspace_reach(self) -> float:
         """Estimate max reachable distance from link00 in meters."""
         return self._max_reach_val
 
-    # ── Simulation helpers ────────────────────────────────────────────
-
-    def _simulate_link00(self, body_pos: np.ndarray, body_yaw: float,
-                         height: float, pitch: float) -> tuple:
-        """Compute link00 position + rotation in odom for a given body config.
-
-        Returns (link00_odom_xyz, R_body_odom).
-        body_pos: current body [x,y,z] in odom (at current body_pose height).
-        height: desired body_pose height offset (negative = lower).
-        pitch: desired body_pose pitch [rad].
-        """
-        from tf_transformations import quaternion_matrix
-        body_nominal_z = float(body_pos[2]) - self._current_body_height
-        body_new_z = body_nominal_z + height
-        t_body = np.array([float(body_pos[0]), float(body_pos[1]), body_new_z])
-
-        q = np.array([0.0, float(np.sin(pitch / 2.0)), 0.0,
-                      float(np.cos(pitch / 2.0))])  # Ry(pitch)
-        R_yaw = np.array([[np.cos(body_yaw), -np.sin(body_yaw), 0.0],
-                          [np.sin(body_yaw),  np.cos(body_yaw), 0.0],
-                          [0.0, 0.0, 1.0]])
-        R_pitch = np.array([[np.cos(pitch), 0.0, np.sin(pitch)],
-                            [0.0, 1.0, 0.0],
-                            [-np.sin(pitch), 0.0, np.cos(pitch)]])
-        R_body = R_yaw @ R_pitch
-
-        mount = np.array([self._mount_x, self._mount_y, self._mount_z])
-        link00_odom = t_body + R_body @ mount
-        return link00_odom, R_body
-
-    def _link00_to_odom_vec(self, body_tf: TransformStamped,
-                             vec_link00: np.ndarray) -> np.ndarray:
-        """Transform a vector from link00 frame to odom frame using current body TF."""
-        R = quat_to_rot(body_tf.transform.rotation)
-        link00_in_odom = np.array([body_tf.transform.translation.x,
-                                    body_tf.transform.translation.y,
-                                    body_tf.transform.translation.z]) \
-                         + R @ np.array([self._mount_x, self._mount_y, self._mount_z])
-        return link00_in_odom + R @ vec_link00
-
-    def _odom_to_link00_vec(self, point_odom: np.ndarray,
-                             link00_odom: np.ndarray,
-                             body_yaw: float, pitch: float) -> np.ndarray:
-        """Transform a point from odom to the link00 frame for given body config."""
-        R_yaw = np.array([[np.cos(body_yaw), -np.sin(body_yaw), 0.0],
-                          [np.sin(body_yaw),  np.cos(body_yaw), 0.0],
-                          [0.0, 0.0, 1.0]])
-        R_pitch = np.array([[np.cos(pitch), 0.0, np.sin(pitch)],
-                            [0.0, 1.0, 0.0],
-                            [-np.sin(pitch), 0.0, np.cos(pitch)]])
-        R_body = R_yaw @ R_pitch
-        return R_body.T @ (point_odom - link00_odom)
-
-    # ── WS_EXTENSION grid search ──────────────────────────────────────
-
-    def _optimize_ws_extension(self, point_idx: int):
-        """Grid search (h, p, dx, dy) for a single point that needs WS_EXT."""
-        if self._fast_points is None or point_idx >= len(self._fast_points.poses):
-            return None
-
-        heights = self._body_grid_heights
-        pitches = self._body_grid_pitches
-        sweet = self._body_sweet_spot
-
-        n = self._ws_ext_dx_steps
-        dx_range = np.linspace(-self._ws_ext_dx_max, self._ws_ext_dx_max, n).tolist()
-        dy_range = np.linspace(-self._ws_ext_dy_bwd_max, self._ws_ext_dy_fwd_max, n).tolist()
-
-        body_tf = self._tf_lookup(self._odom_frame, self._body_frame)
-        if body_tf is None:
-            return None
-
-        body_yaw = _yaw_from_quat(body_tf.transform.rotation)
-        body_pos = np.array([body_tf.transform.translation.x,
-                             body_tf.transform.translation.y,
-                             body_tf.transform.translation.z])
-
-        target_pose = self._fast_points.poses[point_idx]
-        target_link00 = np.array([target_pose.position.x,
-                                  target_pose.position.y,
-                                  target_pose.position.z])
-        target_odom = self._link00_to_odom_vec(body_tf, target_link00)
-
-        best = None
-        for h in heights:
-            for p in pitches:
-                for dx in dx_range:
-                    for dy in dy_range:
-                        shifted = body_pos + np.array([dx, dy, 0.0])
-                        link00_odom, _ = self._simulate_link00(shifted, body_yaw, h, p)
-                        target_new = self._odom_to_link00_vec(target_odom, link00_odom, body_yaw, p)
-                        dist = float(np.linalg.norm(target_new - sweet))
-                        if best is None or dist < best[4]:
-                            best = (h, p, dx, dy, dist)
-
-        if best is None:
-            return None
-
-        h, p, dx, dy, best_dist = best
-        self.get_logger().info(
-            f'WS_EXT pt[{point_idx}]: best (h={h:.2f}m, p={math.degrees(p):.1f}°, '
-            f'dx={dx:.2f}m, dy={dy:.2f}m) → sweet_dist={best_dist:.3f}m')
-        return best
-
-    # ── FAST body pose application + settle ───────────────────────────
-
-    def _apply_fast_body_pose(self, idx: int) -> None:
-        """Apply optimized body pose for FAST point idx."""
-        if not self._optimal_poses or idx >= len(self._optimal_poses):
-            self._pub_body_ready.publish(Bool(data=True))
-            return
-
-        h, p, dist = self._optimal_poses[idx]
-
-        if idx in self._needs_ws_ext and idx not in self._ws_ext_failed:
-            # Try WS_EXTENSION grid search
-            ws = self._optimize_ws_extension(idx)
-            if ws is not None:
-                h, p, dx, dy, best_dist = ws
-                if best_dist < self._max_workspace_reach():
-                    # Drive Spot to WS_EXT position
-                    self._drive_ws_ext_position(idx, h, p, dx, dy)
-                    return
-                else:
-                    self.get_logger().warn(
-                        f'WS_EXT pt[{idx}]: best sweet_dist={best_dist:.3f}m '
-                        f'still > {self._max_workspace_reach():.3f}m → giving up')
-                    self._ws_ext_failed.add(idx)
-
-        # Normal body pose (h, p only) or WS_EXT gave up
-        self._set_body_pose(h, p)
-        self._body_settle_start = self.get_clock().now().nanoseconds * 1e-9
-        self._ws_ext_driving = False
-
-    def _apply_exposure_body_pose(self, idx: int) -> None:
-        if self._exposure_optimal_poses and idx < len(self._exposure_optimal_poses):
-            h, p, dist = self._exposure_optimal_poses[idx]
-            self.get_logger().info(
-                f'Exposure pt[{idx}]: optimized pose '
-                f'(h={h:.2f}m, p={math.degrees(p):.1f}°, sweet_dist={dist:.3f}m)')
-        else:
-            h, p = self._handoff_body_height, 0.0
-            self.get_logger().info(
-                f'Exposure pt[{idx}]: no optimized pose — using handoff fallback '
-                f'(h={h:.2f}m)')
-        self._set_body_pose(h, p)
-        self._body_settle_start = self.get_clock().now().nanoseconds * 1e-9
-        self._ws_ext_driving = False
-
-    def _drive_ws_ext_position(self, idx: int, h: float, p: float,
-                                dx: float, dy: float) -> None:
-        """Publish navigator goal for WS_EXT displacement and start drive monitor."""
-        body_tf = self._tf_lookup(self._odom_frame, self._body_frame)
-        if body_tf is None:
-            self._ws_ext_failed.add(idx)
-            self._apply_fast_body_pose(idx)  # fallback to (h,p) only
-            return
-
-        body_yaw = _yaw_from_quat(body_tf.transform.rotation)
-        # Target odom position: current body + dx,dy offset
-        goal_x = body_tf.transform.translation.x + dx
-        goal_y = body_tf.transform.translation.y + dy
-
-        goal = PoseStamped()
-        goal.header.frame_id = self._odom_frame
-        goal.header.stamp = self.get_clock().now().to_msg()
-        goal.pose.position.x = goal_x
-        goal.pose.position.y = goal_y
-        goal.pose.position.z = body_tf.transform.translation.z
-        goal.pose.orientation.w = 1.0
-
-        self._pub_goal.publish(goal)
-        self._pub_spot_ctrl.publish(Bool(data=True))  # enable navigator
-        self._ws_ext_driving = True
-        self._ws_ext_drive_start = self.get_clock().now().nanoseconds * 1e-9
-        self._ws_ext_pending_h = h
-        self._ws_ext_pending_p = p
-        self._ws_ext_pending_idx = idx
-        self._ws_ext_goal_pos = (goal_x, goal_y)
-        self.get_logger().info(
-            f'WS_EXT pt[{idx}]: driving Spot by (dx={dx:.2f}, dy={dy:.2f}) '
-            f'→ goal=({goal_x:.2f}, {goal_y:.2f})')
-
     def _tick_fast_settle(self) -> None:
-        """Monitor body pose settle time or WS_EXT drive completion."""
-        if self._ws_ext_driving:
-            self._tick_ws_ext_drive()
-            return
-
+        """Monitor body pose settle time."""
         if self._body_settle_start is None:
             return
 
@@ -1775,52 +1529,6 @@ class WBCCoordinatorNode(Node):
                 f'Body settle complete ({elapsed:.1f}s ≥ {self._body_settle_time:.1f}s)')
             self._body_settle_start = None
             self._pub_body_ready.publish(Bool(data=True))
-
-    def _tick_ws_ext_drive(self) -> None:
-        """Monitor navigator progress toward WS_EXT goal."""
-        if self._ws_ext_drive_start is None:
-            return
-
-        elapsed = (self.get_clock().now().nanoseconds * 1e-9
-                   - self._ws_ext_drive_start)
-
-        body_tf = self._tf_lookup(self._odom_frame, self._body_frame)
-        if body_tf is None:
-            return
-
-        dx = body_tf.transform.translation.x - self._ws_ext_goal_pos[0]
-        dy = body_tf.transform.translation.y - self._ws_ext_goal_pos[1]
-        dist = math.hypot(dx, dy)
-
-        if dist < self._ws_ext_goal_tolerance:
-            self.get_logger().info(
-                f'WS_EXT pt[{self._ws_ext_pending_idx}]: goal reached '
-                f'(dist={dist:.3f}m in {elapsed:.1f}s)')
-            self._finish_ws_ext_drive()
-        elif elapsed > self._navigator_timeout:
-            self.get_logger().warn(
-                f'WS_EXT pt[{self._ws_ext_pending_idx}]: timeout '
-                f'({elapsed:.1f}s > {self._navigator_timeout:.1f}s, '
-                f'dist={dist:.3f}m) → giving up')
-            self._ws_ext_failed.add(self._ws_ext_pending_idx)
-            self._finish_ws_ext_drive()
-        else:
-            # Still driving — republish goal to keep navigator alive
-            goal = PoseStamped()
-            goal.header.frame_id = self._odom_frame
-            goal.header.stamp = self.get_clock().now().to_msg()
-            goal.pose.position.x = self._ws_ext_goal_pos[0]
-            goal.pose.position.y = self._ws_ext_goal_pos[1]
-            goal.pose.position.z = 0.0
-            goal.pose.orientation.w = 1.0
-            self._pub_goal.publish(goal)
-
-    def _finish_ws_ext_drive(self) -> None:
-        """After navigator reaches WS_EXT goal, apply body pose and settle."""
-        self._pub_spot_ctrl.publish(Bool(data=False))  # disable navigator
-        self._set_body_pose(self._ws_ext_pending_h, self._ws_ext_pending_p)
-        self._body_settle_start = self.get_clock().now().nanoseconds * 1e-9
-        self._ws_ext_driving = False
 
     def _pub_debug_marker(self) -> None:
         """Publish debug marker for current state visualization."""
