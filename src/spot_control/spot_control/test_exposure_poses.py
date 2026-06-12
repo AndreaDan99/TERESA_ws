@@ -771,6 +771,8 @@ class ExposurePoseTester(Node):
         """Called from spin loop: publish interpolated body pose during smooth transition."""
         if not self._smoothing_body:
             return
+        if self._nav_state == NavState.WALKING:
+            return  # don't interfere with lateral navigation
         elapsed = (self.get_clock().now() - self._smooth_start_time).nanoseconds * 1e-9
         if elapsed >= self._smooth_duration:
             # Arrived at target
@@ -919,7 +921,7 @@ class ExposurePoseTester(Node):
 
         # Already at Y=0 (or spot disabled): apply body pose + arm HOME directly
         if self._spot_enabled:
-            self._apply_body_pose(0.0, 0.0, smooth=True)
+            self._apply_body_pose(0.0, 0.0, smooth=False)  # HOME: instant, no async transition
             self.get_logger().info('🏠 Spot reset to default (h=0, p=0)')
         self._spot_y = 0.0
         self._spot_h = 0.0
@@ -1056,7 +1058,7 @@ class ExposurePoseTester(Node):
                         self._spot_y = 0.0
                         self._spot_h = 0.0
                         self._spot_p = 0.0
-                        self._apply_body_pose(0.0, 0.0, smooth=True)
+                        self._apply_body_pose(0.0, 0.0, smooth=False)
                         self._send_arm_home()
                         self._homing = False
                         self._nav_state = NavState.IDLE
