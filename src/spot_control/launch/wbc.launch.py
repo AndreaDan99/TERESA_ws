@@ -63,9 +63,6 @@ def generate_launch_description():
         name='body_pose_optimizer',
         output='screen',
         parameters=[params_file],
-        remappings=[
-            ('~/navigator_goal', '/wbc/ee_goal'),
-        ],
     )
 
     exposure_node = Node(
