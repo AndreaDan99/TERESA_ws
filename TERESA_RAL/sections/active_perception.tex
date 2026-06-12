@@ -120,26 +120,35 @@ fixed offsets from the estimated torso centroid in $\mathcal{F}_0$.
 \subsubsection{Posture optimisation}
 
 Once the anticipatory body scanner has localised the patient's anatomy and
-computed the \ac{FAST} target set $\mathcal{T}$ in $\mathcal{F}_W$, the system
-pre-plans an optimal body posture for each scanning target. For each target
-$\mathbf{p}_i^*$, a grid search evaluates a discrete set of feasible body
-heights $\mathcal{H}$ and pitch angles $\mathcal{P}$. The score is the negative
-Euclidean distance from the transformed target to a sweet spot
-$\mathbf{p}_{\mathrm{sweet}} \in \mathbb{R}^3$ in $\mathcal{F}_0$:
-\begin{equation}
-s_i(h, \varphi) = -\bigl\|
-\mathbf{T}_{\mathcal{F}_W}^{\mathcal{F}_0}(h, \varphi)\,
-\mathbf{p}_i^* - \mathbf{p}_{\mathrm{sweet}}
-\bigr\|.
-\label{eq:posture_score}
-\end{equation}
+computed the target set $\mathcal{T}$ (both \ac{FAST} ultrasound targets and
+exposure grid points) in $\mathcal{F}_W$, the system pre-plans an optimal body
+posture for each target through a three-tier grid search with \ac{IK}-driven
+retry. The optimisation is shared by both the \ac{FAST} scanning and exposure
+scanning pipelines.
 
-The optimal posture $(h_i^*, \varphi_i^*)$ maximises $s_i$ subject to posture
-bounds. Body reconfiguration is executed between scanning targets: Spot assumes
-the pre-computed posture, settles, and the Z1 arm executes the trajectory
-toward the transformed target. Because the posture optimisation is computed
-offline---a single grid search per target after $\mathcal{T}$ is available---it
-imposes no real-time computational burden.
+\begin{enumerate}
+  \item \textbf{2D search}---height $h$ and pitch $\varphi$: a coarse grid
+        sweeps $\mathcal{H} \times \mathcal{P}$ (12 combinations). For each
+        candidate, the system scores the transformed target position against a
+        sweet spot $\mathbf{p}_{\mathrm{sweet}}$ in the Z1 workspace centre.
+        If a posture yields an \ac{IK} solution within a \SI{2}{\second}
+        timeout, it is selected.
+  \item \textbf{3D escalation}---body-frame $y$ displacement: when the 2D
+        search fails, the optimiser adds a longitudinal base displacement $dy$
+        (Spot walks along the patient's body), expanding the grid to
+        $\sim$180 combinations. This is the primary fallback for targets near
+        the workspace boundary.
+  \item \textbf{4D escalation}---full body-frame $xy$ displacement: if 3D
+        also fails, lateral displacement $dx$ is added, yielding
+        $\sim$300 combinations. This covers wide targets such as lateral
+        \ac{FAST} quadrants and exposure points at the body periphery.
+\end{enumerate}
+
+The optimisation is computed once per target after $\mathcal{T}$ is available,
+imposing no real-time computational burden. Body reconfiguration is executed
+between targets: Spot assumes the pre-computed posture $(h_i^*, \varphi_i^*)$,
+settles, and the base navigator drives the $dx, dy$ displacement before the
+Z1 arm executes the \ac{IK} trajectory toward the transformed target.
 
 \subsubsection{Contact control}
 
