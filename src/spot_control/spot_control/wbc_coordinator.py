@@ -365,7 +365,8 @@ class WBCCoordinatorNode(Node):
         self.create_subscription(PoseArray,      '/human_pose/points_3d',     self._cb_skeleton_stream,   10)
         self.create_subscription(PoseArray,      '~/optimize_result',         self._cb_optimizer_result,  10)
 
-        self._pub_goal     = self.create_publisher(PoseStamped, p('wbc_goal_topic'),        10)
+        self._pub_goal     = self.create_publisher(PoseStamped, '/wbc/arm_goal',        10)  # arm look-at
+        self._pub_spot_goal = self.create_publisher(PoseStamped, '/wbc/spot_goal',        10)  # Spot nav
         self._pub_nlf_trigger = self.create_publisher(Bool, '/nlf/trigger', 10)
         self._pub_enable   = self.create_publisher(Bool,        p('wbc_enable_topic'),     10)
         self._pub_ik_goal  = self.create_publisher(PoseStamped, '/wbc/ik_goal_pose',       10)
@@ -641,8 +642,10 @@ class WBCCoordinatorNode(Node):
                 self._set_state(CoordState.IDLE)
                 return
 
-        # Publish goal for spot_goal_navigator (Spot) and look-at (arm)
-        self._pub_goal.publish(self._filtered_goal())
+        # Publish arm look-at goal + Spot navigation goal
+        goal = self._filtered_goal()
+        self._pub_goal.publish(goal)
+        self._pub_spot_goal.publish(goal)
 
         dist = self._distance_to_patient()
         if dist is None:

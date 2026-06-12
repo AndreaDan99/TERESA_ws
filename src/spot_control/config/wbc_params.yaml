@@ -137,7 +137,6 @@ wbc_coordinator:
     body_center_topic:        '/laying_human/body_center'
     ik_done_topic:            '/ik_done'
     z1_fsm_state_topic:       '/z1_fsm/state'
-    wbc_goal_topic:           '/wbc/spot_goal'
     wbc_enable_topic:         '/wbc/enable'
 
     # ── NLF prior parameters ─────────────────────────────────────────────────
