@@ -379,14 +379,17 @@ body{
        <span class="label">Joints:</span><span class="val" id="joints-val">0/24</span>
     </div>
     <div id="exposure-legend" style="display:none">
-      <span class="legend-label">EXPOSURE:</span>
-      <span class="legend-item"><span class="legend-swatch" style="background:#ffdc00"></span>HEAD</span>
-      <span class="legend-item"><span class="legend-swatch" style="background:#3366ff"></span>TORSO</span>
-      <span class="legend-item"><span class="legend-swatch" style="background:#ff3333"></span>L-ARM</span>
-      <span class="legend-item"><span class="legend-swatch" style="background:#ff8000"></span>R-ARM</span>
-      <span class="legend-item"><span class="legend-swatch" style="background:#33cc33"></span>L-LEG</span>
-      <span class="legend-item"><span class="legend-swatch" style="background:#66ff66"></span>R-LEG</span>
-      <span class="legend-item"><span class="legend-swatch" style="background:#b333ff"></span>FEET</span>
+      <span class="legend-label">REGIONS:</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#ffdc00;border:2px solid #ffdc00;background:transparent"></span>HEAD</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#3366ff;border:2px solid #3366ff;background:transparent"></span>TORSO</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#ff3333;border:2px solid #ff3333;background:transparent"></span>L-ARM</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#ff8000;border:2px solid #ff8000;background:transparent"></span>R-ARM</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#33cc33;border:2px solid #33cc33;background:transparent"></span>L-LEG</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#66ff66;border:2px solid #66ff66;background:transparent"></span>R-LEG</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#b333ff;border:2px solid #b333ff;background:transparent"></span>FEET</span>
+      <span class="sep" style="color:var(--border);margin:0 4px">|</span>
+      <span class="legend-label">POINTS:</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#ff8844"></span>Scan point</span>
     </div>
   </div>
 
@@ -802,16 +805,31 @@ class TeresaController{
     const ox=(W-dx*scale)/2,oy=(H-dy*scale)/2;
     const proj=(wx,wy)=>({x:ox+(wx-xMin)*scale,y:oy+(wy-yMin)*scale});
 
-     const BODY_KP_COLORS=['#ffdc00','#33cc33','#66ff66','#ff8000','#33cc33','#66ff66','#ff8000','#33cc33','#66ff66','#ff8000','#9933ff','#9933ff','#00ccff','#3366ff','#3366ff','#cc00ff','#3366ff','#3366ff','#ff3333','#ff8000','#ff3333','#ff8000','#ffcc00','#ffcc00'];
+      const BODY_REGIONS = {
+  HEAD:  {name:'HEAD',  color:'#ffdc00', joints:[12,15]},
+  TORSO: {name:'TORSO', color:'#3366ff', joints:[0,1,2,12,13,14,16,17]},
+  LARM:  {name:'L-ARM', color:'#ff3333', joints:[16,18,20,22]},
+  RARM:  {name:'R-ARM', color:'#ff8000', joints:[17,19,21,23]},
+  LLEG:  {name:'L-LEG', color:'#33cc33', joints:[1,4,7,10]},
+  RLEG:  {name:'R-LEG', color:'#66ff66', joints:[2,5,8,11]},
+  FEET:  {name:'FEET', color:'#b333ff', joints:[10,11]}
+};
 
-     if(this.bodyMapSkelVisible&&skel&&skel.length>=24){
+ if(this.bodyMapSkelVisible&&skel&&skel.length>=24){
       const pts=skel.map(p=>(p.position&&!isNaN(p.position.x))?proj(p.position.x,p.position.y):null);
+      // skeleton lines
       ctx.strokeStyle='rgba(200,200,220,.5)';ctx.lineWidth=1.5;
       for(const[i,j]of SKELETON_EDGES){const a=pts[i],b=pts[j];if(a&&b){ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}}
-      for(let i=0;i<pts.length;i++){
-        const p=pts[i];if(!p)continue;
-        const r=Math.max(4,scale*0.06);
-        ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fillStyle=BODY_KP_COLORS[i]||'#888';ctx.fill();
+      // body region squares (empty, colored border)
+      for(const r of Object.values(BODY_REGIONS)){
+        const rpts=r.joints.map(j=>pts[j]).filter(p=>p);
+        if(rpts.length<2)continue;
+        let rx1=Infinity,ry1=Infinity,rx2=-Infinity,ry2=-Infinity;
+        for(const p of rpts){rx1=Math.min(rx1,p.x);ry1=Math.min(ry1,p.y);rx2=Math.max(rx2,p.x);ry2=Math.max(ry2,p.y);}
+        const pad=Math.max(8,(rx2-rx1)*.15,(ry2-ry1)*.15);
+        ctx.strokeStyle=r.color;ctx.lineWidth=2;ctx.globalAlpha=.7;
+        ctx.strokeRect(rx1-pad,ry1-pad,rx2-rx1+pad*2,ry2-ry1+pad*2);
+        ctx.globalAlpha=1;
       }
     }
 
@@ -824,6 +842,24 @@ class TeresaController{
         ctx.fillStyle=`rgba(${Math.round(cr*255)},${Math.round(cg*255)},${Math.round(cb*255)},${ca})`;ctx.fill();
       }
     }
+
+    // legend — bottom-right
+    const lgX=W-160,lgY=H-210;
+    ctx.fillStyle='rgba(10,10,20,.8)';ctx.strokeStyle='rgba(100,100,140,.4)';ctx.lineWidth=1;
+    ctx.beginPath();ctx.roundRect(lgX,lgY,152,202,6);ctx.fill();ctx.stroke();
+    ctx.fillStyle='#888';ctx.font='bold 10px monospace';ctx.fillText('BODY REGIONS',lgX+8,lgY+18);
+    ctx.font='9px monospace';
+    let li=0;
+    for(const r of Object.values(BODY_REGIONS)){
+      const y=lgY+36+li*21;
+      ctx.fillStyle=r.color;ctx.fillRect(lgX+8,y,12,12);
+      ctx.strokeStyle=r.color;ctx.lineWidth=1.5;ctx.strokeRect(lgX+8,y,12,12);
+      ctx.fillStyle='#ccc';ctx.fillText(r.name,lgX+26,y+10);
+      li++;
+    }
+    ctx.fillStyle='#888';ctx.font='bold 10px monospace';ctx.fillText('GRID',lgX+8,lgY+188);
+    ctx.beginPath();ctx.arc(lgX+14,lgY+196,4,0,Math.PI*2);ctx.fillStyle='#ff8844';ctx.fill();
+    ctx.fillStyle='#ccc';ctx.font='9px monospace';ctx.fillText('Scan points',lgX+26,lgY+199);
   }
 
   toggleBodyMapSkel(){
@@ -1017,7 +1053,7 @@ class TeresaController{
       const pts=this.skeleton.map(p=>{if(!p.position||p.position.z<=.01)return null;return proj(p.position.x,p.position.y,p.position.z);});
       ctx.strokeStyle='rgba(255,255,255,.75)';ctx.lineWidth=Math.max(1.5,c.width/500);
       for(const[i,j]of SKELETON_EDGES){const a=pts[i],b=pts[j];if(!a||!b)continue;ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}
-      for(let i=0;i<pts.length;i++){const p=pts[i];if(!p)continue;const r=Math.max(3,c.width/300);ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);
+      for(let i=0;i<pts.length;i++){const p=pts[i];if(!p)continue;ctx.beginPath();ctx.arc(p.x,p.y,2,0,Math.PI*2);
         if(i===0)ctx.fillStyle='#ffcc00';else if(i<=4)ctx.fillStyle='#00ccff';else if(i<=10)ctx.fillStyle='#50c878';else ctx.fillStyle='#ff8844';ctx.fill();}
     }
     if(this.showOrbbecBbox&&this.bodyBbox){

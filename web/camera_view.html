@@ -689,8 +689,7 @@
         }
         for (let i = 0; i < pts.length; i++) {
           const p = pts[i]; if (!p) continue;
-          const r = Math.max(3, canvas.width / 300);
-          ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+          ctx.beginPath(); ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
           if (i === 0) ctx.fillStyle = '#ffcc00';
           else if (i <= 4) ctx.fillStyle = '#00ccff';
           else if (i <= 10) ctx.fillStyle = '#50c878';
