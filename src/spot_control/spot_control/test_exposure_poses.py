@@ -567,6 +567,7 @@ class ExposurePoseTester(Node):
         self._reset_done_idx: int | None = None
         self._homing = False
         self._nav_paused = False
+        self._smoothing_body = False
 
         # Generate virtual body and exposure grid
         kp = make_virtual_body(offset_x=self._offset_x, offset_y=self._offset_y,
@@ -735,31 +736,46 @@ class ExposurePoseTester(Node):
         return best_spot_y, best_h, best_p
 
     def _apply_body_pose(self, height: float, pitch: float, smooth: bool = True):
-        """Publish body_pose with optional smooth interpolation.
+        """Publish body_pose with optional smooth interpolation (non-blocking).
 
-        Spot's body_pose is lazy: spot_driver saves the parameters and applies
-        them on the next cmd_vel. The zero Twist flushes the stored body_pose.
-        When smooth=True, interpolates from current (h,p) to target in 5 steps
-        over 1.0s to avoid abrupt posture changes.
+        When smooth=True, starts an asynchronous interpolation from current
+        (h,p) to target over 1.0s, driven by _tick_smooth_body_pose() in the
+        spin loop. When smooth=False or already at target, publishes immediately.
         """
         if hasattr(self, '_nav_state') and self._nav_state == NavState.WALKING:
             self.get_logger().warn('Cannot apply body pose while navigating — skipping')
             return
 
         if smooth and (abs(height - self._spot_h) > 0.02 or abs(pitch - self._spot_p) > 0.01):
-            steps = 5
-            for i in range(1, steps + 1):
-                t = i / steps
-                h = self._spot_h + (height - self._spot_h) * t
-                p = self._spot_p + (pitch - self._spot_p) * t
-                self._publish_body_pose_raw(h, p)
-                time.sleep(0.2)
+            # Start async smooth transition
+            self._smooth_start_h = self._spot_h
+            self._smooth_start_p = self._spot_p
+            self._smooth_target_h = height
+            self._smooth_target_p = pitch
+            self._smooth_start_time = self.get_clock().now()
+            self._smoothing_body = True
+            self._smooth_duration = 1.0  # seconds
         else:
             self._publish_body_pose_raw(height, pitch)
-            time.sleep(0.3)
+            self._spot_h = height
+            self._spot_p = pitch
 
-        self._spot_h = height
-        self._spot_p = pitch
+    def _tick_smooth_body_pose(self):
+        """Called from spin loop: publish interpolated body pose during smooth transition."""
+        if not self._smoothing_body:
+            return
+        elapsed = (self.get_clock().now() - self._smooth_start_time).nanoseconds * 1e-9
+        if elapsed >= self._smooth_duration:
+            # Arrived at target
+            self._publish_body_pose_raw(self._smooth_target_h, self._smooth_target_p)
+            self._spot_h = self._smooth_target_h
+            self._spot_p = self._smooth_target_p
+            self._smoothing_body = False
+        else:
+            t = elapsed / self._smooth_duration
+            h = self._smooth_start_h + (self._smooth_target_h - self._smooth_start_h) * t
+            p = self._smooth_start_p + (self._smooth_target_p - self._smooth_start_p) * t
+            self._publish_body_pose_raw(h, p)
 
     def _publish_body_pose_raw(self, height: float, pitch: float):
         half = pitch / 2.0
@@ -985,6 +1001,9 @@ class ExposurePoseTester(Node):
         try:
             while self._running and rclpy.ok():
                 rclpy.spin_once(self, timeout_sec=0.1)
+
+                # Smooth body pose tick (non-blocking interpolation)
+                self._tick_smooth_body_pose()
 
                 # Y-axis navigation tick (non-blocking, one cmd_vel per spin_once)
                 if self._nav_state == NavState.WALKING:
