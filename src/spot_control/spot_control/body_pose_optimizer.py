@@ -25,7 +25,6 @@ class RetryState(IntEnum):
     PENDING = 0
     D2_ACTIVE = 1   # 2D (h, p) goal published, waiting for IK
     D3_ACTIVE = 2   # 3D (dy_body, h, p) goal published, waiting for IK
-    D4_ACTIVE = 3   # 4D (dx_body, dy_body, h, p) goal published, waiting for IK
     DONE = 4
     SKIPPED = 5
 
@@ -224,8 +223,7 @@ class BodyPoseOptimizer(Node):
 
     def _first_active_idx(self) -> int | None:
         for idx, st in sorted(self._point_states.items()):
-            if st in (RetryState.D2_ACTIVE, RetryState.D3_ACTIVE,
-                       RetryState.D4_ACTIVE):
+            if st in (RetryState.D2_ACTIVE, RetryState.D3_ACTIVE):
                 return idx
         return None
 
@@ -260,23 +258,9 @@ class BodyPoseOptimizer(Node):
                     f'Point[{idx}]: 3D optimisation returned no result → SKIPPED')
 
         elif state == RetryState.D3_ACTIVE:
-            results_4d = self._optimize_4d(self._target_points_odom, {idx})
-            if idx in results_4d:
-                dx, dy, h, p, dist = results_4d[idx]
-                self._publish_goal(idx, h, p, dx=dx, dy=dy)
-                self._point_states[idx] = RetryState.D4_ACTIVE
-                self.get_logger().info(
-                    f'Point[{idx}]: escalated 3D→4D (dx={dx:.2f}m, dy={dy:.2f}m, '
-                    f'h={h:.2f}m, p={math.degrees(p):.1f}°)')
-            else:
-                self._point_states[idx] = RetryState.SKIPPED
-                self.get_logger().warn(
-                    f'Point[{idx}]: 4D optimisation returned no result → SKIPPED')
-
-        elif state == RetryState.D4_ACTIVE:
             self._point_states[idx] = RetryState.SKIPPED
             self.get_logger().warn(
-                f'Point[{idx}]: 4D attempt timed out → SKIPPED')
+                f'Point[{idx}]: 3D attempt timed out → SKIPPED')
 
         self._ik_done_received = False
 
@@ -509,92 +493,6 @@ class BodyPoseOptimizer(Node):
                 f'p={math.degrees(best_p):.1f}°, dist={best_dist:.3f}m')
 
         return results
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    #  4D body-pose optimisation (dx_body, dy_body, h, p) grid search
-    # ═══════════════════════════════════════════════════════════════════════════
-
-    def _optimize_4d(self, target_points_odom: list[np.ndarray],
-                     escalated_3d: set[int]) -> dict[int, tuple]:
-        """4D grid search (dx_body, dy_body, h, p) for points where 3D failed.
-
-        For each escalated point, searches a 5×5×3×4=300-combo grid:
-          dx_body: ±ws_ext_dx_max, ws_ext_dx_steps
-          dy_body: -ws_ext_dy_bwd_max → +ws_ext_dy_fwd_max
-          h: body_grid_heights
-          p: body_grid_pitches
-
-        Body-frame (dx_body, dy_body) is rotated to odom via patient_body TF
-        before simulating the link00 position.
-
-        Returns dict mapping point index → (dx_body, dy_body, h, p, dist),
-        or empty dict if body frame not ready.
-        """
-        body_rot = self._get_body_rotation()
-        if body_rot is None:
-            self.get_logger().warn('4D optimisation skipped: body frame TF not available')
-            return {}
-
-        heights = self._body_grid_heights
-        pitches = self._body_grid_pitches
-        sweet = np.array(self._body_sweet_spot)
-
-        dx_range = np.linspace(-self._ws_ext_dx_max, self._ws_ext_dx_max,
-                               self._ws_ext_dx_steps)
-        dy_range = np.linspace(-self._ws_ext_dy_bwd_max, self._ws_ext_dy_fwd_max,
-                               self._ws_ext_dx_steps)
-
-        # TF lookup: current Spot body position + yaw in odom
-        body_tf = self._tf_buffer.lookup_transform(
-            'my_spot/odom', 'my_spot/body', rclpy.time.Time())
-        quat = body_tf.transform.rotation
-        _, _, body_yaw = euler_from_quaternion([quat.x, quat.y, quat.z, quat.w])
-        body_pos = np.array([body_tf.transform.translation.x,
-                             body_tf.transform.translation.y,
-                             body_tf.transform.translation.z])
-
-        results: dict[int, tuple] = {}
-
-        for idx in escalated_3d:
-            target_odom = target_points_odom[idx]
-            best_dx, best_dy = 0.0, 0.0
-            best_h, best_p, best_dist = 0.0, 0.0, float('inf')
-            best_cost = float('inf')
-
-            for dx_body in dx_range:
-                for dy_body in dy_range:
-                    odom_disp = body_rot @ np.array(
-                        [dx_body, dy_body, 0.0])
-                    shifted_pos = body_pos + odom_disp
-                    for h in heights:
-                        for p in pitches:
-                            link00_odom, _ = self._simulate_link00(
-                                shifted_pos, body_yaw, h, p)
-                            target_link00 = self._odom_to_link00_vec(
-                                target_odom, link00_odom, body_yaw, p)
-                            dist = float(np.linalg.norm(target_link00 - sweet))
-                            cost = dist + self._spot_y_penalty * (abs(dx_body) + abs(dy_body))
-                            if cost < best_cost:
-                                best_cost = cost
-                                best_dist = dist
-                                best_dx = float(dx_body)
-                                best_dy = float(dy_body)
-                                best_h = float(h)
-                                best_p = float(p)
-                                best_dist = dist
-
-            if best_dist < float('inf'):
-                results[idx] = (best_dx, best_dy, best_h, best_p, best_dist)
-                self.get_logger().info(
-                    f'4D pt[{idx}]: best (dx={best_dx:.2f}m, dy={best_dy:.2f}m, '
-                    f'h={best_h:.2f}m, p={math.degrees(best_p):.1f}°) '
-                    f'-> sweet_dist={best_dist:.3f}m')
-            else:
-                self.get_logger().warn(f'4D pt[{idx}]: no valid combo found')
-
-        return results
-
-
 def main(args=None):
     rclpy.init(args=args)
     node = BodyPoseOptimizer()
