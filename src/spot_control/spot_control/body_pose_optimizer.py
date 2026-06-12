@@ -106,7 +106,7 @@ class BodyPoseOptimizer(Node):
         self._pub_optimize_result = self.create_publisher(
             PoseArray, '~/optimize_result', 10)
         self._pub_navigator_goal = self.create_publisher(
-            PoseStamped, '/wbc/ee_goal', 10)
+            PoseStamped, '/wbc/spot_goal', 10)
         self._pub_body_pose = self.create_publisher(
             Pose, '~/body_pose', 10)
         self._pub_ik_goal = self.create_publisher(

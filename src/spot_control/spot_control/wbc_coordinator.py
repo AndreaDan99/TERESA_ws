@@ -166,7 +166,7 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('body_center_topic',            '/laying_human/body_center')
         self.declare_parameter('ik_done_topic',                '/ik_done')
         self.declare_parameter('z1_fsm_state_topic',           '/z1_fsm/state')
-        self.declare_parameter('wbc_goal_topic',               '/wbc/ee_goal')
+        self.declare_parameter('wbc_goal_topic',               '/wbc/spot_goal')
         self.declare_parameter('wbc_enable_topic',             '/wbc/enable')
         self.declare_parameter('lying_timeout',                3.0)
         self.declare_parameter('confidence_margin',          0.10)

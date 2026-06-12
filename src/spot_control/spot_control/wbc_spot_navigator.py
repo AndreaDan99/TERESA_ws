@@ -48,7 +48,7 @@ class WBCSpotNavigator(Node):
     def __init__(self):
         super().__init__('wbc_spot_navigator')
 
-        self.declare_parameter('goal_topic',          '/wbc/ee_goal')
+        self.declare_parameter('goal_topic',          '/wbc/spot_goal')
         self.declare_parameter('cmd_vel_topic',       '/my_spot/cmd_vel')
         self.declare_parameter('goal_tolerance',       0.15)
         self.declare_parameter('angular_speed_max',    0.4)

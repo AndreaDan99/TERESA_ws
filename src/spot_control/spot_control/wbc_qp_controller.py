@@ -173,7 +173,7 @@ class WBCQPControllerNode(Node):
 
         # ── Subscriptions ─────────────────────────────────────────────────
         self.create_subscription(Bool,        '/wbc/enable',          self._cb_enable,      10)
-        self.create_subscription(PoseStamped, '/wbc/ee_goal',         self._cb_goal,        10)
+        self.create_subscription(PoseStamped, '/wbc/spot_goal',         self._cb_goal,        10)
         self.create_subscription(JointState,  p('joint_states_topic'), self._cb_joints,      50)
         self.create_subscription(String,      '/wbc/state',           self._cb_wbc_state,   10)
         self.create_subscription(Bool,        '/ik_done',             self._cb_ik_done,     10)

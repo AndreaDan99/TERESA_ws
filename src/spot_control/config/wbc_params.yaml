@@ -137,7 +137,7 @@ wbc_coordinator:
     body_center_topic:        '/laying_human/body_center'
     ik_done_topic:            '/ik_done'
     z1_fsm_state_topic:       '/z1_fsm/state'
-    wbc_goal_topic:           '/wbc/ee_goal'
+    wbc_goal_topic:           '/wbc/spot_goal'
     wbc_enable_topic:         '/wbc/enable'
 
     # ── NLF prior parameters ─────────────────────────────────────────────────
@@ -153,7 +153,7 @@ wbc_spot_navigator:
     mode: 'approaching'       # 'approaching' (rotate→drive) or 'exposure' (P-controller X+Y)
 
     # Forward navigation (APPROACHING)
-    goal_topic: '/wbc/ee_goal'
+    goal_topic: '/wbc/spot_goal'
     goal_tolerance: 0.15
     angular_speed_max: 0.4
     linear_speed_max: 0.3
