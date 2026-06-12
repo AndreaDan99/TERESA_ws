@@ -547,7 +547,8 @@ class ExposurePoseTester(Node):
         else:
             self._body_scale = self._body_scale if self._body_scale > 0 else 0.30
             self._offset_x = 0.35   # corpo avanti ma raggiungibile
-            self._offset_y = 0.0
+            self._torso_center_y = (0.60 + (-0.15)) / 2.0 * self._body_scale
+            self._offset_y = -self._torso_center_y
             self._offset_z = 0.0
             self._standoff = 0.30   # camera più bassa: Z≈0.31 (sweet spot)
             self.get_logger().info(
