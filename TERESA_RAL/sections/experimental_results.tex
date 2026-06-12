@@ -98,42 +98,28 @@ total time to $\sim$\SI{70}{\second} at the cost of incomplete coverage.
 
 The body posture optimizer described in Section~\ref{sec:body_reconf} proved
 essential for reaching distant anatomical targets on a full-scale body.  We
-compared four configurations of increasing capability:
-
-\begin{enumerate}
-  \item \textbf{Fixed nominal}---height \SI{0}{\metre}, pitch
-        \SI{0}{\degree}, no base displacement.  This is the default Spot
-        standing posture and served as the lower bound.
-  \item \textbf{Heuristic}---a moderately lowered height
-        ($\sim$\SI{-0.15}{\metre}) with a slight forward pitch
-        ($\sim$\SI{5}{\degree}), chosen manually as a reasonable compromise.
-        This improved reach over the fixed posture but could not adapt to
-        individual point locations.
-  \item \textbf{2D optimisation}---the grid search over $(h, \varphi)$ only,
-        with \ac{IK}-driven retry (Section~\ref{sec:body_reconf}).  This
-        selected the optimal posture per point but could not displace the
-        base.
-  \item \textbf{3D optimisation}---the full $(dy, h, \varphi)$ search with the
-        regularised cost $J = \|\mathbf{p} - \mathbf{p}_{\mathrm{sweet}}\|
-        + \lambda\,|dy|$ ($\lambda = 0.50$).  The penalty encouraged height
-        and pitch adjustments over walking, reducing energy consumption and
-        producing smoother motion.
-\end{enumerate}
-
-The fixed posture reached
-only $\sim$\SI{40}{\percent} of exposure grid points and
-$\sim$\SI{50}{\percent} of \ac{FAST} targets.  The heuristic improved these
-to $\sim$\SI{55}{\percent} and $\sim$\SI{65}{\percent} respectively.  The 2D
-optimiser, by selecting the best $(h, \varphi)$ per point, raised completion
-to $\sim$\SI{70}{\percent} (exposure) and $\sim$\SI{85}{\percent}
-(\ac{FAST}).  The 3D optimiser, adding longitudinal base walking with the
-movement penalty, achieved $\sim$\SI{85}{\percent} and \SI{100}{\percent}.
-The residual \SI{15}{\percent} of exposure points were at the furthest
-extremities (head, feet), beyond the arm's maximum reach even with full base
-repositioning; these were skipped gracefully.  The progressive improvement
-demonstrates that each tier of the optimisation contributes measurably to
-mission completeness, with the movement penalty ensuring that base walking is
-used only when strictly necessary.
+compared four configurations of increasing capability.  The fixed nominal
+posture (height \SI{0}{\metre}, pitch \SI{0}{\degree}, no base displacement),
+representing Spot's default standing pose, reached only
+$\sim$\SI{40}{\percent} of exposure grid points and $\sim$\SI{50}{\percent}
+of \ac{FAST} targets.  A heuristic posture---moderately lowered
+($\sim$\SI{-0.15}{\metre}) with a slight forward pitch
+($\sim$\SI{5}{\degree})---improved these to $\sim$\SI{55}{\percent} and
+$\sim$\SI{65}{\percent}, but could not adapt to individual point locations.
+The 2D optimiser, selecting the best $(h, \varphi)$ per point via grid search
+with \ac{IK}-driven retry, raised completion to $\sim$\SI{70}{\percent}
+(exposure) and $\sim$\SI{85}{\percent} (\ac{FAST}).  Finally, the 3D
+optimiser added longitudinal base walking $dy$ with the regularised cost
+$J = \|\mathbf{p} - \mathbf{p}_{\mathrm{sweet}}\| + \lambda\,|dy|$
+($\lambda = 0.50$), achieving $\sim$\SI{85}{\percent} and
+\SI{100}{\percent} respectively.  The penalty encouraged height and pitch
+adjustments over walking---reducing energy consumption and producing smoother
+motion---while still allowing displacement when necessary.  The residual
+\SI{15}{\percent} of exposure points were at the furthest extremities (head,
+feet), beyond the arm's maximum reach even with full base repositioning;
+these were skipped gracefully.  Each tier contributed measurably to mission
+completeness, with the movement penalty ensuring that base walking is used
+only when strictly needed.
 
 \subsection{Exposure Body Scanning and Interactive Review}
 
