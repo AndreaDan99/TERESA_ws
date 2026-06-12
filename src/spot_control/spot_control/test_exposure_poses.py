@@ -535,9 +535,12 @@ class ExposurePoseTester(Node):
         if self._spot_enabled:
             self._body_scale = 1.0     # full 1.70m virtual body, Y-walking handles reach
             self._offset_x = 0.35
+            self._torso_center_y = (0.60 + (-0.15)) / 2.0   # midpoint shoulder→hip = 0.225
+            self._offset_y = -self._torso_center_y            # center torso at Y=0
             self._standoff = 0.30
             self.get_logger().info(
-                f'  Body scale: {self._body_scale:.2f}, offset_x: {self._offset_x:.2f}, standoff: {self._standoff:.2f} (Spot mode, full body Y-walking)')
+                f'  Body scale: {self._body_scale:.2f}, offset_x: {self._offset_x:.2f}, '
+                f'offset_y: {self._offset_y:.3f} (torso@Y=0), standoff: {self._standoff:.2f} (Spot mode, full body Y-walking)')
         else:
             self._body_scale = 0.30
             self._offset_x = 0.35   # corpo avanti ma raggiungibile
