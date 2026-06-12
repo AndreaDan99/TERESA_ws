@@ -494,7 +494,7 @@ class ExposurePoseTester(Node):
             self.declare_parameter('spot_y_penalty', 0.3)  # cost = dist + penalty * |spot_y|
             .get_parameter_value().double_value)
         self._nav_y_speed = float(
-            self.declare_parameter('nav_y_speed', 0.15)
+            self.declare_parameter('nav_y_speed', 0.20)
             .get_parameter_value().double_value)
 
         # Publishers
