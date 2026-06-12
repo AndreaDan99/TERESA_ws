@@ -788,7 +788,8 @@ class ExposurePoseTester(Node):
         pose.orientation.z = 0.0
         pose.orientation.w = math.cos(half)
         self._pub_body_pose.publish(pose)
-        self._pub_cmd_vel.publish(Twist())
+        if self._nav_state != NavState.WALKING:
+            self._pub_cmd_vel.publish(Twist())  # flush body_pose only if not navigating
 
     # ── Y-axis Spot navigation ──────────────────────────────────────────
 
