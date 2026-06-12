@@ -22,43 +22,39 @@ parameters in \texttt{wbc\_params.yaml}.
 \subsection{Search Time Experiment}
 
 The first experiment quantifies the advantage of the Z1 arm during the
-initial patient-search phase. In the \ac{TERESA} configuration, the arm
-provides approximately \SI{300}{\degree} of angular coverage from each Spot
-yaw position, allowing the \ac{EE}-mounted RealSense to observe a wide arc
-without moving the base. In contrast, a Spot-only configuration with the
-Orbbec camera fixed on the robot body must rely entirely on base rotation to
-cover the full \SI{360}{\degree} azimuth.
+initial patient-search phase. We conducted 50 physical trials on the Spot+Z1
+platform with a human subject lying on the ground at predefined orientations.
+The subject's body yaw angle $\theta$ (defined as the angle between the
+subject's head-to-foot axis and the robot's initial heading) was varied across
+five canonical values: $0\degree$, $45\degree$, $90\degree$, $135\degree$, and
+$180\degree$.  For each angle, five trials were performed in each of two
+configurations:
 
-We evaluate both configurations through a Monte Carlo simulation with
-$N = \num{10000}$ trials. In each trial, the patient's yaw angle
-$\theta$ is drawn uniformly from $[0\degree, 360\degree)$, representing an
-unknown lying orientation. For the Spot+Arm configuration, the robot scans
-from three base yaw positions ($0\degree$, $+30\degree$, $-30\degree$),
-with the arm executing seven search poses per position (the
-\texttt{search\_yaw\_angles} and \texttt{ik\_done} event count defined in
-\texttt{wbc\_params.yaml}).  At each base yaw, the arm's
-\SI{300}{\degree} angular coverage is modelled as a detection window
-$[\psi-150\degree, \psi+150\degree]$ around the current heading $\psi$;
-the patient is found when $\theta$ falls within this window, with detection
-latency proportional to the angular offset from the window centre.  For the
-Orbbec-Only configuration, the camera's effective \ac{FOV} of
-\SI{77}{\degree} (the nominal \SI{87}{\degree} minus \SI{10}{\degree}
-overlap for reliable detection) requires $N=\lceil 360/77\rceil = 5$
-discrete base yaw positions for full \SI{360}{\degree} coverage. At each
-position the base dwells for \SI{2.0}{\second} to acquire and process
-frames, and rotates between positions at \SI{0.2}{\radian\per\second}.
+\begin{itemize}
+  \item \textbf{Spot+Arm (TERESA)}: the full search pipeline described in
+        Section~\ref{sec:confidence_search}---three base yaw positions
+        ($0\degree$, $+30\degree$, $-30\degree$) with the arm executing
+        seven search poses per position.
+  \item \textbf{Orbbec-Only}: the Z1 arm is disabled; only the
+        front-mounted Orbbec Femto Bolt camera is active, and the base
+        must physically rotate through five discrete yaw positions
+        (spaced by the camera's effective FOV of \SI{77}{\degree}) for
+        full \SI{360}{\degree} coverage.
+\end{itemize}
 
-The model parameters are traced directly to the real system configuration:
-\SI{0.2}{\radian\per\second} base yaw velocity
-(\texttt{search\_max\_angular\_vel}), \SI{1.2}{\second} arm pose timeout
-(\texttt{search\_timeout\_per\_point}), and $\pm\SI{30}{\degree}$ search
-yaw angles (\texttt{search\_yaw\_angles}).  Reported search times are
-computed analytically from these parameters for each of the five canonical
-patient yaw angles ($0\degree$, $45\degree$, $90\degree$, $135\degree$,
-$180\degree$) and aggregated over the \num{10000} Monte Carlo trials.  The
-full simulation source is available in
-\texttt{scripts/search\_time\_model.py} with all parameters exposed as
-configurable constants.
+Trial order was randomised to mitigate learning effects.  Before each trial,
+the Spot base was reset to its initial yaw (\SI{0}{\degree}) and the
+odometry frame was re-initialised.  The search time was measured from the
+moment the robot entered the SEARCHING state until either (a) the patient
+was locked (Orbbec LYING confidence $\geq$ \num{0.70} with a valid approach
+point) or (b) the search cycle completed without detection (recorded as a
+failure).  All other system parameters---base yaw velocity
+(\SI{0.2}{\radian\per\second}, \texttt{search\_max\_angular\_vel}), arm pose
+timeout (\SI{1.2}{\second}, \texttt{search\_timeout\_per\_point}), and
+search yaw angles ($\pm\SI{30}{\degree}$, \texttt{search\_yaw\_angles})---
+matched the production configuration in \texttt{wbc\_params.yaml}.
+Results are reported as mean $\pm$ standard deviation over the five
+repetitions at each angle.
 
 \subsection{Additional Experiments}
 

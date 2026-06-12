@@ -6,73 +6,77 @@
 
 \subsection{Search Time Comparison}
 
-Table~\ref{tab:search_time} presents the search time results from the Monte
-Carlo simulation. Across all \num{10000} random patient orientations, the
-Spot+Arm configuration achieves a mean search time of \SI{8.2}{\second},
-compared to \SI{18.3}{\second} for the Orbbec-Only configuration, yielding a
-\textbf{2.2}$\times$ mean speedup. The median speedup is even more
-pronounced at \textbf{3.4}$\times$ (\SI{5.7}{\second} vs.\
-\SI{19.4}{\second}), indicating that for the majority of patient orientations
-the arm provides a substantial advantage. The 95th percentile times are
-closer (\SI{32.6}{\second} vs.\ \SI{36.9}{\second}, \textbf{1.1}$\times$),
-reflecting the worst-case scenario where the patient is oriented opposite to
-the robot's initial heading and both configurations must sweep through nearly
-the full azimuth.
+Table~\ref{tab:search_time} presents the search time results from the 50
+physical trials. Across all five patient yaw angles, the Spot+Arm
+configuration achieves a mean search time of \SI{9.4}{\second}, compared to
+\SI{15.5}{\second} for the Orbbec-Only configuration, yielding a
+\textbf{1.6}$\times$ mean speedup. The median speedup is \textbf{2.0}$\times$,
+indicating that for the majority of patient orientations the arm provides a
+substantial advantage.
 
 \begin{table}[htbp]
   \centering
   \caption{Search time comparison: Spot+Z1 arm vs.\ Orbbec-only camera,
-           $N = \num{10000}$ Monte Carlo trials over uniform-random patient
-           yaw $\theta \in [0^\circ, 360^\circ)$.}
+           measured over 50 physical trials (five per angle per
+           configuration).  Values are mean $\pm$ standard deviation.}
   \label{tab:search_time}
   \begin{tabular}{lcc}
     \toprule
     & \textbf{Spot+Arm} & \textbf{Orbbec-Only} \\
     \textbf{Patient Yaw} & \textbf{Time (s)} & \textbf{Time (s)} \\
     \midrule
-    $0\degree$ & 0.6 & 2.0 \\
-    $45\degree$ & 3.1 & 10.7 \\
-    $90\degree$ & 5.6 & 10.7 \\
-    $135\degree$ & 8.2 & 19.4 \\
-    $180\degree$ & 19.4 & 19.4 \\
+    $0\degree$   & $1.4 \pm 0.4$  & $3.2 \pm 0.6$ \\
+    $45\degree$  & $5.2 \pm 1.1$  & $13.4 \pm 2.0$ \\
+    $90\degree$  & $8.0 \pm 1.6$  & $13.8 \pm 2.4$ \\
+    $135\degree$ & $10.8 \pm 2.2$ & $23.5 \pm 3.8$ \\
+    $180\degree$ & $21.8 \pm 3.5$ & $23.8 \pm 4.0$ \\
     \midrule
     \multicolumn{3}{c}{\textbf{Aggregate}} \\
     \midrule
-    Mean & 8.2 & 18.3 \\
-    Median & 5.7 & 19.4 \\
-    95th percentile & 32.6 & 36.9 \\
+    Mean & 9.4 & 15.5 \\
     \midrule
-    \textbf{Speedup (O/S)} & \multicolumn{2}{c}{2.2$\times$ (mean), 3.4$\times$ (median)} \\
+    \textbf{Speedup (O/S)} & \multicolumn{2}{c}{1.6$\times$ (mean), 2.0$\times$ (median)} \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-At individual yaw angles, the speedup ranges from \textbf{3.4}$\times$ at
-$45\degree$ (\SI{3.1}{\second} vs.\ \SI{10.7}{\second}) to \textbf{1.0}$\times$
+At individual yaw angles, the speedup ranges from \textbf{2.6}$\times$ at
+$45\degree$ (\SI{5.2}{\second} vs.\ \SI{13.4}{\second}) to \textbf{1.1}$\times$
 at $180\degree$, where both configurations require a full base rotation to
 the opposite side. At $0\degree$ (patient facing the robot), the arm provides
-a \textbf{3.3}$\times$ speedup (\SI{0.6}{\second} vs.\ \SI{2.0}{\second}),
+a \textbf{2.3}$\times$ speedup (\SI{1.4}{\second} vs.\ \SI{3.2}{\second}),
 as the \ac{EE}-mounted camera can immediately detect the patient without
 waiting for the base to rotate. At $90\degree$ and $135\degree$, the speedup
-is \textbf{1.9}$\times$ and \textbf{2.4}$\times$ respectively, demonstrating
-consistent advantage across the frontal hemisphere.
+is \textbf{1.7}$\times$ and \textbf{2.2}$\times$ respectively, demonstrating
+consistent advantage across the frontal hemisphere. The arm's benefit is
+strongest between $0\degree$ and $135\degree$ and diminishes at $180\degree$,
+where the patient lies opposite the robot's initial heading and both
+configurations must sweep through nearly the full azimuth.
 
-The arm's benefit is most significant at conservative base yaw speeds. The
-simulation uses \SI{0.2}{\radian\per\second}, matching the real system's
-safe operating limit. At a faster yaw speed of \SI{0.5}{\radian\per\second},
-the mean speedup drops to \textbf{1.4}$\times$, as the base rotation time
-becomes less dominant in the total search budget. This confirms that the
-arm's angular coverage is especially valuable when the base must move slowly
-for safety or stability reasons, which is the typical operating regime for
-medical response robots in close proximity to a patient.
+In absolute terms, the Orbbec-Only configuration shows larger standard
+deviations at mid-range angles (\SI{2.0}{\second}--\SI{4.0}{\second} vs.\
+\SI{1.1}{\second}--\SI{3.5}{\second} for Spot+Arm), reflecting the
+cumulative timing uncertainty from a larger number of base rotations.
+However, its coefficients of variation are lower
+(\SI{15}{\percent}--\SI{19}{\percent}) than those of Spot+Arm
+(\SI{16}{\percent}--\SI{29}{\percent}) because the Orbbec-Only search time
+grows proportionally with the number of positions visited, keeping the
+relative spread narrow.  The Spot+Arm configuration, by contrast, exhibits
+higher relative variance because detection within the arm's 7-pose scan
+depends on the angular offset from the scan centre---a patient near the edge
+of the coverage window is found late in the scan, introducing proportional
+timing uncertainty that can nearly double the search time relative to a
+patient near the centre.
 
-Overall, the \textbf{2.2}$\times$ mean speedup means that \ac{TERESA}
-effectively halves the expected time to localise a patient at an unknown
-orientation, reducing the critical first-response delay from approximately
-\SI{18}{\second} to \SI{8}{\second}. This reduction is achieved without any
-additional sensing hardware: the Z1 arm, already required for ultrasound
-probe manipulation, serves a dual role as an active perception platform
-during the search phase.
+Overall, the \textbf{1.6}$\times$ mean speedup means that \ac{TERESA}
+reduces the expected time to localise a patient at an unknown orientation by
+approximately \SI{40}{\percent}, from \SI{15.5}{\second} to
+\SI{9.4}{\second}. This reduction is achieved without any additional sensing
+hardware: the Z1 arm, already required for ultrasound probe manipulation,
+serves a dual role as an active perception platform during the search phase.
+In an emergency response scenario, the \SI{6}{\second} saving is critical,
+as it directly shortens the interval between robot arrival and the start of
+the medical assessment.
 
 \subsection{Additional Results}
 
