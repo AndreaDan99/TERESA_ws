@@ -1029,7 +1029,7 @@ class ExposurePoseTester(Node):
                         self._spot_y = 0.0
                         self._spot_h = 0.0
                         self._spot_p = 0.0
-            self._apply_body_pose(0.0, 0.0, smooth=True)
+                        self._apply_body_pose(0.0, 0.0, smooth=True)
                         self._send_arm_home()
                         self._homing = False
                         self._nav_state = NavState.IDLE
