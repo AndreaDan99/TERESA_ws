@@ -167,3 +167,7 @@ wbc_spot_navigator:
     nav_y_min_speed: 0.12   # [m/s] min speed, above Spot deadband (~0.10)
     nav_y_tolerance: 0.05   # [m] arrival tolerance
     nav_y_timeout: 10.0     # [s] max exposure nav time
+
+body_pose_optimizer:
+  ros__parameters:
+    spot_y_penalty: 0.50   # cost = dist + penalty * |dy_body| (0=no penalty)

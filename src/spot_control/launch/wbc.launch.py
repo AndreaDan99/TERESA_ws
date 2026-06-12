@@ -57,6 +57,17 @@ def generate_launch_description():
         parameters=[params_file],
     )
 
+    optimizer_node = Node(
+        package='spot_control',
+        executable='body_pose_optimizer',
+        name='body_pose_optimizer',
+        output='screen',
+        parameters=[params_file],
+        remappings=[
+            ('~/navigator_goal', '/wbc/ee_goal'),
+        ],
+    )
+
     exposure_node = Node(
         package='spot_control',
         executable='exposure_scanner',
@@ -76,10 +87,11 @@ def generate_launch_description():
     return LaunchDescription([
         dry_run_arg,
         step_mode_arg,
-        LogInfo(msg=['WBC — arm-only QP + coordinator + spot navigator + exposure scanner + snapshot']),
+        LogInfo(msg=['WBC — arm-only QP + coordinator + spot navigator + body optimizer + exposure scanner + snapshot']),
         qp_node,
         coord_node,
         navigator_node,
+        optimizer_node,
         exposure_node,
         snapshot_node,
     ])
