@@ -73,9 +73,21 @@ from spot_perception.sml_pose_indices import (
 
 from teresa_utils.orientation import compute_ee_orientation
 
-def compute_exposure_orientation() -> np.ndarray:
+def compute_exposure_orientation(pitch: float = 0.0) -> np.ndarray:
+    """Compute EE orientation for exposure scan, compensating Spot pitch.
+
+    X_ee = [0, 0, -1] in link00 would point straight down only if Spot
+    has zero pitch.  When Spot tilts forward by `pitch` radians, link00
+    rotates with it.  We pre-rotate X_ee by -pitch so that after Spot's
+    body rotation the camera ends up vertical in the world frame:
+        X_ee_link00 = Ry(-pitch) @ [0, 0, -1] = [-sin(p), 0, -cos(p)]
+    """
     home_ori = [-0.0062, 0.4107, 0.0021, 0.9118]
-    return compute_ee_orientation(np.array([0.0, 0.0, -1.0]), home_ori)
+    c = math.cos(pitch)
+    s = math.sin(pitch)
+    # X_ee in link00 that becomes [0,0,-1] in world after Spot pitch
+    x_ee = np.array([s, 0.0, -c])
+    return compute_ee_orientation(x_ee, home_ori)
 
 
 # ── Home pose position (arm stowed, from wbc_qp_controller FWD-C) ─────────
@@ -847,7 +859,7 @@ class ExposurePoseTester(Node):
         # look_dir = surface - camera = direction camera should look.
         # So optical Z = look_dir, Y_ee = -look_dir.
         # X_ee points DOWN (-Z in link00), orthogonalized to Y_ee.
-        quat = compute_exposure_orientation()
+        quat = compute_exposure_orientation(self._spot_p)
 
         if self._spot_enabled and self._best_h is not None and self._camera_link00 is not None:
             cx, cy, cz = (
