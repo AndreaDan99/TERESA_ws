@@ -7,7 +7,7 @@ hardcoded virtual SMPL-24 keypoints instead of real body detection.
 Interactive stepping: press ENTER to send each point to the IK solver,
 with h=home, p=pause, r=resume, q=quit.
 
-link00 frame (matches IK solver):
+my_spot/odom frame (world-fixed virtual body, matches IK solver's world frame):
   X = forward (red, toward patient)  — grid spans body width along X
   Y = left (green, head→feet)        — grid spans head→feet along Y
   Z = UP (blue, vertical)            — camera above (+Z), EE points down (-Z)
@@ -16,7 +16,7 @@ Orientation matches Z1_realsense FAST ultrasound: X_ee=[0,0,-1] (DOWN),
 Gram-Schmidt with Y_home reference. Uses compute_ee_orientation from
 teresa_utils.orientation — identical to _orientation_for_xee from z1_FSM.py.
 
-Spot is beside the body, near the torso (Y≈0 in link00 frame).
+Spot is beside the body, near the torso (Y≈0 in odom frame).
 Lying body: on ground (Z≈0), extends along Y (head→feet).
 
 Two modes:
@@ -52,12 +52,13 @@ import tty
 import math
 import time
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, auto
 
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Pose, PoseArray, PoseStamped, Twist
+from tf2_ros import Buffer, TransformListener, TransformException
 from std_msgs.msg import Bool, Int32
 from visualization_msgs.msg import Marker, MarkerArray
 
@@ -98,6 +99,13 @@ class BodyRegion(Enum):
     LEFT_LEG  = 'left_leg'
     RIGHT_LEG = 'right_leg'
     FEET      = 'feet'
+
+
+class NavState(Enum):
+    IDLE     = auto()
+    WALKING  = auto()
+    ARRIVED  = auto()
+    TIMEOUT  = auto()
 
 
 REGION_ORDER = [
@@ -146,7 +154,7 @@ class ExposurePoint:
 # ═══════════════════════════════════════════════════════════════════════════
 
 # ── Standing orientation (body vertical, Y=up) ──────────────────────────
-# link00 frame: X=UP, Y=left, Z=forward.
+# odom frame: X=UP, Y=left, Z=forward.
 # Head at Y=1.60m, feet at Y=-0.05m. Requires Spot body pose to reach
 # upper body. Use for real exposure scan simulation with STANDING patients.
 _VIRTUAL_BODY_STANDING: dict[int, tuple[float, float, float]] = {
@@ -176,7 +184,7 @@ _VIRTUAL_BODY_STANDING: dict[int, tuple[float, float, float]] = {
     COLLAR_RIGHT:   (0.0, 1.40,  0.15),
 }
 
-# ── Lying orientation (link00 frame: X=forward, Y=left/head→feet, Z=UP) ──
+# ── Lying orientation (odom frame: X=forward, Y=left/head→feet, Z=UP) ──
 # X=forward(toward patient), Y=left(head→feet), Z=UP
 # Body on ground (Z≈0), extends along Y (head→feet).
 # Body width along X (across body). Spot beside body at Y≈0, Z≈0.
@@ -215,14 +223,14 @@ def make_virtual_body(offset_x: float, offset_y: float,
                       offset_z: float,
                       orientation: str = 'lying',
                       body_scale: float = 1.0) -> dict[int, np.ndarray]:
-    """Return dict {SMPL_index: world_xyz} for a virtual body at given offset.
+    """Return dict {SMPL_index: odom_xyz} for a virtual body at given offset.
 
-    link00 frame: X=forward (toward patient), Y=left (head→feet), Z=UP (vertical).
+    my_spot/odom frame: X=forward (toward patient), Y=left (head→feet), Z=UP (vertical).
 
     Args:
-        offset_x: Forward offset (X axis, toward patient) in link00 frame.
-        offset_y: Left/right offset (Y axis, head→feet) in link00 frame.
-        offset_z: Vertical offset (Z axis, up/down) in link00 frame.
+        offset_x: Forward offset (X axis, toward patient) in odom frame.
+        offset_y: Left/right offset (Y axis, head→feet) in odom frame.
+        offset_z: Vertical offset (Z axis, up/down) in odom frame.
         orientation: 'lying' (body on ground, Z≈0) or 'standing' (body vertical).
         body_scale: Scale factor for body span (1.0=full size, 0.35=fit Z1 workspace).
     """
@@ -231,7 +239,7 @@ def make_virtual_body(offset_x: float, offset_y: float,
     else:
         body = _VIRTUAL_BODY_LYING
     kp: dict[int, np.ndarray] = {}
-    # link00 frame: base = [forward, left, up]; body centered at X≈0, Y≈0, Z=0 (ground)
+    # odom frame: base = [forward, left, up]; body centered at X≈0, Y≈0, Z=0 (ground)
     base = np.array([offset_x, offset_y, offset_z], dtype=float)
     for idx, rel in body.items():
         kp[idx] = base + np.array(rel, dtype=float) * body_scale
@@ -473,6 +481,15 @@ class ExposurePoseTester(Node):
         self._body_settle_s = float(
             self.declare_parameter('body_settle_s', 1.5)
             .get_parameter_value().double_value)
+        self._nav_y_tolerance = float(
+            self.declare_parameter('nav_y_tolerance', 0.05)
+            .get_parameter_value().double_value)
+        self._nav_y_timeout = float(
+            self.declare_parameter('nav_y_timeout', 10.0)
+            .get_parameter_value().double_value)
+        self._nav_y_speed = float(
+            self.declare_parameter('nav_y_speed', 0.4)
+            .get_parameter_value().double_value)
 
         # Publishers
         self._pub_goal = self.create_publisher(
@@ -494,19 +511,33 @@ class ExposurePoseTester(Node):
         self._sub_goto = self.create_subscription(
             Int32, '/exposure/goto_point', self._cb_goto_point, 10)
 
+        # TF infrastructure for Y-axis navigation
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
+
         self._ik_done = False
         self._current_idx = 0
         self._running = False
         self._paused = False
         self._points: list[ExposurePoint] = []
         self._goto_idx: int | None = None
-        self._point_body_pose: dict[int, tuple[float, float, np.ndarray]] = {}
+        self._point_body_pose: dict[int, tuple[float, float, float, np.ndarray]] = {}
 
-        # Auto-scale body for arm-only mode (link00 frame: X=forward, Y=left, Z=UP)
+        # Navigation state for Y-axis Spot positioning
+        self._nav_state = NavState.IDLE
+        self._spot_y = 0.0
+        self._target_y = 0.0
+        self._nav_start_time = None
+        self._pending_h: float | None = None  # body pose pending after Y-nav completes
+        self._pending_p: float | None = None  # body pose pending after Y-nav completes
+
+        # Body scale: Spot mode uses full body with Y-walking, arm-only uses 30%
         if self._spot_enabled:
-            self._body_scale = 0.30    # same as arm-only, fully reachable with h+p
+            self._body_scale = 1.0     # full 1.70m virtual body, Y-walking handles reach
             self._offset_x = 0.35
             self._standoff = 0.30
+            self.get_logger().info(
+                f'  Body scale: {self._body_scale:.2f}, offset_x: {self._offset_x:.2f}, standoff: {self._standoff:.2f} (Spot mode, full body Y-walking)')
         else:
             self._body_scale = 0.30
             self._offset_x = 0.35   # corpo avanti ma raggiungibile
@@ -519,6 +550,7 @@ class ExposurePoseTester(Node):
         # Spot body pose state
         self._settling = False
         self._settle_deadline = None
+        self._best_spot_y: float | None = None
         self._best_h: float | None = None
         self._best_p: float | None = None
         self._camera_link00: np.ndarray | None = None
@@ -526,10 +558,13 @@ class ExposurePoseTester(Node):
         self._spot_p = 0.0  # current Spot pitch (tracked after each IK goal)
         self._resetting = False
         self._reset_done_idx: int | None = None
+        self._homing = False
+        self._nav_paused = False
 
         # Generate virtual body and exposure grid
-        kp = make_virtual_body(self._offset_x, self._offset_y, self._offset_z,
-                                self._orientation, self._body_scale)
+        kp = make_virtual_body(offset_x=self._offset_x, offset_y=self._offset_y,
+                                offset_z=self._offset_z, orientation=self._orientation,
+                                body_scale=self._body_scale)
         self._virtual_kp = kp
         self._points = _gen_exposure_grid(kp, self._standoff, self._standoff_vertical, self._regions)
 
@@ -542,7 +577,7 @@ class ExposurePoseTester(Node):
         self.get_logger().info(
             f'EXPOSURE POSE TESTER — virtual body at '
             f'({self._offset_x:.1f}, {self._offset_y:.1f}, {self._offset_z:.1f}) '
-            f'(link00 frame: X=forward, Y=left, Z=UP)'
+            f'(my_spot/odom frame: X=forward, Y=left, Z=UP)'
         )
         self.get_logger().info(f'  Orientation: {self._orientation}')
         if self._standoff_vertical:
@@ -584,6 +619,16 @@ class ExposurePoseTester(Node):
         if idx < 0 or idx >= len(self._points):
             self.get_logger().warn(f'Goto point {idx} out of range (0-{len(self._points)-1})')
             return
+
+        # Cancel any active Y-navigation before proceeding
+        if self._spot_enabled and self._nav_state == NavState.WALKING:
+            self._pub_cmd_vel.publish(Twist())
+            self._nav_state = NavState.IDLE
+            self._homing = False
+            self._pending_h = None
+            self._pending_p = None
+            self.get_logger().info('🛑 Cancelled active Y-navigation for goto request')
+
         ep = self._points[idx]
         self.get_logger().info(f'🖱️  Web UI: goto point {idx} ({ep.region.value}[{ep.region_index}])')
 
@@ -593,18 +638,9 @@ class ExposurePoseTester(Node):
         # If spot enabled, optimize and apply body pose for this point
         if self._spot_enabled:
             self.get_logger().info(f'🔍 Re-optimizing Spot body pose for point {idx}...')
-            # Convert camera_xyz to odom using current Spot body pose
-            c = math.cos(self._spot_p)
-            s = math.sin(self._spot_p)
-            mx, mz = self._z1_mount_x, self._z1_mount_z
-            link00_x = c * mx + s * mz
-            link00_z = self._spot_h - s * mx + c * mz
-            camera_odom = np.array([
-                ep.camera_xyz[0] + link00_x,
-                ep.camera_xyz[1],
-                ep.camera_xyz[2] + link00_z,
-            ])
-            h, p = self._optimize_body_pose(camera_odom, idx)
+            # camera_xyz is already in odom frame (world-fixed virtual body)
+            camera_odom = ep.camera_xyz.copy()
+            spot_y, h, p = self._optimize_body_pose(camera_odom, idx)
             self._apply_body_pose(h, p)
             self._settling = True
             self._settle_deadline = (
@@ -619,68 +655,77 @@ class ExposurePoseTester(Node):
 
     # ── Spot body pose optimization ─────────────────────────────────────
 
-    def _optimize_body_pose(self, camera_odom: np.ndarray, idx: int) -> tuple[float, float]:
-        """Grid search over height × pitch to minimize distance to Z1 sweet spot.
+    def _optimize_body_pose(self, camera_odom: np.ndarray, idx: int) -> tuple[float, float, float]:
+        """Grid search over spot_y × height × pitch to minimize distance to Z1 sweet spot.
 
         The Z1 dexterous workspace center is ~[0.35, 0.0, 0.30] in link00 frame
         (link00: X=forward, Y=left, Z=UP).
-        For each (height, pitch) combination, computes the camera position in
+        For each (spot_y, height, pitch) combination, computes the camera position in
         the link00 frame and measures distance to the sweet spot.
 
-        The camera_odom is already in odom frame (converted from camera_xyz using
-        the current Spot body pose), so the optimization is independent of h_curr/p_curr.
+        spot_y is the lateral offset where Spot walks (in odom frame Y), shifting
+        the camera in the link00 frame: cam_link00[1] = camera_odom[1] - spot_y.
+        600 combinations (15 × 8 × 5) evaluated — still instant.
+
+        The camera_odom is already in odom frame (world-fixed virtual body), so the
+        optimization is independent of h_curr/p_curr.
 
         Args:
             camera_odom: Camera position in odom frame [x, y, z].
 
         Returns:
-            (best_height, best_pitch) in meters and radians.
+            (best_spot_y, best_height, best_pitch) in meters and radians.
         """
+        spot_y_values = np.arange(-0.68, 0.69, 0.10)  # 15 values, ±80% of body span at scale 1.0
         heights = [-0.25, -0.20, -0.15, -0.10, -0.05, 0.0, 0.05, 0.10]
         pitches = [0.0, 0.087, 0.17, 0.26, 0.35]  # 0°, 5°, 10°, 15°, 20° in rad
         sweet_spot = np.array([0.35, 0.0, 0.30])
         mx, mz = self._z1_mount_x, self._z1_mount_z
 
+        best_spot_y = 0.0
         best_h, best_p = 0.0, 0.0
         best_dist = float('inf')
         best_cam_link00: np.ndarray | None = None
 
-        for h in heights:
-            for p in pitches:
-                c = math.cos(p)
-                s = math.sin(p)
+        for spot_y in spot_y_values:
+            for h in heights:
+                for p in pitches:
+                    c = math.cos(p)
+                    s = math.sin(p)
 
-                # link00 position in odom frame
-                link00_x = c * mx + s * mz
-                link00_z = h - s * mx + c * mz
+                    link00_x = c * mx + s * mz
+                    link00_z = h - s * mx + c * mz
 
-                # Camera position in link00 frame: R_y(-p) @ (cam_odom - link00_odom)
-                dx = camera_odom[0] - link00_x
-                dz = camera_odom[2] - link00_z
-                cam_link00 = np.array([
-                    c * dx - s * dz,
-                    camera_odom[1],
-                    s * dx + c * dz,
-                ])
+                    dx = camera_odom[0] - link00_x
+                    dz = camera_odom[2] - link00_z
+                    cam_link00 = np.array([
+                        c * dx - s * dz,
+                        camera_odom[1] - spot_y,
+                        s * dx + c * dz,
+                    ])
 
-                dist = float(np.linalg.norm(cam_link00 - sweet_spot))
-                if dist < best_dist:
-                    best_dist = dist
-                    best_h = h
-                    best_p = p
-                    best_cam_link00 = cam_link00
+                    dist = float(np.linalg.norm(cam_link00 - sweet_spot))
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_spot_y = spot_y
+                        best_h = h
+                        best_p = p
+                        best_cam_link00 = cam_link00
 
+        self._best_spot_y = best_spot_y
         self._best_h = best_h
         self._best_p = best_p
         self._camera_link00 = best_cam_link00
 
         self.get_logger().info(
-            f'  Body pose optimized: h={best_h:.3f}m, '
+            f'  Body pose optimized: y={best_spot_y:.3f}m, h={best_h:.3f}m, '
             f'pitch={best_p * 57.3:.1f}°, dist_to_sweet={best_dist:.3f}m'
         )
-        self._point_body_pose[idx] = (best_h, best_p, best_cam_link00)
-        self.get_logger().info(f'  💾 Saved state for point {idx}: h={best_h:.3f}, p={best_p*57.3:.1f}°')
-        return best_h, best_p
+        self._point_body_pose[idx] = (best_spot_y, best_h, best_p, best_cam_link00)
+        self.get_logger().info(
+            f'  💾 Saved state for point {idx}: y={best_spot_y:.3f}, '
+            f'h={best_h:.3f}, p={best_p * 57.3:.1f}°')
+        return best_spot_y, best_h, best_p
 
     def _apply_body_pose(self, height: float, pitch: float):
         """Publish body_pose and zero Twist to flush to spot_driver.
@@ -688,6 +733,10 @@ class ExposurePoseTester(Node):
         Spot's body_pose is lazy: spot_driver saves the parameters and applies
         them on the next cmd_vel. The zero Twist flushes the stored body_pose.
         """
+        if hasattr(self, '_nav_state') and self._nav_state == NavState.WALKING:
+            self.get_logger().warn('Cannot apply body pose while navigating — skipping')
+            return
+
         half = pitch / 2.0
         qx = 0.0
         qy = math.sin(half)
@@ -707,9 +756,48 @@ class ExposurePoseTester(Node):
         twist = Twist()
         self._pub_cmd_vel.publish(twist)
 
+    # ── Y-axis Spot navigation ──────────────────────────────────────────
+
+    def _navigate_to_y(self, target_y: float) -> bool:
+        """Navigate Spot laterally to target_y in odom frame using cmd_vel.linear.y.
+
+        Non-blocking: sets state to WALKING and returns immediately.
+        The actual navigation happens asynchronously in the spin() loop.
+
+        Returns True if already at target (within tolerance), False otherwise.
+        """
+        try:
+            t = self._tf_buffer.lookup_transform(
+                'my_spot/odom', 'my_spot/body', rclpy.time.Time())
+            current_y = t.transform.translation.y
+        except TransformException:
+            self.get_logger().warn(
+                'TF lookup failed during Y-nav initialization')
+            return False
+
+        self._target_y = target_y
+        self._nav_state = NavState.WALKING
+        self._nav_start_time = self.get_clock().now()
+
+        if abs(self._target_y - current_y) < self._nav_y_tolerance:
+            self._nav_state = NavState.ARRIVED
+            self.get_logger().info(
+                f'Y-nav already at target: '
+                f'target={self._target_y:.3f}, actual={current_y:.3f}')
+            return True
+
+        self.get_logger().info(
+            f'Y-nav started: '
+            f'target={self._target_y:.3f}, current={current_y:.3f}')
+        return False
+
     # ── IK goal sending ────────────────────────────────────────────────
 
     def _send_ik_goal(self, idx: int):
+        if self._nav_state == NavState.WALKING:
+            self.get_logger().warn('Cannot send IK goal while navigating')
+            return
+
         ep = self._points[idx]
         # Camera optical Z = -Y_ee (from TF analysis).
         # look_dir = surface - camera = direction camera should look.
@@ -750,12 +838,8 @@ class ExposurePoseTester(Node):
             f'quat=({quat[0]:.3f}, {quat[1]:.3f}, {quat[2]:.3f}, {quat[3]:.3f})'
         )
 
-    def _send_home(self):
-        # Reset Spot body pose to default
-        if self._spot_enabled:
-            self._apply_body_pose(0.0, 0.0)
-            self.get_logger().info('🏠 Spot reset to default (h=0, p=0)')
-        
+    def _send_arm_home(self):
+        """Send arm HOME PoseStamped in link00 frame (no body pose change)."""
         msg = PoseStamped()
         msg.header.frame_id = 'link00'
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -770,21 +854,44 @@ class ExposurePoseTester(Node):
         self._pub_enable.publish(Bool(data=True))
         self._pub_goal.publish(msg)
         self._ik_done = False
+        self.get_logger().info(
+            f'🏠 HOME arm sent ({HOME_POS[0]:.3f}, {HOME_POS[1]:.3f}, {HOME_POS[2]:.3f}) in link00'
+        )
+
+    def _send_home(self):
+        # Reset state immediately
         self._current_idx = 0
         self._paused = False
         self._settling = False
+        self._resetting = False
+
+        # If Spot is far from Y=0, navigate back first (async)
+        if self._spot_enabled and abs(self._spot_y) > 0.01:
+            self._pending_h = None
+            self._pending_p = None
+            self._navigate_to_y(0.0)
+            self._homing = True
+            self.get_logger().info(
+                '🏠 Navigating Spot to Y=0 before arm home...')
+            return
+
+        # Already at Y=0 (or spot disabled): apply body pose + arm HOME directly
+        if self._spot_enabled:
+            self._apply_body_pose(0.0, 0.0)
+            self.get_logger().info('🏠 Spot reset to default (h=0, p=0)')
+        self._spot_y = 0.0
         self._spot_h = 0.0
         self._spot_p = 0.0
-        self._resetting = False
+        self._send_arm_home()
         self.get_logger().info(
-            f'🏠 HOME sent ({HOME_POS[0]:.3f}, {HOME_POS[1]:.3f}, {HOME_POS[2]:.3f}) — reset to point 0'
+            '🏠 HOME complete — reset to point 0'
         )
 
     # ── Markers ────────────────────────────────────────────────────────
 
     def _publish_virtual_skeleton(self):
         pa = PoseArray()
-        pa.header.frame_id = 'link00'
+        pa.header.frame_id = 'my_spot/odom'
         pa.header.stamp = self.get_clock().now().to_msg()
         for i in range(NUM_JOINTS):
             pose = Pose()
@@ -808,7 +915,7 @@ class ExposurePoseTester(Node):
         for i, ep in enumerate(self._points):
             cr, cg, cb = REGION_COLORS.get(ep.region, (0.5, 0.5, 0.5))
             m = Marker()
-            m.header.frame_id = 'link00'
+            m.header.frame_id = 'my_spot/odom'
             m.header.stamp = self.get_clock().now().to_msg()
             m.ns = f'exposure_grid_{ep.region.value}'
             m.id = i
@@ -861,6 +968,67 @@ class ExposurePoseTester(Node):
             while self._running and rclpy.ok():
                 rclpy.spin_once(self, timeout_sec=0.1)
 
+                # Y-axis navigation tick (non-blocking, one cmd_vel per spin_once)
+                if self._nav_state == NavState.WALKING:
+                    try:
+                        t = self._tf_buffer.lookup_transform(
+                            'my_spot/odom', 'my_spot/body', rclpy.time.Time())
+                        current_y = t.transform.translation.y
+                    except TransformException:
+                        self.get_logger().warn(
+                            'TF lookup failed during Y-nav — skipping navigation')
+                        self._nav_state = NavState.TIMEOUT
+                        self._pub_cmd_vel.publish(Twist())
+                        continue  # skip to next spin iteration
+
+                    dy = self._target_y - current_y
+                    now = self.get_clock().now()
+
+                    if abs(dy) < self._nav_y_tolerance:
+                        self._nav_state = NavState.ARRIVED
+                        self._pub_cmd_vel.publish(Twist())
+                        self.get_logger().info(
+                            f'✅ Y-nav arrived: target={self._target_y:.3f}, '
+                            f'actual={current_y:.3f}')
+                    elif (now - self._nav_start_time) > rclpy.duration.Duration(
+                            seconds=self._nav_y_timeout):
+                        self._nav_state = NavState.TIMEOUT
+                        self._pub_cmd_vel.publish(Twist())
+                        self.get_logger().warn(
+                            f'⏰ Y-nav timeout after {self._nav_y_timeout}s: '
+                            f'target={self._target_y:.3f}, actual={current_y:.3f}')
+                    else:
+                        twist = Twist()
+                        twist.linear.y = math.copysign(self._nav_y_speed, dy)
+                        twist.angular.z = 0.0
+                        self._pub_cmd_vel.publish(twist)
+
+                # After nav tick: process arrival
+                if self._nav_state in (NavState.ARRIVED, NavState.TIMEOUT):
+                    if self._homing:
+                        # Homing nav completed → reset body pose + send arm HOME
+                        self._spot_y = 0.0
+                        self._spot_h = 0.0
+                        self._spot_p = 0.0
+                        self._apply_body_pose(0.0, 0.0)
+                        self._send_arm_home()
+                        self._homing = False
+                        self._nav_state = NavState.IDLE
+                        self.get_logger().info(
+                            '🏠 HOME complete — Spot at Y=0, body reset, arm HOME sent')
+                    elif self._pending_h is not None:
+                        self._spot_y = self._target_y
+                        self._apply_body_pose(self._pending_h, self._pending_p)
+                        self._pending_h = None
+                        self._pending_p = None
+                        self._settling = True
+                        self._settle_deadline = (
+                            self.get_clock().now()
+                            + rclpy.duration.Duration(seconds=self._body_settle_s))
+                        self._nav_state = NavState.IDLE
+                        self.get_logger().info(
+                            f'⏳ Nav complete — settling for {self._body_settle_s:.1f}s...')
+
                 # Check settle completion (Spot body pose applied → now send IK goal)
                 if self._settling:
                     if self.get_clock().now() >= self._settle_deadline:
@@ -896,6 +1064,10 @@ class ExposurePoseTester(Node):
                                 self.get_logger().warn(
                                     '⏸  Currently paused — press r to resume')
                                 continue
+                            if self._nav_state == NavState.WALKING:
+                                self.get_logger().warn(
+                                    '🚶 Spot is navigating — wait for nav to complete')
+                                continue
                             if self._settling:
                                 self.get_logger().warn(
                                     '⏳ Still settling — wait for settle to complete')
@@ -907,26 +1079,30 @@ class ExposurePoseTester(Node):
                                         self.get_logger().info(
                                             f'🔍 Optimizing Spot body pose for point '
                                             f'{self._current_idx + 1}...')
-                                        c = math.cos(self._spot_p)
-                                        s = math.sin(self._spot_p)
-                                        mx, mz = self._z1_mount_x, self._z1_mount_z
-                                        link00_x = c * mx + s * mz
-                                        link00_z = self._spot_h - s * mx + c * mz
-                                        camera_odom = np.array([
-                                            ep.camera_xyz[0] + link00_x,
-                                            ep.camera_xyz[1],
-                                            ep.camera_xyz[2] + link00_z,
-                                        ])
-                                        h, p = self._optimize_body_pose(camera_odom, self._current_idx)
-                                        self._apply_body_pose(h, p)
-                                        self._settling = True
-                                        self._settle_deadline = (
-                                            self.get_clock().now()
-                                            + rclpy.duration.Duration(
-                                                seconds=self._body_settle_s))
-                                        self.get_logger().info(
-                                            f'⏳ Settling for '
-                                            f'{self._body_settle_s:.1f}s...')
+                                        # camera_xyz is already in odom frame (world-fixed virtual body)
+                                        camera_odom = ep.camera_xyz.copy()
+                                        spot_y, h, p = self._optimize_body_pose(camera_odom, self._current_idx)
+
+                                        # Store body pose for use after Y-navigation completes
+                                        self._pending_h = h
+                                        self._pending_p = p
+
+                                        # Skip navigation if already at target Y or first point at Y≈0
+                                        if (self._current_idx == 0 and abs(spot_y) < 0.05) or abs(spot_y - self._spot_y) <= 0.01:
+                                            self._spot_y = spot_y
+                                            self._apply_body_pose(h, p)
+                                            self._pending_h = None
+                                            self._pending_p = None
+                                            self._settling = True
+                                            self._settle_deadline = (
+                                                self.get_clock().now()
+                                                + rclpy.duration.Duration(
+                                                    seconds=self._body_settle_s))
+                                            self.get_logger().info(
+                                                f'⏳ Settling for '
+                                                f'{self._body_settle_s:.1f}s... (already at target Y)')
+                                        else:
+                                            self._navigate_to_y(spot_y)
                                     else:
                                         self._send_ik_goal(self._current_idx)
                                         self._current_idx += 1
@@ -962,10 +1138,21 @@ class ExposurePoseTester(Node):
                                     '⚠️  ik_done not received yet — '
                                     'wait for arm to finish')
                         elif key == 'p':
+                            if self._nav_state == NavState.WALKING:
+                                self._pub_cmd_vel.publish(Twist())
+                                self._nav_state = NavState.IDLE
+                                self._nav_paused = True
+                                self.get_logger().info(
+                                    '⏸ PAUSED during navigation — saved target')
                             self._paused = True
                             self.get_logger().info(
                                 '⏸  PAUSED — press r to resume')
                         elif key == 'r':
+                            if self._nav_paused:
+                                self._nav_paused = False
+                                self._navigate_to_y(self._target_y)
+                                self.get_logger().info(
+                                    f'▶ RESUMED navigation to y={self._target_y:.3f}')
                             self._paused = False
                             self.get_logger().info('▶ RESUMED')
                         elif key == 'g':
@@ -983,6 +1170,9 @@ class ExposurePoseTester(Node):
                             self.get_logger().info(
                                 '🏠 HOME — press ENTER to restart from point 1')
                         elif key == 'q':
+                            if self._nav_state == NavState.WALKING:
+                                self._pub_cmd_vel.publish(Twist())
+                                self._nav_state = NavState.IDLE
                             self.get_logger().info('👋 Quit')
                             self._running = False
                 except Exception:
