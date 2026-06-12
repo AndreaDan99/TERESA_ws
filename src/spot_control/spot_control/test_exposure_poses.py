@@ -734,35 +734,45 @@ class ExposurePoseTester(Node):
             f'h={best_h:.3f}, p={best_p * 57.3:.1f}°')
         return best_spot_y, best_h, best_p
 
-    def _apply_body_pose(self, height: float, pitch: float):
-        """Publish body_pose and zero Twist to flush to spot_driver.
+    def _apply_body_pose(self, height: float, pitch: float, smooth: bool = True):
+        """Publish body_pose with optional smooth interpolation.
 
         Spot's body_pose is lazy: spot_driver saves the parameters and applies
         them on the next cmd_vel. The zero Twist flushes the stored body_pose.
+        When smooth=True, interpolates from current (h,p) to target in 5 steps
+        over 1.0s to avoid abrupt posture changes.
         """
         if hasattr(self, '_nav_state') and self._nav_state == NavState.WALKING:
             self.get_logger().warn('Cannot apply body pose while navigating — skipping')
             return
 
-        half = pitch / 2.0
-        qx = 0.0
-        qy = math.sin(half)
-        qz = 0.0
-        qw = math.cos(half)
+        if smooth and (abs(height - self._spot_h) > 0.02 or abs(pitch - self._spot_p) > 0.01):
+            steps = 5
+            for i in range(1, steps + 1):
+                t = i / steps
+                h = self._spot_h + (height - self._spot_h) * t
+                p = self._spot_p + (pitch - self._spot_p) * t
+                self._publish_body_pose_raw(h, p)
+                time.sleep(0.2)
+        else:
+            self._publish_body_pose_raw(height, pitch)
+            time.sleep(0.3)
 
+        self._spot_h = height
+        self._spot_p = pitch
+
+    def _publish_body_pose_raw(self, height: float, pitch: float):
+        half = pitch / 2.0
         pose = Pose()
         pose.position.x = 0.0
         pose.position.y = 0.0
         pose.position.z = height
-        pose.orientation.x = qx
-        pose.orientation.y = qy
-        pose.orientation.z = qz
-        pose.orientation.w = qw
+        pose.orientation.x = 0.0
+        pose.orientation.y = math.sin(half)
+        pose.orientation.z = 0.0
+        pose.orientation.w = math.cos(half)
         self._pub_body_pose.publish(pose)
-
-        twist = Twist()
-        self._pub_cmd_vel.publish(twist)
-        time.sleep(0.3)  # let Spot process body_pose before next cmd_vel
+        self._pub_cmd_vel.publish(Twist())
 
     # ── Y-axis Spot navigation ──────────────────────────────────────────
 
@@ -885,7 +895,7 @@ class ExposurePoseTester(Node):
 
         # Already at Y=0 (or spot disabled): apply body pose + arm HOME directly
         if self._spot_enabled:
-            self._apply_body_pose(0.0, 0.0)
+            self._apply_body_pose(0.0, 0.0, smooth=True)
             self.get_logger().info('🏠 Spot reset to default (h=0, p=0)')
         self._spot_y = 0.0
         self._spot_h = 0.0
@@ -1019,7 +1029,7 @@ class ExposurePoseTester(Node):
                         self._spot_y = 0.0
                         self._spot_h = 0.0
                         self._spot_p = 0.0
-                        self._apply_body_pose(0.0, 0.0)
+            self._apply_body_pose(0.0, 0.0, smooth=True)
                         self._send_arm_home()
                         self._homing = False
                         self._nav_state = NavState.IDLE
