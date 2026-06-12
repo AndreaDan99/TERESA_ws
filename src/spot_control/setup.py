@@ -28,6 +28,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'body_pose_optimizer = spot_control.body_pose_optimizer:main',
             'spot_goal_navigator = spot_control.spot_goal_navigator:main',
             'wbc_spot_navigator  = spot_control.wbc_spot_navigator:main',
             'wbc_qp_controller   = spot_control.wbc_qp_controller:main',
