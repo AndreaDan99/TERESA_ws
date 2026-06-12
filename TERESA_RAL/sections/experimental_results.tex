@@ -149,30 +149,13 @@ oversight.
 \subsection{Discussion}
 
 The results demonstrate that treating body posture as an active perceptual
-resource yields measurable improvements in mission efficiency. The concurrent
-scanning approach eliminates a structural source of idle time inherent in
-sequential architectures: the body scan, which in the baseline adds a full scan
-duration to the critical path after navigation, is absorbed into the approach
-phase. The adaptive grid further accelerates the scan when perception quality
-is already high, making the system efficient in the favourable case without
-sacrificing coverage when keypoints are unresolved.
-
-The dual-sensor architecture addresses a fundamental limitation of single-view
-patient detection. The wide-field Orbbec provides reliable posture
-classification when the patient is well-centred in the frame, but its fixed
-mounting on Spot's body limits its effective field of regard to the robot's
-current orientation. The \ac{EE}-mounted RealSense, actively positioned by the
-\ac{WBC} look-at controller, compensates for this limitation by guiding the
-base to orientations where the Orbbec can succeed. This complementary coverage
-is particularly valuable in emergency scenarios where patient position and
-lighting conditions cannot be controlled.
-
-Several limitations warrant discussion. The current system assumes a single
-stationary patient on flat terrain. Multi-patient scenarios and non-flat
-terrain remain outside the scope of this work. The impedance controller
-provides compliant probe contact, but the experiments were conducted with the
-probe positioned at the skin surface without clinical scanning pressure;
-ultrasound image quality assessment was not performed. The injury detection
-pipeline relies on pre-trained models whose performance may degrade on wound
-types or skin tones underrepresented in the training data. These aspects are
-the subject of ongoing work.
+resource yields measurable improvements in both mission speed and
+completeness.  The arm's \SI{360}{\degree} coverage eliminates the
+base-rotation bottleneck during search, while body reconfiguration lifts
+completion from $\sim$\SI{40}{\percent} to near-\SI{100}{\percent}.  The
+dual-sensor architecture prevents detection failures that a single-camera
+system would incur.  Several limitations remain: the system assumes a
+single stationary patient on flat terrain; ultrasound image quality and
+clinical scanning pressure were not evaluated; and the injury detection
+pipeline relies on pre-trained models whose performance may vary across
+wound types and skin tones.  These aspects are the subject of ongoing work.
