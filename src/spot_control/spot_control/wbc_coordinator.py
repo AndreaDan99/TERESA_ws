@@ -540,6 +540,7 @@ class WBCCoordinatorNode(Node):
 
         self._pub_debug_marker()
         self._tick_fast_settle()
+        self._tick_smooth_body_pose()
 
     def _check_lying_timeout(self) -> None:
         # Once committed (handoff done), don't abort on Orbbec loss — RealSense is in charge.
@@ -1600,23 +1601,60 @@ class WBCCoordinatorNode(Node):
             self._pre_approach_fast_start = None
         self._state = new_state
 
-    def _set_body_pose(self, height: float, pitch: float = 0.0, yaw: float | None = None) -> None:
+    def _set_body_pose(self, height: float, pitch: float = 0.0, yaw: float | None = None, smooth: bool = True) -> None:
+        """Publish body_pose with optional smooth interpolation.
+
+        When smooth=True (default), starts an async transition from current
+        (h,p) to target over 0.8s, driven by _tick_smooth_body_pose() to
+        avoid abrupt posture changes that destabilize Spot.
+        """
         from tf_transformations import quaternion_from_euler
         if yaw is None:
             cur_yaw = self._get_current_yaw()
             yaw = cur_yaw if cur_yaw is not None else 0.0
-        q = quaternion_from_euler(0.0, pitch, yaw)
         height_clamped = float(np.clip(height, self._min_body_height, self._max_body_height))
+
+        if smooth and (abs(height_clamped - self._current_body_height) > 0.02
+                       or abs(pitch - (self._smooth_pitch if hasattr(self, '_smooth_pitch') else 0.0)) > 0.01):
+            self._smooth_start_h = self._current_body_height
+            self._smooth_start_p = getattr(self, '_smooth_pitch', 0.0)
+            self._smooth_target_h = height_clamped
+            self._smooth_target_p = pitch
+            self._smooth_target_yaw = yaw
+            self._smooth_start_time = self.get_clock().now()
+            self._smoothing_body = True
+            self._smooth_duration = 0.8
+        else:
+            self._publish_body_pose_raw(height_clamped, pitch, yaw)
+            self._current_body_height = height_clamped
+            self._smooth_pitch = pitch
+
+    def _tick_smooth_body_pose(self):
+        """Called from timer callback: publish interpolated body pose."""
+        if not getattr(self, '_smoothing_body', False):
+            return
+        elapsed = (self.get_clock().now() - self._smooth_start_time).nanoseconds * 1e-9
+        if elapsed >= self._smooth_duration:
+            self._publish_body_pose_raw(self._smooth_target_h, self._smooth_target_p, self._smooth_target_yaw)
+            self._current_body_height = self._smooth_target_h
+            self._smooth_pitch = self._smooth_target_p
+            self._smoothing_body = False
+        else:
+            t = elapsed / self._smooth_duration
+            h = self._smooth_start_h + (self._smooth_target_h - self._smooth_start_h) * t
+            p = self._smooth_start_p + (self._smooth_target_p - self._smooth_start_p) * t
+            self._publish_body_pose_raw(h, p, self._smooth_target_yaw)
+
+    def _publish_body_pose_raw(self, height: float, pitch: float, yaw: float):
+        from tf_transformations import quaternion_from_euler
+        q = quaternion_from_euler(0.0, pitch, yaw)
         pose = Pose()
-        pose.position.z = height_clamped
+        pose.position.z = height
         pose.orientation.x = q[0]
         pose.orientation.y = q[1]
         pose.orientation.z = q[2]
         pose.orientation.w = q[3]
         self._pub_body_pose.publish(pose)
-        self._current_body_height = height_clamped
-        self.get_logger().info(
-            f'body_pose → height={height_clamped:.2f}m  pitch={math.degrees(pitch):.1f}°  yaw={math.degrees(yaw):.1f}°')
 
     def _read_float_array(self, param_name: str) -> list:
         val = self.get_parameter(param_name).value
