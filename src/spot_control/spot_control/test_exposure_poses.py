@@ -537,7 +537,7 @@ class ExposurePoseTester(Node):
         # Body scale: Spot mode uses full body with Y-walking, arm-only uses 30%
         if self._spot_enabled:
             self._body_scale = self._body_scale if self._body_scale > 0 else 1.0
-            self._offset_x = 0.35
+            self._offset_x = 0.55  # sweet spot: Z1 mount(0.20) + sweet(0.35)
             self._torso_center_y = (0.60 + (-0.15)) / 2.0 * self._body_scale
             self._offset_y = -self._torso_center_y
             self._standoff = 0.30
