@@ -246,18 +246,20 @@
   function normAngle(a) { return Math.atan2(Math.sin(a), Math.cos(a)); }
 
   const SKELETON_EDGES = [
-    [15,13],[13,11],[16,14],[14,12],[11,12],  // legs
-    [5,11],[6,12],[5,6],                       // torso
-    [5,7],[6,8],[7,9],[8,10],                  // arms
-    [1,2],[0,1],[0,2],                         // face
-    [1,3],[2,4],[3,5],[4,6]                    // ears → shoulders
+    [0,3],[3,6],[6,9],[9,12],[12,15],    // spine: pelvis→neck→head
+    [12,16],[16,18],[18,20],[20,22],      // left arm
+    [12,17],[17,19],[19,21],[21,23],      // right arm
+    [0,1],[1,4],[4,7],[7,10],             // left leg
+    [0,2],[2,5],[5,8],[8,11],             // right leg
+    [16,17],[1,2],                         // shoulders + hips cross
   ];
 
   const JOINT_NAMES = [
-    'nose','L-eye','R-eye','L-ear','R-ear',
+    'pelvis','L-hip','R-hip','spine1','L-knee','R-knee',
+    'spine2','L-ankle','R-ankle','spine3','L-foot','R-foot',
+    'neck','L-collar','R-collar','head',
     'L-shoulder','R-shoulder','L-elbow','R-elbow',
-    'L-wrist','R-wrist','L-hip','R-hip',
-    'L-knee','R-knee','L-ankle','R-ankle'
+    'L-wrist','R-wrist','L-hand','R-hand'
   ];
 
   /* ── CameraView ──────────────────────────────── */

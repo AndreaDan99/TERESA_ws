@@ -443,7 +443,14 @@ body{
 <script>
 (function(){
 const $=id=>document.getElementById(id);
-const SKELETON_EDGES=[[15,13],[13,11],[16,14],[14,12],[11,12],[5,11],[6,12],[5,6],[5,7],[6,8],[7,9],[8,10],[1,2],[0,1],[0,2],[1,3],[2,4],[3,5],[4,6]];
+const SKELETON_EDGES=[
+  [0,3],[3,6],[6,9],[9,12],[12,15],    // spine: pelvis→neck→head
+  [12,16],[16,18],[18,20],[20,22],      // left arm: neck→shoulder→elbow→wrist→hand
+  [12,17],[17,19],[19,21],[21,23],      // right arm
+  [0,1],[1,4],[4,7],[7,10],             // left leg: pelvis→hip→knee→ankle→foot
+  [0,2],[2,5],[5,8],[8,11],             // right leg
+  [16,17],[1,2],                         // shoulders + hips cross
+];
 
 class TeresaController{
   constructor(){
