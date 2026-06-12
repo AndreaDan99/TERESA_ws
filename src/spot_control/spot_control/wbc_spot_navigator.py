@@ -16,7 +16,7 @@ import rclpy.duration
 import rclpy.time
 from rclpy.node import Node
 from geometry_msgs.msg import PointStamped, PoseStamped, Twist
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from tf2_ros import Buffer, TransformListener, TransformException
 import tf2_geometry_msgs  # noqa: F401
 
@@ -74,6 +74,8 @@ class WBCSpotNavigator(Node):
             PoseStamped, self._p.goal_topic, self._cb_goal, 10)
         self.create_subscription(
             Bool, '/wbc/spot_control', self._cb_spot_control, 10)
+        self.create_subscription(
+            String, '/wbc/nav_mode', self._cb_nav_mode, 10)
         self._pub_vel = self.create_publisher(
             Twist, self._p.cmd_vel_topic, 10)
 
@@ -97,6 +99,10 @@ class WBCSpotNavigator(Node):
 
     def _cb_spot_control(self, msg: Bool) -> None:
         self._spot_control = msg.data
+
+    def _cb_nav_mode(self, msg: String) -> None:
+        self._p.mode = msg.data
+        self.get_logger().info(f'Nav mode switched to: {msg.data}')
 
     def _update_goal_odom(self) -> None:
         goal_raw = self._latest_goal

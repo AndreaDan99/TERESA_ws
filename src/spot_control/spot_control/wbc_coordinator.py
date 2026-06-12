@@ -373,6 +373,7 @@ class WBCCoordinatorNode(Node):
         self._pub_uncert   = self.create_publisher(Float32,     '/wbc/target_uncertainty', 10)
         self._pub_yaw      = self.create_publisher(Float32,     '/wbc/desired_yaw',        10)
         self._pub_spot_ctrl = self.create_publisher(Bool,       '/wbc/spot_control',       10)
+        self._pub_nav_mode  = self.create_publisher(String,     '/wbc/nav_mode',            10)
         self._pub_dbg_marker = self.create_publisher(Marker, '/wbc/debug_marker', 10)
         self._pub_body_ready = self.create_publisher(Bool, '/wbc/body_ready', 10)
         self._pub_optimize_request = self.create_publisher(PoseArray, '~/optimize_request', 10)
@@ -1522,6 +1523,7 @@ class WBCCoordinatorNode(Node):
             self._pub_cmd_vel.publish(Twist())
             self._pub_guidance.publish(Bool(data=False))
             self._set_body_pose(0.0)   # ripristina altezza nominale
+            self._pub_nav_mode.publish(String(data='approaching'))
         if new_state == CoordState.SEARCHING:
             self._pub_guidance.publish(Bool(data=True))
             old = self._state
@@ -1559,6 +1561,7 @@ class WBCCoordinatorNode(Node):
         if new_state == CoordState.EXPOSURE_SCANNING:
             self._set_body_pose(self._handoff_body_height)
             self._exposure_scan_start = self.get_clock().now()
+            self._pub_nav_mode.publish(String(data='exposure'))
             self.get_logger().info('Entering exposure body scan')
         if new_state == CoordState.WAITING_EXPOSURE:
             self._pub_step_pending.publish(String(data='EXPOSURE_SCANNING'))
