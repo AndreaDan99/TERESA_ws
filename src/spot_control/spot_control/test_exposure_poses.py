@@ -762,6 +762,7 @@ class ExposurePoseTester(Node):
 
         twist = Twist()
         self._pub_cmd_vel.publish(twist)
+        time.sleep(0.3)  # let Spot process body_pose before next cmd_vel
 
     # ── Y-axis Spot navigation ──────────────────────────────────────────
 
@@ -1007,7 +1008,6 @@ class ExposurePoseTester(Node):
                     else:
                         twist = Twist()
                         speed = min(abs(dy) * 0.8, self._nav_y_speed)
-                        # Spot cmd_vel.linear.y convention is inverted (positive = right)
                         twist.linear.y = -math.copysign(max(speed, 0.05), dy)
                         twist.angular.z = 0.0
                         self._pub_cmd_vel.publish(twist)
