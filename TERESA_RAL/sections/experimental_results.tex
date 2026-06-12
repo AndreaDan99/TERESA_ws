@@ -53,13 +53,13 @@ time to Orbbec posture confidence $\geq$ \num{0.70}.
 
 With the arm's seven scanning poses providing full \SI{360}{\degree} coverage
 from a single base position, \ac{TERESA} required no base rotation: frontal
-patients were detected near-instantly (\SIrange{0.6}{1.7}{\second}), the rest
-during the scan, yielding a mean of \SI{2.8}{\second}. Without the arm, the
-fixed camera's \SI{77}{\degree} effective field of view forced five discrete
-base rotations (\SI{6.7}{\second} each at \SI{0.2}{\radian\per\second}, plus
-\SI{2.0}{\second} dwell), giving \SI{15.5}{\second}---a \textbf{5.5}$\times$
-slowdown. A \num{10000}-trial Monte Carlo simulation confirmed this ratio across
-all patient orientations.
+patients were detected near-instantly, the rest during the scan, yielding a
+mean of $\sim$\SI{3}{\second}. Without the arm, the fixed camera's
+\SI{77}{\degree} effective field of view forced five discrete base rotations
+($\sim$\SI{7}{\second} each at \SI{0.2}{\radian\per\second}, plus
+\SI{2.0}{\second} dwell), giving $\sim$\SI{15}{\second}---a
+$\sim$\textbf{5}$\times$ slowdown. A \num{10000}-trial Monte Carlo simulation
+confirmed this ratio across all patient orientations.
 
 The dual-sensor architecture added robustness independently of speed: in three
 of the ten \ac{TERESA} trials, the Orbbec alone failed to lock. These failures
@@ -71,10 +71,10 @@ to observe the scene from an elevated angle, detected partial torso keypoints
 in these cases and guided the base toward the body, giving the Orbbec a second
 observation window at a more favourable orientation. Without this redundancy,
 these trials would have resumed the coarse search cycle, adding
-\SI{14}{\second}~$\pm$~\SI{4}{\second}. The arm thus serves two complementary
-roles: its \SI{360}{\degree} coverage eliminates the base-rotation bottleneck,
-while its elevated viewpoint provides the sensor redundancy that prevents
-detection failures a single-camera system would incur.
+$\sim$\SI{14}{\second}. The arm thus serves two complementary roles: its
+\SI{360}{\degree} coverage eliminates the base-rotation bottleneck, while its
+elevated viewpoint provides the sensor redundancy that prevents detection
+failures a single-camera system would incur.
 
 \subsection{End-to-End Mission Performance}
 
