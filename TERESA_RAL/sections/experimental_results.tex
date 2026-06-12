@@ -100,18 +100,22 @@ The body posture optimizer described in Section~\ref{sec:body_reconf} proved
 essential for reaching distant anatomical targets on a full-scale body. We
 compared two configurations: a fixed nominal posture (height \SI{0}{\metre},
 pitch \SI{0}{\degree}, no base displacement) and the optimised posture produced
-by the grid search over body height $h$, pitch $\varphi$, and body-frame
-displacements $dx, dy$. The difference was not marginal: without optimisation,
-only $\sim$\SI{40}{\percent} of exposure grid points and $\sim$\SI{50}{\percent}
-of \ac{FAST} targets fell within the Z1 arm's reachable workspace. With the
-optimiser's \ac{IK}-driven retry loop escalating from 2D~($h, \varphi$) through
-3D~($dy, h, \varphi$) to 4D~($dx, dy, h, \varphi$) when the initial posture
-failed, completion rose to $\sim$\SI{85}{\percent} and
-\SI{100}{\percent} respectively. The residual \SI{15}{\percent} of exposure
-points were at the furthest extremities (head, feet), beyond the arm's maximum
-reach even with full base walking. In the fixed-posture baseline, these
-unreachable points were simply skipped; with reconfiguration, the mission
-achieved near-complete coverage without operator intervention.
+by the grid search over body height $h$, pitch $\varphi$, and longitudinal base
+displacement $dy$.  The cost function included a regularisation term
+$\lambda\,|dy|$ (with $\lambda = 0.50$) that penalised walking, encouraging
+the optimiser to prefer height and pitch adjustments---which are faster and
+consume less energy---over base displacement.  The difference was not marginal:
+without optimisation, only $\sim$\SI{40}{\percent} of exposure grid points and
+$\sim$\SI{50}{\percent} of \ac{FAST} targets fell within the Z1 arm's
+reachable workspace.  With the optimiser's \ac{IK}-driven retry loop
+escalating from 2D~($h, \varphi$) to 3D~($dy, h, \varphi$) when the initial
+posture failed, completion rose to $\sim$\SI{85}{\percent} and
+\SI{100}{\percent} respectively.  Points that timed out at both tiers were
+skipped---the arm cannot reach them even with full base repositioning.  The
+residual \SI{15}{\percent} of exposure points were at the furthest extremities
+(head, feet), beyond the arm's maximum reach.  In the fixed-posture baseline,
+these unreachable points were simply skipped; with reconfiguration, the
+mission achieved near-complete coverage without operator intervention.
 
 \subsection{Exposure Body Scanning and Interactive Review}
 

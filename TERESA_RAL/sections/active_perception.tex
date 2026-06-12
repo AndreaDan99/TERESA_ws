@@ -122,46 +122,54 @@ fixed offsets from the estimated torso centroid in $\mathcal{F}_0$.
 Once the anticipatory body scanner has localised the patient's anatomy and
 computed the target set $\mathcal{T}$ (both \ac{FAST} ultrasound targets and
 exposure grid points) in $\mathcal{F}_W$, the system pre-plans an optimal body
-posture for each target through a three-tier grid search with \ac{IK}-driven
-retry. The optimisation is shared by both
-the \ac{FAST} scanning and exposure scanning pipelines.
+posture for each target through a two-tier grid search with \ac{IK}-driven
+retry. The optimisation is shared by both the \ac{FAST} scanning and exposure
+scanning pipelines.
 
-The posture optimisation space spans four parameters: body height $h \in
+The posture optimisation space spans three parameters: body height $h \in
 [h_{\min}, h_{\max}]$ and pitch $\varphi \in [0, \varphi_{\max}]$, as defined
-in Section~\ref{sec:problem_formulation}, plus two body-frame base
-displacements $dx, dy \in \mathbb{R}$ expressed in the
-\texttt{patient\_body} frame (Section~\ref{sec:system_architecture}):
-$dy$ along the patient's head-to-foot axis and $dx$ across the body. The
-discrete search grids are $\mathcal{H} = \{h_1, \dots, h_{N_h}\}$ and
-$\mathcal{P} = \{\varphi_1, \dots, \varphi_{N_p}\}$, with $dx$ and $dy$
-sampled uniformly over their respective ranges. All candidates are scored
-against a workspace sweet spot
-$\mathbf{p}_{\mathrm{sweet}} \in \mathbb{R}^3$, the empirically determined
-centre of the Z1 arm's preferred manipulation region in $\mathcal{F}_0$. The
-three-tier escalation proceeds as follows:
+in Section~\ref{sec:problem_formulation}, plus a body-frame base displacement
+$dy \in \mathbb{R}$ along the patient's head-to-foot axis, expressed in the
+\texttt{patient\_body} frame (Section~\ref{sec:system_architecture}).
+The discrete search grids are $\mathcal{H} = \{h_1, \dots, h_{N_h}\}$ and
+$\mathcal{P} = \{\varphi_1, \dots, \varphi_{N_p}\}$, with $dy$ sampled
+uniformly at \SI{0.10}{\metre} intervals.  The cost function includes a
+regularisation term that penalises lateral displacement:
+\begin{equation}
+  J(h, \varphi, dy) =
+  \bigl\|\mathbf{T}_{\mathcal{F}_W}^{\mathcal{F}_0}(h, \varphi, dy)\,
+  \mathbf{p}^* - \mathbf{p}_{\mathrm{sweet}}\bigr\|
+  + \lambda\,|dy|,
+  \label{eq:posture_cost}
+\end{equation}
+where $\mathbf{p}_{\mathrm{sweet}} \in \mathbb{R}^3$ is the empirically
+determined centre of the Z1 arm's preferred manipulation region in
+$\mathcal{F}_0$, and $\lambda = 0.50$ weights lateral movement against
+reachability.  This penalty encourages the optimiser to prefer height and pitch
+adjustments over base walking---reducing energy consumption and producing
+smoother, more predictable motion---while still allowing longitudinal
+displacement when strictly necessary.  The two-tier escalation proceeds as
+follows:
 
 \begin{enumerate}
   \item \textbf{2D search}---$(h, \varphi)$ only: a coarse grid sweeps
-        $\mathcal{H} \times \mathcal{P}$ ($N_h N_p$ combinations). For each
-        candidate, the system transforms the target to $\mathcal{F}_0$ and
-        queries the \ac{IK} solver. If a posture yields a solution within a
-        \SI{2}{\second} timeout, it is selected.
+        $\mathcal{H} \times \mathcal{P}$ ($N_h N_p$ combinations, typically
+        12).  For each candidate, the system transforms the target to
+        $\mathcal{F}_0$ and queries the \ac{IK} solver.  If a posture yields
+        a solution within a \SI{2}{\second} timeout, it is selected.
   \item \textbf{3D escalation}---$(dy, h, \varphi)$: when the 2D search fails,
         the optimiser adds longitudinal base displacement $dy$ (Spot walks
         along the patient's body), expanding to $N_{dy} N_h N_p$
-        combinations. This is the primary fallback for targets near the
-        workspace boundary.
-  \item \textbf{4D escalation}---$(dx, dy, h, \varphi)$: if 3D also fails,
-        lateral displacement $dx$ is added, yielding $N_{dx} N_{dy} N_h N_p$
-        combinations. This covers wide targets such as lateral \ac{FAST}
-        quadrants and exposure points at the body periphery.
+        combinations.  If the \ac{IK} solver also times out at this tier, the
+        point is skipped---the arm cannot reach it even with full base
+        repositioning.
 \end{enumerate}
 
 The optimisation is computed once per target after $\mathcal{T}$ is available,
-imposing no real-time computational burden. Body reconfiguration is executed
+imposing no real-time computational burden.  Body reconfiguration is executed
 between targets: Spot assumes the pre-computed posture $(h_i^*, \varphi_i^*)$,
-settles, and the base navigator drives the $dx, dy$ displacement before the
-Z1 arm executes the \ac{IK} trajectory toward the transformed target.
+settles, and the base navigator drives the $dy$ displacement before the Z1 arm
+executes the \ac{IK} trajectory toward the transformed target.
 
 \subsubsection{Contact control}
 
