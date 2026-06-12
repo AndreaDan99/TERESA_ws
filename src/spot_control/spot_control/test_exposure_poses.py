@@ -467,6 +467,9 @@ class ExposurePoseTester(Node):
         self._regions = str(
             self.declare_parameter('regions', 'all')
             .get_parameter_value().string_value)
+        self._body_scale = float(
+            self.declare_parameter('body_scale', 0.0)   # 0 = auto (1.0 spot / 0.30 arm)
+            .get_parameter_value().double_value)
 
         # Spot body pose parameters
         self._spot_enabled = bool(
@@ -533,16 +536,16 @@ class ExposurePoseTester(Node):
 
         # Body scale: Spot mode uses full body with Y-walking, arm-only uses 30%
         if self._spot_enabled:
-            self._body_scale = 1.0     # full 1.70m virtual body, Y-walking handles reach
+            self._body_scale = self._body_scale if self._body_scale > 0 else 1.0
             self._offset_x = 0.35
-            self._torso_center_y = (0.60 + (-0.15)) / 2.0   # midpoint shoulder→hip = 0.225
-            self._offset_y = -self._torso_center_y            # center torso at Y=0
+            self._torso_center_y = (0.60 + (-0.15)) / 2.0 * self._body_scale
+            self._offset_y = -self._torso_center_y
             self._standoff = 0.30
             self.get_logger().info(
                 f'  Body scale: {self._body_scale:.2f}, offset_x: {self._offset_x:.2f}, '
                 f'offset_y: {self._offset_y:.3f} (torso@Y=0), standoff: {self._standoff:.2f} (Spot mode, full body Y-walking)')
         else:
-            self._body_scale = 0.30
+            self._body_scale = self._body_scale if self._body_scale > 0 else 0.30
             self._offset_x = 0.35   # corpo avanti ma raggiungibile
             self._offset_y = 0.0
             self._offset_z = 0.0
