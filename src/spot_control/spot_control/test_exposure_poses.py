@@ -490,6 +490,9 @@ class ExposurePoseTester(Node):
         self._nav_y_timeout = float(
             self.declare_parameter('nav_y_timeout', 10.0)
             .get_parameter_value().double_value)
+        self._spot_y_penalty = float(
+            self.declare_parameter('spot_y_penalty', 0.3)  # cost = dist + penalty * |spot_y|
+            .get_parameter_value().double_value)
         self._nav_y_speed = float(
             self.declare_parameter('nav_y_speed', 0.15)
             .get_parameter_value().double_value)
@@ -689,10 +692,12 @@ class ExposurePoseTester(Node):
         pitches = [0.0, 0.087, 0.17, 0.26, 0.35]  # 0°, 5°, 10°, 15°, 20° in rad
         sweet_spot = np.array([0.35, 0.0, 0.30])
         mx, mz = self._z1_mount_x, self._z1_mount_z
+        penalty = self._spot_y_penalty  # cost multiplier for Y displacement
 
         best_spot_y = 0.0
         best_h, best_p = 0.0, 0.0
         best_dist = float('inf')
+        best_cost = float('inf')
         best_cam_link00: np.ndarray | None = None
 
         for spot_y in spot_y_values:
@@ -713,7 +718,9 @@ class ExposurePoseTester(Node):
                     ])
 
                     dist = float(np.linalg.norm(cam_link00 - sweet_spot))
-                    if dist < best_dist:
+                    cost = dist + penalty * abs(spot_y)  # penalize Y displacement
+                    if cost < best_cost:
+                        best_cost = cost
                         best_dist = dist
                         best_spot_y = spot_y
                         best_h = h
