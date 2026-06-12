@@ -123,25 +123,38 @@ Once the anticipatory body scanner has localised the patient's anatomy and
 computed the target set $\mathcal{T}$ (both \ac{FAST} ultrasound targets and
 exposure grid points) in $\mathcal{F}_W$, the system pre-plans an optimal body
 posture for each target through a three-tier grid search with \ac{IK}-driven
-retry. The optimisation is shared by both the \ac{FAST} scanning and exposure
-scanning pipelines.
+retry. The optimisation is shared by both
+the \ac{FAST} scanning and exposure scanning pipelines.
+
+The posture optimisation space spans four parameters: body height $h \in
+[h_{\min}, h_{\max}]$ and pitch $\varphi \in [0, \varphi_{\max}]$, as defined
+in Section~\ref{sec:problem_formulation}, plus two body-frame base
+displacements $dx, dy \in \mathbb{R}$ expressed in the
+\texttt{patient\_body} frame (Section~\ref{sec:system_architecture}):
+$dy$ along the patient's head-to-foot axis and $dx$ across the body. The
+discrete search grids are $\mathcal{H} = \{h_1, \dots, h_{N_h}\}$ and
+$\mathcal{P} = \{\varphi_1, \dots, \varphi_{N_p}\}$, with $dx$ and $dy$
+sampled uniformly over their respective ranges. All candidates are scored
+against a workspace sweet spot
+$\mathbf{p}_{\mathrm{sweet}} \in \mathbb{R}^3$, the empirically determined
+centre of the Z1 arm's preferred manipulation region in $\mathcal{F}_0$. The
+three-tier escalation proceeds as follows:
 
 \begin{enumerate}
-  \item \textbf{2D search}---height $h$ and pitch $\varphi$: a coarse grid
-        sweeps $\mathcal{H} \times \mathcal{P}$ (12 combinations). For each
-        candidate, the system scores the transformed target position against a
-        sweet spot $\mathbf{p}_{\mathrm{sweet}}$ in the Z1 workspace centre.
-        If a posture yields an \ac{IK} solution within a \SI{2}{\second}
-        timeout, it is selected.
-  \item \textbf{3D escalation}---body-frame $y$ displacement: when the 2D
-        search fails, the optimiser adds a longitudinal base displacement $dy$
-        (Spot walks along the patient's body), expanding the grid to
-        $\sim$180 combinations. This is the primary fallback for targets near
-        the workspace boundary.
-  \item \textbf{4D escalation}---full body-frame $xy$ displacement: if 3D
-        also fails, lateral displacement $dx$ is added, yielding
-        $\sim$300 combinations. This covers wide targets such as lateral
-        \ac{FAST} quadrants and exposure points at the body periphery.
+  \item \textbf{2D search}---$(h, \varphi)$ only: a coarse grid sweeps
+        $\mathcal{H} \times \mathcal{P}$ ($N_h N_p$ combinations). For each
+        candidate, the system transforms the target to $\mathcal{F}_0$ and
+        queries the \ac{IK} solver. If a posture yields a solution within a
+        \SI{2}{\second} timeout, it is selected.
+  \item \textbf{3D escalation}---$(dy, h, \varphi)$: when the 2D search fails,
+        the optimiser adds longitudinal base displacement $dy$ (Spot walks
+        along the patient's body), expanding to $N_{dy} N_h N_p$
+        combinations. This is the primary fallback for targets near the
+        workspace boundary.
+  \item \textbf{4D escalation}---$(dx, dy, h, \varphi)$: if 3D also fails,
+        lateral displacement $dx$ is added, yielding $N_{dx} N_{dy} N_h N_p$
+        combinations. This covers wide targets such as lateral \ac{FAST}
+        quadrants and exposure points at the body periphery.
 \end{enumerate}
 
 The optimisation is computed once per target after $\mathcal{T}$ is available,
