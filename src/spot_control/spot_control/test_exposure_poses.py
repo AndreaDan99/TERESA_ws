@@ -988,7 +988,7 @@ class ExposurePoseTester(Node):
                         self._pub_cmd_vel.publish(Twist())
                         continue  # skip to next spin iteration
 
-                    dy = current_y - self._target_y   # error: positive = need to move LEFT (-Y body)
+                    dy = self._target_y - current_y   # standard error: + = need to move +Y (left)
                     now = self.get_clock().now()
 
                     if abs(dy) < self._nav_y_tolerance:
@@ -1006,8 +1006,9 @@ class ExposurePoseTester(Node):
                             f'target={self._target_y:.3f}, actual={current_y:.3f}')
                     else:
                         twist = Twist()
-                        speed = min(abs(dy) * 0.8, self._nav_y_speed)   # P-controller: slow down near target
-                        twist.linear.y = math.copysign(max(speed, 0.05), dy)  # min 0.05 m/s to overcome stiction
+                        speed = min(abs(dy) * 0.8, self._nav_y_speed)
+                        # Spot cmd_vel.linear.y convention is inverted (positive = right)
+                        twist.linear.y = -math.copysign(max(speed, 0.05), dy)
                         twist.angular.z = 0.0
                         self._pub_cmd_vel.publish(twist)
 
