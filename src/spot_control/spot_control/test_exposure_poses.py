@@ -491,7 +491,7 @@ class ExposurePoseTester(Node):
             self.declare_parameter('nav_y_timeout', 10.0)
             .get_parameter_value().double_value)
         self._nav_y_speed = float(
-            self.declare_parameter('nav_y_speed', 0.4)
+            self.declare_parameter('nav_y_speed', 0.15)
             .get_parameter_value().double_value)
 
         # Publishers
@@ -1036,7 +1036,7 @@ class ExposurePoseTester(Node):
                             f'target={self._target_y:.3f}, actual={current_y:.3f}')
                     else:
                         twist = Twist()
-                        speed = min(abs(dy) * 0.8, self._nav_y_speed)
+                        speed = min(abs(dy) * 0.4, self._nav_y_speed)
                         twist.linear.y = -math.copysign(max(speed, 0.05), dy)
                         twist.angular.z = 0.0
                         self._pub_cmd_vel.publish(twist)
