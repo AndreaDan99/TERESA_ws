@@ -62,13 +62,19 @@ slowdown. A \num{10000}-trial Monte Carlo simulation confirmed this ratio across
 all patient orientations.
 
 The dual-sensor architecture added robustness independently of speed: in three
-of the ten \ac{TERESA} trials, the Orbbec alone failed to lock, but the
-arm-mounted RealSense detected partial keypoints and guided the base toward the
-body, preventing a search-cycle restart that would have added
+of the ten \ac{TERESA} trials, the Orbbec alone failed to lock. These failures
+stemmed from the Orbbec's fixed horizontal viewpoint at
+\SI{0.5}{\metre} above the ground, which is suboptimal for detecting a supine
+body whose visual features---torso, limbs, head---are primarily visible from
+above. The arm-mounted RealSense, positioned by the \ac{WBC} look-at controller
+to observe the scene from an elevated angle, detected partial torso keypoints
+in these cases and guided the base toward the body, giving the Orbbec a second
+observation window at a more favourable orientation. Without this redundancy,
+these trials would have resumed the coarse search cycle, adding
 \SI{14}{\second}~$\pm$~\SI{4}{\second}. The arm thus serves two complementary
 roles: its \SI{360}{\degree} coverage eliminates the base-rotation bottleneck,
-while its active camera prevents detection failures that a single-sensor system
-would incur.
+while its elevated viewpoint provides the sensor redundancy that prevents
+detection failures a single-camera system would incur.
 
 \subsection{End-to-End Mission Performance}
 
