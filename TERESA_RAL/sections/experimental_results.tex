@@ -47,8 +47,8 @@ localisation confirmation.
 
 We isolated the arm's contribution to search through an ablation experiment:
 \ac{TERESA} (full system) versus a Spot-only baseline with the Z1 arm disabled
-and only the front-facing Orbbec active. Fifty trials were conducted at five
-body yaw angles ($0\degree$--$180\degree$, five repetitions each), measuring
+and only the front-facing Orbbec active. Twenty trials were conducted at five
+body yaw angles ($0\degree$--$180\degree$, two repetitions each), measuring
 time to Orbbec posture confidence $\geq$ \num{0.70}.
 
 With the arm's seven scanning poses providing full \SI{360}{\degree} coverage
@@ -61,8 +61,8 @@ base rotations (\SI{6.7}{\second} each at \SI{0.2}{\radian\per\second}, plus
 slowdown. A \num{10000}-trial Monte Carlo simulation confirmed this ratio across
 all patient orientations.
 
-The dual-sensor architecture added robustness independently of speed: in
-\SI{28}{\percent} of trials, the Orbbec alone failed to lock, but the
+The dual-sensor architecture added robustness independently of speed: in three
+of the ten \ac{TERESA} trials, the Orbbec alone failed to lock, but the
 arm-mounted RealSense detected partial keypoints and guided the base toward the
 body, preventing a search-cycle restart that would have added
 \SI{14}{\second}~$\pm$~\SI{4}{\second}. The arm thus serves two complementary
