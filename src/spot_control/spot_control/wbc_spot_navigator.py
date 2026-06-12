@@ -115,10 +115,17 @@ class WBCSpotNavigator(Node):
         self._latest_goal = msg
 
     def _cb_lateral_goal(self, msg: PoseStamped) -> None:
-        """Receive lateral navigation goal from body_pose_optimizer."""
-        # Transform to odom if needed
+        """Receive lateral navigation goal from body_pose_optimizer.
+
+        Sets both the lateral Y target (for fine Y-correction via P-controller)
+        and the forward goal (for X positioning via rotate→drive). The forward
+        nav handles dx, the lateral nav handles dy — both compose one Twist.
+        """
+        # Extract (x, y) in odom frame
+        goal_x, goal_y = None, None
         if msg.header.frame_id == self._p.odom_frame:
-            self._lateral_target_y = msg.pose.position.y
+            goal_x = msg.pose.position.x
+            goal_y = msg.pose.position.y
         else:
             pt = PointStamped()
             pt.header.frame_id = msg.header.frame_id
@@ -130,13 +137,28 @@ class WBCSpotNavigator(Node):
                 t = self._tf.transform(
                     pt, self._p.odom_frame,
                     timeout=rclpy.duration.Duration(seconds=0.2))
-                self._lateral_target_y = t.point.y
+                goal_x = t.point.x
+                goal_y = t.point.y
             except TransformException:
                 return
-        self._lateral_active = True
-        self._lateral_start_time = self.get_clock().now()
+
+        # Set lateral Y target for P-controller
+        if goal_y is not None:
+            self._lateral_target_y = goal_y
+            self._lateral_active = True
+            self._lateral_start_time = self.get_clock().now()
+
+        # Set forward goal for X positioning (handles dx_body)
+        if goal_x is not None:
+            self._latest_goal = PoseStamped()
+            self._latest_goal.header.frame_id = self._p.odom_frame
+            self._latest_goal.pose.position.x = goal_x
+            self._latest_goal.pose.position.y = goal_y or 0.0
+            self._latest_goal.pose.position.z = 0.0
+            self._state = 'IDLE'  # restart forward nav
+
         self.get_logger().info(
-            f'Lateral goal: target_y={self._lateral_target_y:.3f}')
+            f'Lateral goal: x={goal_x:.3f}, y={goal_y:.3f}')
 
     def _cb_spot_control(self, msg: Bool) -> None:
         self._spot_control = msg.data
