@@ -9,8 +9,10 @@ import math
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import PoseArray, PoseStamped, Vector3Stamped
+from geometry_msgs.msg import PoseArray, PoseStamped, TransformStamped, Vector3Stamped
+from rclpy.duration import Duration
 from std_msgs.msg import String, Float32
+from tf2_ros import Buffer, TransformBroadcaster, TransformListener
 from visualization_msgs.msg import Marker
 
 from spot_perception.sml_pose_indices import *
@@ -61,6 +63,11 @@ class LayingHumanDetector(Node):
         self.body_center_pub = self.create_publisher(
             PoseStamped, '/laying_human/body_center', 10)
 
+        # ── TF infrastructure ──────────────────────────────────────────
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
+        self._tf_broadcaster = TransformBroadcaster(self)
+
         # ============================================================
         # STATE
         # ============================================================
@@ -69,6 +76,9 @@ class LayingHumanDetector(Node):
         self.latest_skeleton    = None
         self.goal_sent          = False
         self.last_detection_time = None
+        self._body_frame_trans = None
+        self._body_frame_frame_id = None
+        self._body_axis = None
 
         self.reset_timer = self.create_timer(1.0, self.check_detection_timeout)
 
@@ -135,6 +145,8 @@ class LayingHumanDetector(Node):
             self.goal_sent = True
         elif self.test_mode:
             self._publish_lateral_approach(msg)
+
+        self._broadcast_body_tf()
 
     # ============================================================
     # GEOMETRIA LATERALE (identica a teresa_mission)
@@ -227,6 +239,9 @@ class LayingHumanDetector(Node):
         qz  = math.sin(yaw / 2.0)
         qw  = math.cos(yaw / 2.0)
 
+        self._body_frame_trans = approach_pos.copy()
+        self._body_frame_frame_id = msg.header.frame_id
+
         # --- Pubblica PoseStamped ---
         goal = PoseStamped()
         goal.header.stamp    = self.get_clock().now().to_msg()
@@ -289,6 +304,67 @@ class LayingHumanDetector(Node):
         v.vector.y = float(axis[1])
         v.vector.z = float(axis[2])
         self.body_axis_pub.publish(v)
+
+        self._body_axis = axis.copy()
+
+    def _broadcast_body_tf(self):
+        if self._body_frame_trans is None or self._body_frame_frame_id is None \
+                or self._body_axis is None:
+            return
+
+        body_vec = self._body_axis
+        body_len = np.linalg.norm(body_vec)
+        if body_len < 0.001 or np.any(np.isnan(body_vec)):
+            self.get_logger().warn(
+                'Body axis invalid for TF broadcast',
+                throttle_duration_sec=2.0)
+            return
+
+        body_y = body_vec / body_len
+        body_x = np.cross(body_y, np.array([0.0, 0.0, 1.0]))
+        if np.linalg.norm(body_x) < 0.001:
+            body_x = np.array([1.0, 0.0, 0.0])
+        body_x = body_x / np.linalg.norm(body_x)
+        body_z = np.cross(body_x, body_y)
+        body_z = body_z / np.linalg.norm(body_z)
+        R = np.column_stack([body_x, body_y, body_z])
+
+        qw = np.sqrt(max(0.0, 1.0 + R[0, 0] + R[1, 1] + R[2, 2])) / 2.0
+        if qw < 1e-9:
+            qx = qy = qz = 0.0
+        else:
+            qx = (R[2, 1] - R[1, 2]) / (4.0 * qw)
+            qy = (R[0, 2] - R[2, 0]) / (4.0 * qw)
+            qz = (R[1, 0] - R[0, 1]) / (4.0 * qw)
+
+        try:
+            pose_cam = PoseStamped()
+            pose_cam.header.stamp = self.get_clock().now().to_msg()
+            pose_cam.header.frame_id = self._body_frame_frame_id
+            pose_cam.pose.position.x = float(self._body_frame_trans[0])
+            pose_cam.pose.position.y = float(self._body_frame_trans[1])
+            pose_cam.pose.position.z = float(self._body_frame_trans[2])
+            pose_cam.pose.orientation.w = 1.0
+            transformed = self._tf_buffer.transform(
+                pose_cam, 'my_spot/odom', timeout=Duration(seconds=1.0))
+        except Exception as e:
+            self.get_logger().warn(
+                f'Cannot transform body frame to odom: {e}',
+                throttle_duration_sec=2.0)
+            return
+
+        tf = TransformStamped()
+        tf.header.stamp = self.get_clock().now().to_msg()
+        tf.header.frame_id = 'my_spot/odom'
+        tf.child_frame_id = 'patient_body'
+        tf.transform.translation.x = transformed.pose.position.x
+        tf.transform.translation.y = transformed.pose.position.y
+        tf.transform.translation.z = transformed.pose.position.z
+        tf.transform.rotation.x = qx
+        tf.transform.rotation.y = qy
+        tf.transform.rotation.z = qz
+        tf.transform.rotation.w = qw
+        self._tf_broadcaster.sendTransform(tf)
 
     def _publish_approach_marker(self, pos: np.ndarray, header):
         m = Marker()

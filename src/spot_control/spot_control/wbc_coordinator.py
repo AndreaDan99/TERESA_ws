@@ -285,10 +285,7 @@ class WBCCoordinatorNode(Node):
         self._step_confirmed         = False
         self._posture                = 'UNKNOWN'
         self._confidence             = 0.0
-        self._approach_point_odom: PoseStamped | None = None  # odom-frame (world-fixed)
-        self._body_center_odom: PoseStamped | None = None    # torso centroid in odom
         self._last_lying_time        = None
-        self._desired_yaw: float | None = None   # target yaw Spot [rad, odom frame]
         self._current_body_height: float = 0.0   # last applied body_pose height
         self._search_start: rclpy.time.Time | None = None     # SEARCHING entry time
         self._pre_approach_start: rclpy.time.Time | None = None  # PRE_APPROACH entry time
@@ -350,14 +347,11 @@ class WBCCoordinatorNode(Node):
         # ── Sub / Pub ─────────────────────────────────────────────────
         self.create_subscription(String,       '/human_pose/posture',        self._cb_posture,    10)
         self.create_subscription(Float32,      p('posture_confidence_topic'), self._cb_conf,       10)
-        self.create_subscription(PoseStamped,  p('approach_point_topic'),    self._cb_approach,   10)
-        self.create_subscription(PoseStamped,  p('body_center_topic'),       self._cb_body_center, 10)
         self.create_subscription(Bool,         p('ik_done_topic'),           self._cb_ik_done,    10)
         self.create_subscription(String,       p('z1_fsm_state_topic'),      self._cb_z1_state,   10)
         self.create_subscription(Bool,         '/z1/fast_ready',             self._cb_fast_ready, 10)
         self.create_subscription(String,      '/torso_tracker_state',      self._cb_torso_state, 10)
         self.create_subscription(PoseStamped,  '/torso_target_ee',          self._cb_torso_pos,   10)
-        self.create_subscription(Vector3Stamped, '/laying_human/body_axis',  self._cb_body_axis,  10)
         self.create_subscription(Bool,           '/wbc/restart',             self._cb_restart,    10)
         self.create_subscription(Bool,           '/wbc/tf_ready',            self._cb_tf_ready,    10)
         self.create_subscription(PoseArray,      '/z1/fast_points',          self._cb_fast_points, 10)
@@ -410,66 +404,22 @@ class WBCCoordinatorNode(Node):
             self._confidence = float(msg.data)
             self._quality.update_quality(self._confidence, self.get_clock().now())
 
-    def _cb_body_axis(self, msg: Vector3Stamped) -> None:
-        """Compute desired Spot yaw so that X_body ⊥ patient head-feet axis."""
-        with self._lock:
-            tf = self._tf_lookup(self._odom_frame, msg.header.frame_id)
-            if tf is None:
-                return
+    def _get_body_yaw(self) -> float | None:
+        """Return body yaw from patient_body TF, or None if unavailable."""
+        try:
+            t = self._tf.lookup_transform('my_spot/odom', 'patient_body', rclpy.time.Time())
+            q = t.transform.rotation
+            return math.atan2(2*(q.w*q.z + q.x*q.y), 1 - 2*(q.y*q.y + q.z*q.z))
+        except Exception:
+            return None
 
-            R = quat_to_rot(tf.transform.rotation)
-            axis_cam = np.array([msg.vector.x, msg.vector.y, msg.vector.z])
-            axis_odom = R.T @ axis_cam   # R is odom→camera, we need camera→odom
-            axis_odom[2] = 0.0  # project onto XY plane (Spot is on flat ground)
-            n = float(np.linalg.norm(axis_odom[:2]))
-            if n < 0.1:
-                return
-
-            # body_axis points head → feet in odom XY.
-            # Spot X must be ⊥ to body_axis → two candidates: ±90°
-            θ_body = math.atan2(float(axis_odom[1]), float(axis_odom[0]))
-            opt1 = normalize_angle(θ_body + math.pi / 2)
-            opt2 = normalize_angle(θ_body - math.pi / 2)
-
-            # Pick the option closest to current Spot yaw (minimum rotation).
-            body_in_odom = self._tf_lookup(self._odom_frame, self._body_frame)
-            if body_in_odom is None:
-                return
-
-            if not self._tf_ready:
-                self._tf_ready = True
-                self.get_logger().info(
-                    f'TF disponibile: {self._odom_frame} → {self._body_frame} OK. '
-                    f'SpotCore connesso via DDS.')
-
-            θ_current = _yaw_from_quat(body_in_odom.transform.rotation)
-            err1 = abs(normalize_angle(opt1 - θ_current))
-            err2 = abs(normalize_angle(opt2 - θ_current))
-            self._desired_yaw = opt1 if err1 <= err2 else opt2
-
-            msg_out = Float32()
-            msg_out.data = float(self._desired_yaw)
-            self._pub_yaw.publish(msg_out)
-
-    def _cb_approach(self, msg: PoseStamped) -> None:
-        goal_odom = self._tf_transform(msg, self._odom_frame)
-        if goal_odom is None:
-            return
-        with self._lock:
-            self._approach_point_odom = goal_odom
-            if self._state != CoordState.SEARCHING:
-                z = np.array([
-                    goal_odom.pose.position.x,
-                    goal_odom.pose.position.y,
-                    goal_odom.pose.position.z,
-                ])
-                self._quality.try_init(z, self.get_clock().now())
-
-    def _cb_body_center(self, msg: PoseStamped) -> None:
-        center_odom = self._tf_transform(msg, self._odom_frame)
-        if center_odom is not None:
-            with self._lock:
-                self._body_center_odom = center_odom
+    def _get_approach_odom(self) -> np.ndarray | None:
+        """Return approach point in odom from patient_body TF."""
+        try:
+            t = self._tf.lookup_transform('my_spot/odom', 'patient_body', rclpy.time.Time())
+            return np.array([t.transform.translation.x, t.transform.translation.y, t.transform.translation.z])
+        except Exception:
+            return None
 
     def _cb_ik_done(self, msg: Bool) -> None:
         with self._lock:
@@ -674,7 +624,7 @@ class WBCCoordinatorNode(Node):
                     self._set_state(CoordState.SCANNING)
 
     def _tick_approaching(self) -> None:
-        if self._approach_point_odom is None:
+        if self._get_approach_odom() is None:
             return
 
         # Timeout check: abort to IDLE if Spot can't reach goal
@@ -724,9 +674,8 @@ class WBCCoordinatorNode(Node):
         if self._search_lock_buffer is not None:
             lock_ok = (self._posture == 'LYING'
                        and self._confidence >= self._search_lock_confidence
-                       and self._approach_point_odom is not None)
+                       and (z := self._get_approach_odom()) is not None)
             if lock_ok:
-                z = self._approach_point_odom_pos()
                 self._search_lock_buffer.append(z)
                 if len(self._search_lock_buffer) >= self._search_lock_samples:
                     target = np.mean(self._search_lock_buffer, axis=0)
@@ -745,8 +694,7 @@ class WBCCoordinatorNode(Node):
         # FASE 2 — Check full lock da Orbbec
         if self._posture == 'LYING' \
                 and self._confidence >= self._search_lock_confidence \
-                and self._approach_point_odom is not None:
-            z = self._approach_point_odom_pos()
+                and (z := self._get_approach_odom()) is not None:
             self._search_lock_buffer = [z]
             self.get_logger().info(f'Full lock (Orbbec): conf={self._confidence:.2f}')
             self._set_wbc_enabled(False)
@@ -816,8 +764,7 @@ class WBCCoordinatorNode(Node):
         # ── Fase B — Spot è fermo e allineato, Orbbec cerca LYING ──
         if self._posture == 'LYING' \
                 and self._confidence >= self._search_lock_confidence \
-                and self._approach_point_odom is not None:
-            z = self._approach_point_odom_pos()
+                and (z := self._get_approach_odom()) is not None:
             self._search_lock_buffer = [z]
             self.get_logger().info('Semi-lock → Full lock (Orbbec)')
             self._set_wbc_enabled(False)
@@ -854,11 +801,10 @@ class WBCCoordinatorNode(Node):
 
         if self._posture == 'LYING' \
                 and self._confidence >= self._search_lock_confidence \
-                and self._approach_point_odom is not None:
+                and (z := self._get_approach_odom()) is not None:
             self._lock_lost_ticks = 0
             if self._search_lock_buffer is None:
                 self._search_lock_buffer = []
-            z = self._approach_point_odom_pos()
             if len(self._search_lock_buffer) < self._search_lock_samples:
                 self._search_lock_buffer.append(z)
             if len(self._search_lock_buffer) >= self._search_lock_samples \
@@ -1113,8 +1059,8 @@ class WBCCoordinatorNode(Node):
         if self._confidence > self._refine_best_conf:
             self._refine_best_conf = self._confidence
             self._refine_best_pitch = pitches[self._refine_pitch_idx]
-            if self._approach_point_odom is not None:
-                self._refine_best_approach = self._approach_point_odom_pos()
+            if (approach := self._get_approach_odom()) is not None:
+                self._refine_best_approach = approach
 
         # Dwell scaduto → prossimo pitch
         elapsed = now_ns - self._refine_dwell_start
@@ -1130,8 +1076,8 @@ class WBCCoordinatorNode(Node):
         self._refining = False
         if self._refine_best_approach is not None:
             z = self._refine_best_approach.copy()
-        elif self._approach_point_odom is not None:
-            z = self._approach_point_odom_pos()
+        elif (z := self._get_approach_odom()) is not None:
+            pass
         else:
             self.get_logger().error(
                 'Refinement lock: no approach_point available — aborting lock')
@@ -1160,9 +1106,9 @@ class WBCCoordinatorNode(Node):
             return None
         return _yaw_from_quat(body_tf.transform.rotation)
 
-    def _approach_point_odom_pos(self) -> np.ndarray:
-        p = self._approach_point_odom.pose.position
-        return np.array([p.x, p.y, p.z])
+    def _approach_point_odom_pos(self) -> np.ndarray | None:
+        """Return approach point from patient_body TF (legacy wrapper)."""
+        return self._get_approach_odom()
 
     def _transform_to_body_frame(self, pose: PoseStamped) -> np.ndarray | None:
         """Trasforma una posa da world/link00 al body frame via TF."""
@@ -1183,14 +1129,9 @@ class WBCCoordinatorNode(Node):
             return None
 
     def _tick_pre_approach_legacy(self) -> None:
-        # Publish goal for WBC QP LOOKAT: prefer body_center (torso centroid),
-        # fallback to filtered_goal + Z offset for supine torso height.
-        if self._body_center_odom is not None:
-            self._pub_goal.publish(self._body_center_odom)
-        else:
-            goal = self._filtered_goal()
-            goal.pose.position.z += 0.40  # supine torso ~40cm above ground
-            self._pub_goal.publish(goal)
+        goal = self._filtered_goal()
+        goal.pose.position.z += 0.40  # supine torso ~40cm above ground
+        self._pub_goal.publish(goal)
 
         # Wait for at least 1 RealSense ESTIMATING or LOCKED tick in last 5
         detected_now = self._torso_tracker_state in ('ESTIMATING', 'LOCKED')
@@ -1360,10 +1301,19 @@ class WBCCoordinatorNode(Node):
                           if not np.any(np.isnan(self._nlf_prior[j])))
         return valid_torso >= 4
 
-    def _torso_center_from_prior(self) -> np.ndarray:
-        pts = [self._nlf_prior[j] for j in [SPINE1, SPINE2, SPINE3, PELVIS]
-               if not np.any(np.isnan(self._nlf_prior[j]))]
-        return np.mean(pts, axis=0) if pts else np.zeros(3)
+    def _torso_center_from_prior(self) -> np.ndarray | None:
+        # Try NLF spine keypoints first
+        if self._nlf_prior is not None:
+            spine_indices = [SPINE1, SPINE2, SPINE3, PELVIS]
+            points = []
+            for idx in spine_indices:
+                kp = self._nlf_prior[idx]
+                if not any(np.isnan(kp)):
+                    points.append(kp)
+            if points:
+                return np.mean(points, axis=0)
+        # FALLBACK: use patient_body TF (works even with YOLO NaN)
+        return self._get_approach_odom()
 
     def _check_nlf_delta(self, torso_yolo: np.ndarray) -> tuple:
         """Compare YOLO torso position against NLF prior. Returns (label, delta_m)."""
@@ -1413,13 +1363,14 @@ class WBCCoordinatorNode(Node):
             return None
 
     def _distance_to_patient(self) -> float | None:
-        if self._approach_point_odom is None:
+        approach = self._get_approach_odom()
+        if approach is None:
             return None
         body_in_odom = self._tf_lookup(self._odom_frame, self._body_frame)
         if body_in_odom is None:
             return None
-        dx = body_in_odom.transform.translation.x - self._approach_point_odom.pose.position.x
-        dy = body_in_odom.transform.translation.y - self._approach_point_odom.pose.position.y
+        dx = body_in_odom.transform.translation.x - approach[0]
+        dy = body_in_odom.transform.translation.y - approach[1]
         return math.hypot(dx, dy)
 
     def _filtered_goal(self) -> PoseStamped:
@@ -1457,8 +1408,10 @@ class WBCCoordinatorNode(Node):
             msg.pose.position.x = float(p[0])
             msg.pose.position.y = float(p[1])
             msg.pose.position.z = float(p[2])
-        elif self._approach_point_odom is not None:
-            msg.pose.position = self._approach_point_odom.pose.position
+        elif (approach := self._get_approach_odom()) is not None:
+            msg.pose.position.x = approach[0]
+            msg.pose.position.y = approach[1]
+            msg.pose.position.z = approach[2]
         else:
             return PoseStamped()  # should not happen
         return msg

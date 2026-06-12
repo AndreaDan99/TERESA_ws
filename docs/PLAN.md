@@ -2,6 +2,26 @@
 
 ---
 
+## ✅ Body Pose Optimizer + Y-Walking + Patient Body TF — IMPLEMENTED (12 June 2026)
+
+### Fatto
+- ✅ `body_pose_optimizer.py`: nuovo nodo (~600 righe). 2D/3D/4D grid search + IK-driven retry loop
+- ✅ `test_exposure_poses.py`: Y-walking 3D (spot_y×h×p), corpo virtuale 1.70m in odom
+- ✅ `laying_human_detector.py`: pubblica TF `patient_body` (body frame da keypoint)
+- ✅ `wbc_coordinator.py`: refactoring (-340 righe), integrato optimizer, TF lookup per yaw/approccio
+- ✅ IK-driven retry: 2D→3D→4D basato su `/ik_done` timeout, non su soglia distanza
+
+### File modificati
+| File | +/- |
+|------|-----|
+| `body_pose_optimizer.py` | +600 |
+| `wbc_coordinator.py` | -340 |
+| `laying_human_detector.py` | +77 |
+| `test_exposure_poses.py` | +190 |
+| `setup.py` | +1 |
+
+---
+
 ## ✅ NLF Burst Streaming + Confidence Gate — IMPLEMENTED (9 June 2026)
 
 ### Fatto

@@ -12,12 +12,11 @@ from enum import IntEnum
 
 import numpy as np
 import rclpy
-from rclpy.duration import Duration
 from rclpy.node import Node
 
-from geometry_msgs.msg import Pose, PoseArray, PoseStamped, TransformStamped, Vector3Stamped
+from geometry_msgs.msg import Pose, PoseArray, PoseStamped, Vector3Stamped
 from std_msgs.msg import Bool
-from tf2_ros import Buffer, TransformBroadcaster, TransformException, TransformListener
+from tf2_ros import Buffer, TransformException, TransformListener
 import tf2_geometry_msgs  # noqa: F401 — registers PoseStamped transform support
 from tf_transformations import euler_from_quaternion
 
@@ -115,12 +114,10 @@ class BodyPoseOptimizer(Node):
         # ── TF infrastructure ─────────────────────────────────────────────────
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
-        self._tf_broadcaster = TransformBroadcaster(self)
 
         # ── State ─────────────────────────────────────────────────────────────
-        self._body_frame_ready: bool = False
-        self._body_frame_trans: list | None = None  # [x, y, z] in my_spot/odom
-        self._body_frame_rot: np.ndarray | None = None  # 3×3 rotation matrix
+        self._has_approach_point: bool = False
+        self._has_body_axis: bool = False
         self._current_body_height: float = 0.0  # last applied body_pose height
         self._pending_requests: list = []
         self._results: dict = {}
@@ -145,43 +142,10 @@ class BodyPoseOptimizer(Node):
     # ═══════════════════════════════════════════════════════════════════════════
 
     def _cb_approach_point(self, msg: PoseStamped) -> None:
-        """Store the latest approach point on the laying human, converted to odom."""
-        try:
-            transformed = self._tf_buffer.transform(
-                msg, 'my_spot/odom', timeout=Duration(seconds=1.0))
-        except TransformException as e:
-            self.get_logger().warn(
-                f'Cannot transform approach_point to odom: {e}')
-            return
-        self._body_frame_trans = [
-            transformed.pose.position.x,
-            transformed.pose.position.y,
-            transformed.pose.position.z,
-        ]
-        self._try_broadcast_body_tf()
+        self._has_approach_point = True
 
     def _cb_body_axis(self, msg: Vector3Stamped) -> None:
-        """Compute body-frame orientation from body-axis direction vector."""
-        v = np.array([msg.vector.x, msg.vector.y, msg.vector.z])
-        norm = np.linalg.norm(v)
-        if norm < 0.001 or np.any(np.isnan(v)):
-            self._body_frame_ready = False
-            self.get_logger().warn(
-                f'Body axis invalid (norm={norm:.4f}), clearing body frame')
-            return
-
-        body_y = v / norm
-        world_z = np.array([0.0, 0.0, 1.0])
-        body_x = np.cross(body_y, world_z)
-        if np.linalg.norm(body_x) < 0.001:
-            body_x = np.array([1.0, 0.0, 0.0])
-        body_x = body_x / np.linalg.norm(body_x)
-        body_z = np.cross(body_x, body_y)
-        body_z = body_z / np.linalg.norm(body_z)
-
-        self._body_frame_rot = np.column_stack([body_x, body_y, body_z])
-        self._body_frame_ready = True
-        self._try_broadcast_body_tf()
+        self._has_body_axis = True
 
     def _cb_ik_done(self, msg: Bool) -> None:
         self._ik_done_received = msg.data
@@ -194,33 +158,24 @@ class BodyPoseOptimizer(Node):
                                           pose.position.z]))
         self._process_request(points_odom)
 
-    def _try_broadcast_body_tf(self) -> None:
-        """Broadcast patient_body TF when both translation and rotation ready."""
-        if not self._body_frame_ready or self._body_frame_trans is None:
-            return
-
-        R = self._body_frame_rot
-        qw = np.sqrt(max(0.0, 1.0 + R[0, 0] + R[1, 1] + R[2, 2])) / 2.0
-        if qw < 1e-9:
-            qx = qy = qz = 0.0
-        else:
-            qx = (R[2, 1] - R[1, 2]) / (4.0 * qw)
-            qy = (R[0, 2] - R[2, 0]) / (4.0 * qw)
-            qz = (R[1, 0] - R[0, 1]) / (4.0 * qw)
-
-        tf = TransformStamped()
-        tf.header.stamp = self.get_clock().now().to_msg()
-        tf.header.frame_id = 'my_spot/odom'
-        tf.child_frame_id = 'patient_body'
-        tf.transform.translation.x = self._body_frame_trans[0]
-        tf.transform.translation.y = self._body_frame_trans[1]
-        tf.transform.translation.z = self._body_frame_trans[2]
-        tf.transform.rotation.x = qx
-        tf.transform.rotation.y = qy
-        tf.transform.rotation.z = qz
-        tf.transform.rotation.w = qw
-
-        self._tf_broadcaster.sendTransform(tf)
+    def _get_body_rotation(self) -> np.ndarray | None:
+        """Return 3×3 rotation matrix from my_spot/odom→patient_body TF."""
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                'my_spot/odom', 'patient_body', rclpy.time.Time())
+        except TransformException:
+            return None
+        qx, qy, qz, qw = (
+            tf.transform.rotation.x,
+            tf.transform.rotation.y,
+            tf.transform.rotation.z,
+            tf.transform.rotation.w,
+        )
+        return np.array([
+            [1 - 2*qy*qy - 2*qz*qz, 2*qx*qy - 2*qz*qw, 2*qx*qz + 2*qy*qw],
+            [2*qx*qy + 2*qz*qw, 1 - 2*qx*qx - 2*qz*qz, 2*qy*qz - 2*qx*qw],
+            [2*qx*qz - 2*qy*qw, 2*qy*qz + 2*qx*qw, 1 - 2*qx*qx - 2*qy*qy],
+        ])
 
     # ═══════════════════════════════════════════════════════════════════════════
     #  IK-driven retry loop
@@ -333,7 +288,11 @@ class BodyPoseOptimizer(Node):
                               body_tf.transform.translation.z])
 
         if abs(dx) > 1e-6 or abs(dy) > 1e-6:
-            odom_disp = self._body_frame_rot @ np.array([dx, dy, 0.0])
+            body_rot = self._get_body_rotation()
+            if body_rot is not None:
+                odom_disp = body_rot @ np.array([dx, dy, 0.0])
+            else:
+                odom_disp = np.array([dx, dy, 0.0])
             nav_pos = body_pos + odom_disp
 
             nav_goal = PoseStamped()
@@ -494,8 +453,9 @@ class BodyPoseOptimizer(Node):
         Returns:
             dict mapping idx → (dy_body, h, p, dist) for escalated points.
         """
-        if not self._body_frame_ready or self._body_frame_rot is None:
-            self.get_logger().warn('_optimize_3d: body frame not ready')
+        body_rot = self._get_body_rotation()
+        if body_rot is None:
+            self.get_logger().warn('_optimize_3d: body frame TF not available')
             return {}
 
         dy_body_values = np.arange(-0.68, 0.73, 0.10)  # 15 values, ±0.68 m
@@ -520,7 +480,7 @@ class BodyPoseOptimizer(Node):
 
             for dy_body in dy_body_values:
                 # Convert body-frame Y displacement to odom-frame vector
-                odom_disp = self._body_frame_rot @ np.array([0.0, dy_body, 0.0])
+                odom_disp = body_rot @ np.array([0.0, dy_body, 0.0])
                 shifted_pos = body_pos + odom_disp
 
                 for h in heights:
@@ -557,14 +517,15 @@ class BodyPoseOptimizer(Node):
           h: body_grid_heights
           p: body_grid_pitches
 
-        Body-frame (dx_body, dy_body) is rotated to odom via _body_frame_rot
+        Body-frame (dx_body, dy_body) is rotated to odom via patient_body TF
         before simulating the link00 position.
 
         Returns dict mapping point index → (dx_body, dy_body, h, p, dist),
         or empty dict if body frame not ready.
         """
-        if not self._body_frame_ready or self._body_frame_rot is None:
-            self.get_logger().warn('4D optimisation skipped: body frame not ready')
+        body_rot = self._get_body_rotation()
+        if body_rot is None:
+            self.get_logger().warn('4D optimisation skipped: body frame TF not available')
             return {}
 
         heights = self._body_grid_heights
@@ -594,7 +555,7 @@ class BodyPoseOptimizer(Node):
 
             for dx_body in dx_range:
                 for dy_body in dy_range:
-                    odom_disp = self._body_frame_rot @ np.array(
+                    odom_disp = body_rot @ np.array(
                         [dx_body, dy_body, 0.0])
                     shifted_pos = body_pos + odom_disp
                     for h in heights:

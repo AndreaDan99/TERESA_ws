@@ -36,14 +36,16 @@ The `/human_pose/points_3d` topic always carries 24 SMPL joints regardless of ba
 
 ```
 my_spot/odom                        ← world-fixed odometry (spot_ros2 su SpotCore)
-    └── my_spot/body                ← Spot body frame (dinamico: segue body_pose)
-            ├── orbbec_link         ← TF statica (0.30, 0, 0.15)
-            │     └── orbbec_color_optical_frame  ← TF statica (-1.5708, 0, -1.5708)
-            └── world               ← TF statica (z1_mount_x, 0, z1_mount_z) = Z1 base
-                  └── link00        ← Z1 URDF root (robot_state_publisher, fixed joint)
-                        └── link01 ... link06  ← Z1 arm chain
-                              └── camera_link  ← TF statica (0, 0, 0.05)
-                                    └── camera_color_optical_frame  ← RealSense driver
+    ├── my_spot/body                ← Spot body frame (dinamico: segue body_pose)
+    │       ├── orbbec_link         ← TF statica (0.30, 0, 0.15)
+    │       │     └── orbbec_color_optical_frame  ← TF statica (-1.5708, 0, -1.5708)
+    │       └── world               ← TF statica (z1_mount_x, 0, z1_mount_z) = Z1 base
+    │             └── link00        ← Z1 URDF root (robot_state_publisher, fixed joint)
+    │                   └── link01 ... link06  ← Z1 arm chain
+    │                         └── camera_link  ← TF statica (0, 0, 0.05)
+    │                               └── camera_color_optical_frame  ← RealSense driver
+    └── patient_body                ← 🆕 Body frame (laying_human_detector)
+            X=across body, Y=head→feet, Z=UP
 ```
 
 **Key points:**
@@ -74,6 +76,27 @@ ros2 launch spot_control wbc.launch.py
 # T5: Keyboard controller
 ros2 run spot_control wbc_keyboard_node
 ```
+
+---
+
+### Body Pose Optimizer
+
+The `body_pose_optimizer` node computes optimal Spot standing positions for ultrasound scanning:
+
+- **2D (h, p)**: grid search over height × pitch (12 combos) — default for reachable points
+- **3D (dy_body, h, p)**: adds body-frame Y displacement (Spot walks along patient) — ~180 combos
+- **4D (dx_body, dy_body, h, p)**: full body-frame XY displacement — 300 combos
+- **IK-driven retry**: on `/ik_done` timeout, escalates 2D→3D→4D automatically
+- **patient_body TF**: uses body frame for displacement conversion (works regardless of Spot orientation)
+- **FAST + Exposure**: both scanning types use the same optimizer node
+
+Topic interface:
+| Topic | Type | Direction | Purpose |
+|-------|------|-----------|---------|
+| `~/optimize_request` | PoseArray | in | Points to optimize (in patient_body frame) |
+| `~/optimize_result` | PoseArray | out | Optimal (h,p,dx,dy) per point |
+| `~/navigator_goal` | PoseStamped | out | Goal for spot_goal_navigator |
+| `~/body_pose` | Pose | out | Height + pitch for /my_spot/body_pose |
 
 ---
 
