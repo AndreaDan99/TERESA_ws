@@ -987,7 +987,7 @@ class ExposurePoseTester(Node):
                         self._pub_cmd_vel.publish(Twist())
                         continue  # skip to next spin iteration
 
-                    dy = self._target_y - current_y
+                    dy = current_y - self._target_y   # error: positive = need to move LEFT (-Y body)
                     now = self.get_clock().now()
 
                     if abs(dy) < self._nav_y_tolerance:
