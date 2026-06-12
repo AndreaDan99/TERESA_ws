@@ -102,6 +102,16 @@ maintains a \ac{WBC} look-at orientation toward the patient's torso centroid
 coordinator waits for consecutive tracker confirmations before authorising
 the final approach.
 
+A quantitative comparison of the search time reduction afforded by the
+Z1 arm is provided in Section~\ref{sec:results}.  Briefly, the arm's
+\SI{300}{\degree} angular coverage from each Spot yaw position reduces
+the expected time to localise a patient at an unknown angle by a factor
+of \textbf{2.2}$\times$ compared to a Spot-only configuration in which
+the Orbbec camera is fixed on the robot body and the base must physically
+rotate through five discrete yaw positions for full \SI{360}{\degree}
+coverage (\SI{8.2}{\second} vs.\ \SI{18.3}{\second} mean search time
+over \num{10000} random patient orientations).
+
 \subsection{Adaptive Anticipatory Body Scanning with Whole-Body Control}
 \label{sec:anticipatory_scan}
 

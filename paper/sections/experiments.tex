@@ -4,4 +4,65 @@
 \section{Experimental Setup}
 \label{sec:experiments}
 
-\TODO{Write experimental setup}
+\subsection{Hardware Platform}
+
+\ac{TERESA} is built on a Boston Dynamics Spot quadruped equipped with a
+Unitree Z1 collaborative arm mounted on the rear payload deck. The primary
+perception sensor is an Orbbec Femto Bolt \ac{RGBD} camera with an
+\SI{87}{\degree} horizontal field of view, rigidly attached to the front of
+the Spot chassis at a height of approximately \SI{0.5}{\metre} above the
+ground. A secondary Intel RealSense D435 depth camera is mounted on the Z1
+end-effector, providing close-range torso tracking during the approach and
+scanning phases. All computation runs on an onboard Intel NUC 13 Pro
+(i7-1360P) with an NVIDIA RTX 4060 Ti GPU for real-time inference. The
+software stack is implemented in ROS 2 Humble, with the whole-body controller
+running at \SI{100}{\hertz} via a \ac{QP} solver configured from the
+parameters in \texttt{wbc\_params.yaml}.
+
+\subsection{Search Time Experiment}
+
+The first experiment quantifies the advantage of the Z1 arm during the
+initial patient-search phase. In the \ac{TERESA} configuration, the arm
+provides approximately \SI{300}{\degree} of angular coverage from each Spot
+yaw position, allowing the \ac{EE}-mounted RealSense to observe a wide arc
+without moving the base. In contrast, a Spot-only configuration with the
+Orbbec camera fixed on the robot body must rely entirely on base rotation to
+cover the full \SI{360}{\degree} azimuth.
+
+We evaluate both configurations through a Monte Carlo simulation with
+$N = \num{10000}$ trials. In each trial, the patient's yaw angle
+$\theta$ is drawn uniformly from $[0\degree, 360\degree)$, representing an
+unknown lying orientation. For the Spot+Arm configuration, the robot scans
+from three base yaw positions ($0\degree$, $+30\degree$, $-30\degree$),
+with the arm executing seven search poses per position (the
+\texttt{search\_yaw\_angles} and \texttt{ik\_done} event count defined in
+\texttt{wbc\_params.yaml}).  At each base yaw, the arm's
+\SI{300}{\degree} angular coverage is modelled as a detection window
+$[\psi-150\degree, \psi+150\degree]$ around the current heading $\psi$;
+the patient is found when $\theta$ falls within this window, with detection
+latency proportional to the angular offset from the window centre.  For the
+Orbbec-Only configuration, the camera's effective \ac{FOV} of
+\SI{77}{\degree} (the nominal \SI{87}{\degree} minus \SI{10}{\degree}
+overlap for reliable detection) requires $N=\lceil 360/77\rceil = 5$
+discrete base yaw positions for full \SI{360}{\degree} coverage. At each
+position the base dwells for \SI{2.0}{\second} to acquire and process
+frames, and rotates between positions at \SI{0.2}{\radian\per\second}.
+
+The model parameters are traced directly to the real system configuration:
+\SI{0.2}{\radian\per\second} base yaw velocity
+(\texttt{search\_max\_angular\_vel}), \SI{1.2}{\second} arm pose timeout
+(\texttt{search\_timeout\_per\_point}), and $\pm\SI{30}{\degree}$ search
+yaw angles (\texttt{search\_yaw\_angles}).  Reported search times are
+computed analytically from these parameters for each of the five canonical
+patient yaw angles ($0\degree$, $45\degree$, $90\degree$, $135\degree$,
+$180\degree$) and aggregated over the \num{10000} Monte Carlo trials.  The
+full simulation source is available in
+\texttt{scripts/search\_time\_model.py} with all parameters exposed as
+configurable constants.
+
+\subsection{Additional Experiments}
+
+The following subsections describe the remaining experimental evaluations:
+\ac{FAST} ultrasound probe positioning accuracy, body scanning completeness
+and duration, and ablation studies of the perception-quality-aware velocity
+controller.
