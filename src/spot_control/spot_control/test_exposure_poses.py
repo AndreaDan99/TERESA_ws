@@ -1170,6 +1170,14 @@ class ExposurePoseTester(Node):
                                         self._pending_h = h
                                         self._pending_p = p
 
+                                        # Sync _spot_y from actual TF (avoid stale drift between tests)
+                                        try:
+                                            t = self._tf_buffer.lookup_transform(
+                                                'my_spot/odom', 'my_spot/body', rclpy.time.Time())
+                                            self._spot_y = t.transform.translation.y
+                                        except TransformException:
+                                            pass
+
                                         # Skip navigation if already at target Y or first point at Y≈0
                                         if (self._current_idx == 0 and abs(spot_y) < 0.05) or abs(spot_y - self._spot_y) <= 0.01:
                                             self._spot_y = spot_y
