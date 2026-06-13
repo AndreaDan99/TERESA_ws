@@ -21,6 +21,12 @@
 \providecommand{\BIBdecl}{\relax}
 \BIBdecl
 
+\bibitem{rozycki1996}
+G.~S. Rozycki, M.~G. Ochsner, J.~A. Schmidt, H.~L. Frankel, T.~P. Davis,
+  D.~Wang, and H.~R. Champion, ``A prospective study of surgeon-performed
+  ultrasound as the primary adjuvant modality for injured patient assessment,''
+  \emph{Journal of Trauma}, vol.~40, no.~3, pp. 496--505, 1996.
+
 \bibitem{vonhaxthausen2021}
 F.~von Haxthausen, S.~B{\"o}ttger, D.~Wulff, J.~Hagenah, I.~Tom{\'c}i{\'c},
   K.~M{\"o}ller, H.~Schwegmann, A.~Seitel, and S.~Engelhardt, ``Medical
@@ -89,6 +95,27 @@ S.~Farsoni, A.~Bertagnon, A.~D'Antona, J.~Rizzi, M.~Roma, M.~Bonf{\`e},
   \emph{2025 IEEE 21st International Conference on Automation Science and
   Engineering (CASE)}.\hskip 1em plus 0.5em minus 0.4em\relax IEEE, 2025, pp.
   471--477.
+
+\bibitem{gu2024vttb}
+X.~Gu and Y.~Demiris, ``{VTTB}: A visuo-tactile learning approach for
+  robot-assisted bed bathing,'' \emph{IEEE Robotics and Automation Letters},
+  vol.~9, no.~6, pp. 5751--5758, 2024.
+
+\bibitem{sayols2024dynamic}
+N.~Sayols, A.~Hernansanz, A.~Sozzi, N.~Piccinelli, F.~Falezza, S.~Farsoni,
+  A.~Casals, M.~Bonf{\`e}, and R.~Muradore, ``Dynamic global/local multi-layer
+  motion planner architecture for autonomous cognitive surgical robots,''
+  \emph{Robotics and Autonomous Systems}, vol. 180, p. 104758, 2024.
+
+\bibitem{isarandi2024nlf}
+I.~S\'{a}r\'{a}ndi and G.~Pons-Moll, ``Neural localizer fields for continuous
+  3d human pose and shape estimation,'' in \emph{Advances in Neural Information
+  Processing Systems (NeurIPS)}, 2024.
+
+\bibitem{casado2025navigating}
+F.~E. Casado, R.~C. Quesada, and Y.~Demiris, ``Navigating uncertainty:
+  Diffusion-based user intention estimation for wheelchair assistance,''
+  \emph{IEEE Transactions on Robotics}, vol.~42, pp. 80--97, 2025.
 
 \bibitem{khatib1987}
 O.~Khatib, ``A unified approach for motion and force control of robot
@@ -196,10 +223,10 @@ S.~Jauhri, S.~C. Lueth, and G.~Chalvatzaki, ``Active-perceptive motion
   Conference on Robotics and Automation (ICRA)}, 2024, pp. 10\,176--10\,182.
 
 \bibitem{xie2024capm}
-S.~Xie, C.~Hu, D.~Wang, J.~Johnson, M.~Bhatt, and A.~Narasimhan, ``Coupled
+S.~Xie, C.~Hu, D.~Wang, J.~Johnson, M.~Bagavathiannan, and D.~Song, ``Coupled
   active perception and manipulation planning for a mobile manipulator in
   precision agriculture applications,'' in \emph{Proc. IEEE International
-  Conference on Robotics and Automation (ICRA)}, 2024, pp. 15\,253--15\,259.
+  Conference on Robotics and Automation (ICRA)}, 2024, pp. 12\,665--12\,671.
 
 \bibitem{qin2026}
 D.~Qin, Z.~Liu, H.~Luo, X.~Liang, and Y.~Fang, ``A general one-shot multimodal
@@ -230,21 +257,14 @@ W.~J. Wolfslag, C.~McGreavy, G.~Xin, C.~Tiseo, S.~Vijayakumar, and Z.~Li,
   3694--3701.
 
 \bibitem{gong2023}
-Y.~Gong, G.~Sun, A.~Nair, A.~Bidwai, R.~CS, J.~Grezmak, G.~Sartoretti, and
-  K.~A. Daltorio, ``Legged robots for object manipulation: A review,''
-  \emph{Frontiers in Robotics and AI}, vol.~10, p. 1142421, 2023.
+Y.~Gong, G.~Sun, A.~Nair, A.~Bidwai, C.~S. RamyaSree, J.~Grezmak,
+  G.~Sartoretti, and K.~A. Daltorio, ``Legged robots for object manipulation: A
+  review,'' \emph{Frontiers in Robotics and AI}, vol.~10, p. 1142421, 2023.
 
 \bibitem{maji2022}
 D.~Maji, S.~Nagori, M.~Mathew, and D.~Poddar, ``{YOLO-Pose}: Enhancing {YOLO}
   for multi person pose estimation using object keypoint similarity loss,'' in
   \emph{Proc. IEEE/CVF Conference on Computer Vision and Pattern Recognition
   Workshops (CVPRW)}, 2022, pp. 2637--2646.
-
-\bibitem{carpentier2019}
-J.~Carpentier, G.~Saurel, G.~Buondonno, J.~Mirabel, F.~Lamiraux, O.~Stasse, and
-  N.~Mansard, ``The {Pinocchio} {C++} library: A fast and flexible
-  implementation of rigid body dynamics algorithms and their analytical
-  derivatives,'' in \emph{Proc. IEEE International Symposium on System
-  Integration (SII)}, 2019, pp. 614--619.
 
 \end{thebibliography}

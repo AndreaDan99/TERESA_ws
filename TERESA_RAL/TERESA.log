@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.26 (TeX Live 2024) (preloaded format=pdflatex 2024.3.29)  5 JUN 2026 15:00
+This is pdfTeX, Version 3.141592653-2.6-1.40.26 (TeX Live 2024) (preloaded format=pdflatex 2024.3.29)  13 JUN 2026 23:08
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -953,7 +953,7 @@ File: tikzlibrarybackgrounds.code.tex 2023-01-15 v3.1.10 (3.1.10)
 \pgf@layerboxsaved@background=\box98
 )
 Package translations Info: No language package found. I am going to use `englis
-h' as default language. on input line 45.
+h' as default language. on input line 54.
 
 (/usr/local/texlive/2024/texmf-dist/tex/latex/l3backend/l3backend-pdftex.def
 File: l3backend-pdftex.def 2024-02-20 L3 backend support: PDF output (pdfTeX)
@@ -963,24 +963,24 @@ File: l3backend-pdftex.def 2024-02-20 L3 backend support: PDF output (pdfTeX)
 (./TERESA.aux)
 \openout1 = `TERESA.aux'.
 
-LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 45.
-LaTeX Font Info:    ... okay on input line 45.
-LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 45.
-LaTeX Font Info:    ... okay on input line 45.
-LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 45.
-LaTeX Font Info:    ... okay on input line 45.
-LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 45.
-LaTeX Font Info:    ... okay on input line 45.
-LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 45.
-LaTeX Font Info:    ... okay on input line 45.
-LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 45.
-LaTeX Font Info:    ... okay on input line 45.
-LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 45.
-LaTeX Font Info:    ... okay on input line 45.
-LaTeX Font Info:    Checking defaults for PD1/pdf/m/n on input line 45.
-LaTeX Font Info:    ... okay on input line 45.
-LaTeX Font Info:    Checking defaults for PU/pdf/m/n on input line 45.
-LaTeX Font Info:    ... okay on input line 45.
+LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 54.
+LaTeX Font Info:    ... okay on input line 54.
+LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 54.
+LaTeX Font Info:    ... okay on input line 54.
+LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 54.
+LaTeX Font Info:    ... okay on input line 54.
+LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 54.
+LaTeX Font Info:    ... okay on input line 54.
+LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 54.
+LaTeX Font Info:    ... okay on input line 54.
+LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 54.
+LaTeX Font Info:    ... okay on input line 54.
+LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 54.
+LaTeX Font Info:    ... okay on input line 54.
+LaTeX Font Info:    Checking defaults for PD1/pdf/m/n on input line 54.
+LaTeX Font Info:    ... okay on input line 54.
+LaTeX Font Info:    Checking defaults for PU/pdf/m/n on input line 54.
+LaTeX Font Info:    ... okay on input line 54.
 
 -- Lines per column: 58 (exact).
 (/usr/local/texlive/2024/texmf-dist/tex/context/base/mkii/supp-pdf.mkii
@@ -1005,7 +1005,7 @@ Package epstopdf-base Info: Redefining graphics rule for `.eps' on input line 4
 File: epstopdf-sys.cfg 2010/07/13 v1.3 Configuration of (r)epstopdf for TeX Liv
 e
 ))
-Package hyperref Info: Link coloring OFF on input line 45.
+Package hyperref Info: Link coloring OFF on input line 54.
 
 (./TERESA.out) (./TERESA.out)
 \@outlinefile=\write4
@@ -1018,7 +1018,7 @@ File: translations-basic-dictionary-english.trsl (english translation file `tra
 nslations-basic-dictionary')
 )
 Package translations Info: loading dictionary `translations-basic-dictionary' f
-or `english'. on input line 45.
+or `english'. on input line 54.
 
 Package pgfplots notification 'compat/show suggested version=true': you might b
 enefit from \pgfplotsset{compat=1.18} (current compat level: 1.15).
@@ -1032,68 +1032,70 @@ tors for au-
 Package acronym Info: Label `acro:TERESA' newly defined as it shall be overridd
 en
 although it is yet undefined on input line 11.
+Package acronym Info: Label `acro:FAST' newly defined as it shall be overridden
+
+although it is yet undefined on input line 25.
 ) (./sections/introduction.tex
 Package acronym Info: Label `acro:ABCDE' newly defined as it shall be overridde
 n
 although it is yet undefined on input line 8.
-Package acronym Info: Label `acro:FAST' newly defined as it shall be overridden
 
-although it is yet undefined on input line 9.
-
-Underfull \hbox (badness 10000) in paragraph at lines 8--20
+Underfull \hbox (badness 10000) in paragraph at lines 7--20
 []\T1/ptm/m/n/10 MERGENCY as-sess-ment protocols---including the
  []
 
 
-Underfull \hbox (badness 2343) in paragraph at lines 8--20
-[][][]\T1/ptm/m/n/10 Airway, Breath-ing, Cir-cu-la-tion, Dis-abil-ity, Ex-po-su
-re
+Underfull \hbox (badness 2343) in paragraph at lines 7--20
+\T1/ptm/m/n/10 Air-way, Breath-ing, Cir-cu-la-tion, Dis-abil-ity, Ex-po-sure
  []
 
 
-Underfull \hbox (badness 1789) in paragraph at lines 8--20
+Underfull \hbox (badness 10000) in paragraph at lines 7--20
+\T1/ptm/m/n/10 ([][][]Airway, Breath-ing, Cir-cu-la-tion, Dis-abil-ity, Ex-po-s
+ure
+ []
+
+
+Underfull \hbox (badness 1789) in paragraph at lines 7--20
 \T1/ptm/m/n/10 faces a fun-da-men-tal chal-lenge: the robot must ac-tively
  []
 
-LaTeX Font Info:    Trying to load font information for U+msa on input line 37.
+LaTeX Font Info:    Trying to load font information for U+msa on input line 39.
 
 (/usr/local/texlive/2024/texmf-dist/tex/latex/amsfonts/umsa.fd
 File: umsa.fd 2013/01/14 v3.01 AMS symbols A
 )
-LaTeX Font Info:    Trying to load font information for U+msb on input line 37.
+LaTeX Font Info:    Trying to load font information for U+msb on input line 39.
 
 
 (/usr/local/texlive/2024/texmf-dist/tex/latex/amsfonts/umsb.fd
 File: umsb.fd 2013/01/14 v3.01 AMS symbols B
 )
-Underfull \hbox (badness 10000) in paragraph at lines 41--41
+Underfull \hbox (badness 10000) in paragraph at lines 43--43
 [][][][]\T1/ptm/m/n/8 Available at []$https : / / github . com / Michael-[]OvO 
 /
  []
 
 Package acronym Info: Label `acro:WBC' newly defined as it shall be overridden
-although it is yet undefined on input line 53.
-Package acronym Info: Label `acro:MPC' newly defined as it shall be overridden
 although it is yet undefined on input line 54.
-Package acronym Info: Label `acro:QP' newly defined as it shall be overridden
+Package acronym Info: Label `acro:MPC' newly defined as it shall be overridden
 although it is yet undefined on input line 55.
+Package acronym Info: Label `acro:QP' newly defined as it shall be overridden
+although it is yet undefined on input line 56.
 [1{/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/pdftex.map}{/usr/l
 ocal/texlive/2024/texmf-dist/fonts/enc/dvips/base/8r.enc}
 
 
 ]
 Package acronym Info: Label `acro:EE' newly defined as it shall be overridden
-although it is yet undefined on input line 101.
-
-Underfull \vbox (badness 1024) has occurred while \output is active []
-
+although it is yet undefined on input line 99.
 Package acronym Info: Label `acro:FSM' newly defined as it shall be overridden
-although it is yet undefined on input line 151.
+although it is yet undefined on input line 140.
 )
 (./sections/problem_formulation.tex
 Package acronym Info: Label `acro:DOF' newly defined as it shall be overridden
 although it is yet undefined on input line 10.
-LaTeX Font Info:    Trying to load font information for T1+pcr on input line 24
+LaTeX Font Info:    Trying to load font information for T1+pcr on input line 27
 .
 
 (/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/t1pcr.fd
@@ -1101,7 +1103,7 @@ File: t1pcr.fd 2001/06/04 font definitions for T1/pcr.
 )
 Package acronym Info: Label `acro:RGBD' newly defined as it shall be overridden
 
-although it is yet undefined on input line 37.
+although it is yet undefined on input line 40.
  [2])
 (./sections/active_perception.tex
 Package acronym Info: Label `acro:YOLO' newly defined as it shall be overridden
@@ -1109,80 +1111,113 @@ Package acronym Info: Label `acro:YOLO' newly defined as it shall be overridden
 although it is yet undefined on input line 33.
  [3]
 Package acronym Info: Label `acro:IK' newly defined as it shall be overridden
-although it is yet undefined on input line 200.
+although it is yet undefined on input line 125.
 ) (./sections/system_architecture.tex
 Package acronym Info: Label `acro:ROS' newly defined as it shall be overridden
 although it is yet undefined on input line 8.
 Package acronym Info: Label `acro:DDS' newly defined as it shall be overridden
 although it is yet undefined on input line 9.
+
+[4]
+<figures/system_overview_annotated.pdf, id=304, 294.67644pt x 432.01521pt>
+File: figures/system_overview_annotated.pdf Graphic file (type pdf)
+<use figures/system_overview_annotated.pdf>
+Package pdftex.def Info: figures/system_overview_annotated.pdf  used on input l
+ine 17.
+(pdftex.def)             Requested size: 252.0pt x 369.44936pt.
 Package acronym Info: Label `acro:JTC' newly defined as it shall be overridden
-although it is yet undefined on input line 18.
+although it is yet undefined on input line 33.
 Package acronym Info: Label `acro:TF' newly defined as it shall be overridden
-although it is yet undefined on input line 29.
-
-Underfull \hbox (badness 5862) in paragraph at lines 29--40
-\T1/ptm/m/n/10 ($[] \OMS/cmsy/m/n/10 ! [] ! [] ! [] !
+although it is yet undefined on input line 68.
+ (./figures/control_loop.tex) (./figures/fsm.tex)
+Underfull \hbox (badness 2293) in paragraph at lines 116--116
+\T1/ptm/m/n/8 Fig. 3.  []Mission [][] with 13 states. The robot searches for th
+e pa-tient through body ro-ta-tion and dual-sensor con-fir-ma-tion (SEARCH-
  []
 
-(./figures/frame_tree.tex) [4] (./figures/fsm.tex) (./figures/system_block.tex)
-) (./sections/experimental_results.tex
-Underfull \hbox (badness 2538) in paragraph at lines 28--32
-[]\T1/ptm/b/n/10 Baseline\T1/ptm/m/n/10 : se-quen-tial stop-and-manipulate. The
- robot
- []
+(./figures/system_block.tex)
+Package acronym Info: Label `acro:NLF' newly defined as it shall be overridden
+although it is yet undefined on input line 131.
 
-[5]
-Underfull \vbox (badness 1577) has occurred while \output is active []
 
- [6])
-(./sections/conclusion.tex) (./TERESA.bbl [7]
-Underfull \hbox (badness 1755) in paragraph at lines 158--161
+Package acronym Warning: Acronym `NLF' is not defined on input line 131.
+
+
+Package acronym Warning: Acronym `NLF' is not defined on input line 131.
+
+
+Package acronym Warning: Acronym `NLF' is not defined on input line 131.
+
+[5 <./figures/system_overview_annotated.pdf>]
+<figures/Web_interface.png, id=365, 2768.3425pt x 1575.8875pt>
+File: figures/Web_interface.png Graphic file (type png)
+<use figures/Web_interface.png>
+Package pdftex.def Info: figures/Web_interface.png  used on input line 156.
+(pdftex.def)             Requested size: 252.0pt x 143.43484pt.
+)
+(./sections/experimental_results.tex
+Underfull \vbox (badness 10000) has occurred while \output is active []
+
+
+Underfull \vbox (badness 3635) has occurred while \output is active []
+
+ [6 <./figures/Web_interface.png>]) (./sections/conclusion.tex) [7] (./TERESA.b
+bl
+Underfull \hbox (badness 1755) in paragraph at lines 185--188
 \T1/ptm/m/n/8 tion and rep-re-sen-ta-tion for robotic ma-nip-u-la-tion,'' \T1/p
 tm/m/it/8 arXiv preprint
  []
 
-) [8] (./TERESA.aux)
+[8]) [9
+
+] (./TERESA.aux)
  ***********
 LaTeX2e <2023-11-01> patch level 1
 L3 programming layer <2024-02-20>
  ***********
 Package rerunfilecheck Info: File `TERESA.out' has not changed.
-(rerunfilecheck)             Checksum: 2C0636D919673FDAD27E5E58EFD299F2;6362.
+(rerunfilecheck)             Checksum: B70F62D7CF6C0AAC165032EBFCC74E3F;6342.
  ) 
 Here is how much of TeX's memory you used:
- 38315 strings out of 474116
- 925023 string characters out of 5743682
+ 38351 strings out of 474116
+ 924757 string characters out of 5743682
  1971187 words of memory out of 5000000
- 59942 multiletter control sequences out of 15000+600000
- 687431 words of font info for 177 fonts, out of 8000000 for 9000
+ 59977 multiletter control sequences out of 15000+600000
+ 679843 words of font info for 170 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
- 84i,22n,87p,727b,2133s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 84i,10n,87p,785b,1098s stack positions out of 10000i,1000n,20000p,200000b,200000s
 </usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx10.pfb
 ></usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx5.pfb><
-/usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmex10.pfb></
-usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi10.pfb></u
-sr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi5.pfb></usr
-/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi7.pfb></usr/l
-ocal/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmmib10.pfb></usr/l
-ocal/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cmextra/cmmib5.pfb></u
-sr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmr10.pfb></usr
-/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmr5.pfb></usr/lo
-cal/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmr7.pfb></usr/local
-/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb></usr/local/
-texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy5.pfb></usr/local/te
-xlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy6.pfb></usr/local/texl
-ive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></usr/local/texliv
-e/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy8.pfb></usr/local/texlive/
-2024/texmf-dist/fonts/type1/public/amsfonts/symbols/msbm10.pfb></usr/local/texl
-ive/2024/texmf-dist/fonts/type1/urw/courier/ucrr8a.pfb></usr/local/texlive/2024
-/texmf-dist/fonts/type1/urw/times/utmb8a.pfb></usr/local/texlive/2024/texmf-dis
-t/fonts/type1/urw/times/utmbi8a.pfb></usr/local/texlive/2024/texmf-dist/fonts/t
-ype1/urw/times/utmr8a.pfb></usr/local/texlive/2024/texmf-dist/fonts/type1/urw/t
-imes/utmri8a.pfb>
-Output written on TERESA.pdf (8 pages, 294677 bytes).
+/usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx7.pfb></u
+sr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx8.pfb></usr
+/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmex10.pfb></usr/
+local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi10.pfb></usr/l
+ocal/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi5.pfb></usr/loc
+al/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi6.pfb></usr/local
+/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi7.pfb></usr/local/t
+exlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi8.pfb></usr/local/tex
+live/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmmib10.pfb></usr/local/tex
+live/2024/texmf-dist/fonts/type1/public/amsfonts/cmextra/cmmib5.pfb></usr/local
+/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cmextra/cmmib8.pfb></usr/l
+ocal/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmr10.pfb></usr/loc
+al/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmr5.pfb></usr/local/
+texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmr7.pfb></usr/local/tex
+live/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmr8.pfb></usr/local/texliv
+e/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb></usr/local/texlive
+/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy5.pfb></usr/local/texlive/2
+024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy6.pfb></usr/local/texlive/202
+4/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></usr/local/texlive/2024/
+texmf-dist/fonts/type1/public/amsfonts/cm/cmsy8.pfb></usr/local/texlive/2024/te
+xmf-dist/fonts/type1/public/amsfonts/symbols/msbm10.pfb></usr/local/texlive/202
+4/texmf-dist/fonts/type1/urw/courier/ucrr8a.pfb></usr/local/texlive/2024/texmf-
+dist/fonts/type1/urw/times/utmb8a.pfb></usr/local/texlive/2024/texmf-dist/fonts
+/type1/urw/times/utmbi8a.pfb></usr/local/texlive/2024/texmf-dist/fonts/type1/ur
+w/times/utmr8a.pfb></usr/local/texlive/2024/texmf-dist/fonts/type1/urw/times/ut
+mri8a.pfb>
+Output written on TERESA.pdf (9 pages, 1929312 bytes).
 PDF statistics:
- 465 PDF objects out of 1000 (max. 8388607)
- 406 compressed objects within 5 object streams
- 118 named destinations out of 1000 (max. 500000)
- 293 words of extra memory for PDF output out of 10000 (max. 10000000)
+ 543 PDF objects out of 1000 (max. 8388607)
+ 435 compressed objects within 5 object streams
+ 122 named destinations out of 1000 (max. 500000)
+ 287 words of extra memory for PDF output out of 10000 (max. 10000000)
 
