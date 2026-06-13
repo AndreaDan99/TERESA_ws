@@ -130,7 +130,7 @@ The posture optimisation space spans three parameters: body height $h \in
 [h_{\min}, h_{\max}]$ and pitch $\varphi \in [0, \varphi_{\max}]$, as defined
 in Section~\ref{sec:problem_formulation}, plus a body-frame base displacement
 $dy \in \mathbb{R}$ along the patient's head-to-foot axis, expressed in the
-\texttt{patient\_body} frame (Section~\ref{sec:system_architecture}).
+patient-aligned body frame (Section~\ref{sec:system_architecture}).
 The discrete search grids are $\mathcal{H} = \{h_1, \dots, h_{N_h}\}$ and
 $\mathcal{P} = \{\varphi_1, \dots, \varphi_{N_p}\}$, with $dy$ sampled
 uniformly at \SI{0.10}{\metre} intervals.  The cost function includes a
@@ -219,7 +219,6 @@ detected injuries highlighted as colour-coded bounding boxes. The operator can
 click any grid point to command the physical robot to return to that body
 region: Spot reconfigures to the previously optimised posture, the arm replays
 the saved \ac{IK} trajectory, and the camera returns to the original
-observation pose. This click-to-revisit mechanism runs through rosbridge
-WebSocket with sub-second latency. The operator freely navigates between points
+observation pose. This click-to-revisit mechanism runs through the web-based dashboard with sub-second latency. The operator freely navigates between points
 by clicking; a termination command ends the review and advances the mission to
 the \ac{FAST} ultrasound sequence.
