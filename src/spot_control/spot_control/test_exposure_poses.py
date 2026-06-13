@@ -1134,6 +1134,7 @@ class ExposurePoseTester(Node):
                     if self._ik_done and self._current_idx < len(self._points):
                         self.get_logger().info(
                             '  ✅ ik_done received — press ENTER for next pose')
+                        self._ik_done = False  # suppress repeat messages
 
                 # Check keyboard
                 try:
