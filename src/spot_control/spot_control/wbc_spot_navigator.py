@@ -221,7 +221,7 @@ class WBCSpotNavigator(Node):
 
             if abs(dy_odom) > self._p.nav_y_tolerance:
                 speed_y = min(abs(dy_odom) * self._p.nav_y_gain, self._p.nav_y_speed)
-                twist.linear.y = -math.copysign(max(speed_y, self._p.nav_y_min_speed), dy_odom)
+                twist.linear.y = math.copysign(max(speed_y, self._p.nav_y_min_speed), dy_odom)
 
             if (abs(dx_body) <= self._p.goal_tolerance
                     and abs(dy_odom) <= self._p.nav_y_tolerance):
