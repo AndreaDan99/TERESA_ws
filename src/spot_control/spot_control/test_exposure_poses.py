@@ -536,6 +536,7 @@ class ExposurePoseTester(Node):
         self._tf_listener = TransformListener(self._tf_buffer, self)
 
         self._ik_done = False
+        self._ik_done_logged = False
         self._current_idx = 0
         self._running = False
         self._paused = False
@@ -906,6 +907,7 @@ class ExposurePoseTester(Node):
         self._pub_enable.publish(Bool(data=True))
         self._pub_goal.publish(goal)
         self._ik_done = False
+        self._ik_done_logged = False
 
         self.get_logger().info(
             f'▶ [{idx + 1}/{len(self._points)}] '
@@ -1131,10 +1133,10 @@ class ExposurePoseTester(Node):
 
                 # Check ik_done (only when not settling)
                 if not self._settling:
-                    if self._ik_done and self._current_idx < len(self._points):
+                    if self._ik_done and not self._ik_done_logged and self._current_idx < len(self._points):
                         self.get_logger().info(
                             '  ✅ ik_done received — press ENTER for next pose')
-                        self._ik_done = False  # suppress repeat messages
+                        self._ik_done_logged = True
 
                 # Check keyboard
                 try:
