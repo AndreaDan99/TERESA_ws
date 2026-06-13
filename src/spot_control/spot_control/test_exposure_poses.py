@@ -522,6 +522,8 @@ class ExposurePoseTester(Node):
             Twist, '/my_spot/cmd_vel', 10)
         self._pub_refined = self.create_publisher(
             PoseArray, '/exposure/refined_skeleton', 10)
+        self._pub_spot_initial = self.create_publisher(
+            PoseStamped, '/spot_initial_pose', 10)
 
         # Subscribers
         self._sub_ik_done = self.create_subscription(
@@ -594,6 +596,8 @@ class ExposurePoseTester(Node):
         # Timers
         self._grid_timer = self.create_timer(0.2, self._publish_grid_markers)
         self._skeleton_timer = self.create_timer(0.5, self._publish_virtual_skeleton)
+        self._spot_initial_timer = self.create_timer(2.0, self._publish_spot_initial_pose)
+        self._publish_spot_initial_pose()  # publish once at init for immediate availability
 
         # Print header
         self.get_logger().info('=' * 60)
@@ -630,6 +634,22 @@ class ExposurePoseTester(Node):
         self.get_logger().info(
             '         Web UI: click grid marker on camera_view.html → goto point')
         self.get_logger().info('')
+
+    # ── Spot initial pose for Body Map ─────────────────────────────────
+
+    def _publish_spot_initial_pose(self):
+        """Publish Spot at my_spot/odom origin (0,0,0,yaw=0) for Body Map rendering."""
+        msg = PoseStamped()
+        msg.header.frame_id = 'my_spot/odom'
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.pose.position.x = 0.0
+        msg.pose.position.y = 0.0
+        msg.pose.position.z = 0.0
+        msg.pose.orientation.x = 0.0
+        msg.pose.orientation.y = 0.0
+        msg.pose.orientation.z = 0.0
+        msg.pose.orientation.w = 1.0
+        self._pub_spot_initial.publish(msg)
 
     # ── Callbacks ──────────────────────────────────────────────────────
 

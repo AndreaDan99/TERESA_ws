@@ -459,7 +459,7 @@ class TeresaController{
     this.goalTol=.15;this.angSpeedMax=.4;this.linSpeedMax=.3;this.angleThres=.08;
     this.odomFrame='my_spot/odom';this.bodyFrame='my_spot/body';this.updateRate=10;
     // control state
-    this.hasStartPose=false;this.startPose=null;this.goalPose=null;
+    this.hasStartPose=false;this.startPose=null;this.spotMapPose=null;this.goalPose=null;
     this.isReturning=false;this.kcState='IDLE';this.tfSystemReady=false;this._tfWasReady=false;this.bodyInOdom=null;this.manualScanGate=true;this.perceptionEnabled=false;this._topicsReady=false;
     // camera state
     this.camerasOpen=false;this.paused=false;
@@ -713,6 +713,20 @@ class TeresaController{
       this._updateStatusCard('realsense',c,v);
     });
 
+    /* /spot_initial_pose — test-mode Spot position for Body Map (no real TF) */
+    this.spotInitialPoseSub = new ROSLIB.Topic({ros: this.ros, name: '/spot_initial_pose', messageType: 'geometry_msgs/PoseStamped'});
+    this.spotInitialPoseSub.subscribe(msg => {
+      if (!this.hasStartPose) {
+        const q = msg.pose.orientation;
+        const yaw = Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
+        this.spotMapPose = {x: msg.pose.position.x, y: msg.pose.position.y, yaw: yaw};
+        const yawDeg = (yaw * 180 / Math.PI).toFixed(1);
+        $('start-indicator').textContent = `(${msg.pose.position.x.toFixed(2)},${msg.pose.position.y.toFixed(2)}) ${yawDeg}° (test)`;
+        $('start-indicator').style.color = '#ffdc00';
+        this.drawBodyMap();
+      }
+    });
+
     this._topicsReady = true;
     this.enableAlways();
   }
@@ -803,6 +817,11 @@ class TeresaController{
     const allPts=[];
     if(skel){for(const p of skel){if(p.position&&!isNaN(p.position.x))allPts.push({x:p.position.x,y:p.position.y});}}
     if(grid){for(const m of grid){allPts.push({x:m.pose.position.x,y:m.pose.position.y});}}
+    if(this.spotMapPose){
+      const hw=0.55,hh=0.25,c=Math.cos(this.spotMapPose.yaw),s=Math.sin(this.spotMapPose.yaw)
+      const cx=this.spotMapPose.x,cy=this.spotMapPose.y
+      for(const[lx,ly]of[[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]])allPts.push({x:cx+lx*c-ly*s,y:cy+lx*s+ly*c})
+    }
     if(!allPts.length)return;
 
     let xMin=Infinity,xMax=-Infinity,yMin=Infinity,yMax=-Infinity;
@@ -848,6 +867,20 @@ class TeresaController{
         ctx.beginPath();ctx.arc(p.x,p.y,Math.max(3,r),0,Math.PI*2);
         ctx.fillStyle=`rgba(${Math.round(cr*255)},${Math.round(cg*255)},${Math.round(cb*255)},${ca})`;ctx.fill();
       }
+    }
+
+    // Spot start position
+    if(this.spotMapPose){
+      const sc=proj(this.spotMapPose.x,this.spotMapPose.y)
+      const sw=1.1*scale,sh=0.5*scale
+      ctx.save()
+      ctx.translate(sc.x,sc.y)
+      ctx.rotate(this.spotMapPose.yaw)
+      ctx.strokeStyle='#ffdc00';ctx.lineWidth=2
+      ctx.beginPath();ctx.roundRect(-sw/2,-sh/2,sw,sh,4);ctx.stroke()
+      ctx.fillStyle='#ffdc00';ctx.font='9px monospace'
+      ctx.fillText('SPOT',sw/2+4,4)
+      ctx.restore()
     }
 
     // legend — bottom-right
@@ -1189,6 +1222,7 @@ class TeresaController{
     const t=this.bodyInOdom.translation,r=this.bodyInOdom.rotation;
     const yaw=Math.atan2(2*(r.w*r.z+r.x*r.y),1-2*(r.y*r.y+r.z*r.z));
     this.startPose={x:t.x,y:t.y,yaw:yaw};this.hasStartPose=true;
+    this.spotMapPose={x:this.startPose.x,y:this.startPose.y,yaw:this.startPose.yaw};
     $('start-indicator').textContent=`(${t.x.toFixed(2)},${t.y.toFixed(2)}) ${(yaw*180/Math.PI).toFixed(1)}°`;
     $('start-indicator').style.color='var(--accent)';
     this.log(`Start pose: (${t.x.toFixed(2)},${t.y.toFixed(2)}) yaw=${(yaw*180/Math.PI).toFixed(1)}°`,'info');return true;
