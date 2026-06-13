@@ -28,7 +28,7 @@ configuration that maximises detection confidence.
 \subsubsection{Coarse rotation with targeted refinement}
 
 The robot sweeps through a sequence of body yaw orientations using
-velocity control, pausing at each to allow two cameras to
+differential velocity commands, pausing at each to allow two cameras to
 observe the environment. A wide-field Orbbec \ac{RGBD} camera mounted on Spot's
 body runs \ac{YOLO}11-pose~\cite{maji2022} and a posture classifier that
 outputs a confidence score $c \in [0, 1]$. An \ac{EE}-mounted RealSense
