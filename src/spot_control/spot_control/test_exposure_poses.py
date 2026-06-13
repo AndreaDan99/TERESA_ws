@@ -642,7 +642,7 @@ class ExposurePoseTester(Node):
         msg = PoseStamped()
         msg.header.frame_id = 'my_spot/odom'
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.pose.position.x = 0.0
+        msg.pose.position.x = -0.20
         msg.pose.position.y = 0.0
         msg.pose.position.z = 0.0
         msg.pose.orientation.x = 0.0

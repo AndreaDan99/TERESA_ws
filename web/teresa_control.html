@@ -818,7 +818,7 @@ class TeresaController{
     if(skel){for(const p of skel){if(p.position&&!isNaN(p.position.x))allPts.push({x:p.position.x,y:p.position.y});}}
     if(grid){for(const m of grid){allPts.push({x:m.pose.position.x,y:m.pose.position.y});}}
     if(this.spotMapPose){
-      const hw=0.55,hh=0.25,c=Math.cos(this.spotMapPose.yaw),s=Math.sin(this.spotMapPose.yaw)
+      const hw=0.3,hh=0.175,c=Math.cos(this.spotMapPose.yaw),s=Math.sin(this.spotMapPose.yaw)
       const cx=this.spotMapPose.x,cy=this.spotMapPose.y
       for(const[lx,ly]of[[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]])allPts.push({x:cx+lx*c-ly*s,y:cy+lx*s+ly*c})
     }
@@ -872,7 +872,7 @@ class TeresaController{
     // Spot start position
     if(this.spotMapPose){
       const sc=proj(this.spotMapPose.x,this.spotMapPose.y)
-      const sw=1.1*scale,sh=0.5*scale
+      const sw=0.6*scale,sh=0.35*scale
       ctx.save()
       ctx.translate(sc.x,sc.y)
       ctx.rotate(this.spotMapPose.yaw)
