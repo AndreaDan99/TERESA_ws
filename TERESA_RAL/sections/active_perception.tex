@@ -179,8 +179,7 @@ Cartesian impedance controller on the Z1 torque interface at \SI{500}{\hertz},
 computing the desired \ac{EE} position relative to the detected torso surface
 centroid and outward normal. Joint torques are computed via the Jacobian
 transpose with adaptive stiffness and damping gains that scale with arm
-extension, with gravity and Coriolis compensation via
-Pinocchio~\cite{carpentier2019}. A safe switching service alternates with a
+extension, with gravity and Coriolis compensation via Pinocchio. A safe switching service alternates with a
 joint trajectory controller for position-controlled motions, defaulting to
 position control on error.
 
@@ -197,13 +196,9 @@ to inspect, re-examine, and override.
 
 \subsubsection{Posture-adaptive scan grid}
 
-The scan grid adapts to the patient's posture. For a supine patient, a
-top-down bilinear grid covers the torso from above, interpolated between
-shoulder and hip keypoints. For sitting or standing patients, a frontal grid
-combines bilinear torso sampling with polyline-based sampling along the arms
-and legs. The number of grid points ranges from 15 (supine) to 49 (standing,
-full body). At each point the arm positions the camera at a standoff distance
-with a look-at orientation toward the body surface. When the NLF prior is available, all 24 joints are populated, enabling a denser grid without relying on estimated keypoint positions.
+The scan grid adapts to the patient's posture, generating a top-down bilinear
+grid over the torso interpolated between shoulder and hip keypoints. When the
+NLF prior is available, all 24 joints are populated, enabling a denser grid.
 
 \subsubsection{Injury detection}
 

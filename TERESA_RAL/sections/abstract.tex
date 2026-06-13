@@ -20,14 +20,15 @@ concurrently with base motion, dynamically reducing scanning poses when torso
 keypoints are already resolved, eliminating idle time of sequential approaches.
 An exposure body scanning pipeline covers the patient's body surface across all
 postures, integrating pre-trained forensic wound and burn detection models with
-an interactive review phase in which the operator can click any grid point on
-the web camera feed to command the robot to re-inspect that body region. During
+an interactive review phase in which a single 2D click on the web camera
+feed triggers a full-body reconfiguration—posture optimisation, base navigation,
+and arm trajectory replay—to reach the corresponding 3D body surface point. During
 \ac{FAST} scanning, pre-planned body reconfiguration optimises posture for each
 anatomical target via offline search, maximising arm manipulability without
 real-time whole-body optimisation.
 
 Experiments on the physical Spot+Z1 platform demonstrate fully autonomous
-emergency assessment across supine, sitting, and standing patient postures,
+emergency assessment on supine patients,
 with the active perception pipeline reducing idle time compared to a
 stop-and-manipulate baseline. To the best of our knowledge, \ac{TERESA} is the
 first legged system to demonstrate perception-driven whole-body reconfiguration

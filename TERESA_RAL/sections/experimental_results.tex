@@ -6,42 +6,22 @@
 
 \subsection{Experimental Setup}
 
-Experiments were conducted on the physical Spot+Z1 platform integrating a
-Boston Dynamics Spot quadruped, a Unitree Z1 six-\ac{DOF} arm, an Orbbec Femto
-Bolt \ac{RGBD} camera on Spot's body, and an Intel RealSense D435 \ac{RGBD}
-camera at the Z1 \ac{EE}. Computation was distributed across SpotCore (base
-control), a NVIDIA Jetson (perception and arm control), and an external PC
-(mission coordination and \ac{WBC}), communicating over \ac{ROS}~2 Jazzy.
+Experiments ran on the physical Spot+Z1 platform with an Orbbec Femto Bolt on
+Spot's body and a RealSense D435 at the \ac{EE}, computing across SpotCore, an
+NVIDIA Jetson, and an external PC over \ac{ROS}~2 Jazzy.  Ten supine patient
+positions were defined (\SI{2}{\metre}--\SI{4}{\metre}, $\pm\SI{45}{\degree}$
+angular offset); each ran in both modes below, yielding twenty paired trials.
 
-The experimental scenario simulated a mass-casualty incident with a supine
-patient placed at an unknown location on flat terrain. The patient remained
-stationary throughout each trial. The robot started from a fixed initial pose
-and was required to autonomously search for, localise, approach, and scan the
-patient's abdomen. Ten patient positions were defined, varying distance
-(\SI{2}{\metre}--\SI{4}{\metre}) and angular offset ($-45^\circ$ to
-$+45^\circ$) relative to the robot's initial heading. Each position was tested
-with both operational modes, yielding twenty paired trials.
-
-Two operational modes were compared:
 \begin{itemize}
-  \item \textbf{Baseline}: sequential stop-and-manipulate. The robot searches
-        for the patient, navigates to the approach point, stops, performs a
-        fixed four-pose body scan, and then executes the \ac{FAST} scanning
-        sequence. The body scan does not overlap with navigation.
-  \item \textbf{\ac{TERESA}}: the proposed active perception pipeline, in which
-        the adaptive anticipatory scanner runs concurrently with base
-        navigation, the scan grid adapts to pre-existing torso keypoint
-        confidence, and the QualityMonitor modulates approach velocity.
+  \item \textbf{Baseline}: sequential stop-and-manipulate. Fixed four-pose scan
+        after navigation, no concurrency.
+  \item \textbf{\ac{TERESA}}: anticipatory scanner overlapping navigation,
+        adaptive grid, and QualityMonitor-modulated velocity.
 \end{itemize}
 
-Five metrics were recorded for each trial: (i)~total mission time from search
-initiation to completion of the final \ac{FAST} target; (ii)~idle time, defined
-as periods during which neither the base nor the arm executes a productive
-task; (iii)~scan overlap, the fraction of the body scan completed before the
-base reaches the handoff distance; (iv)~probe positioning error, the Euclidean
-distance between the achieved \ac{EE} position and the desired target pose at
-each \ac{FAST} point; and (v)~lock time from search initiation to patient
-localisation confirmation.
+Metrics: total mission time, idle time, scan overlap (fraction of body scan
+completed before handoff), \ac{EE} positioning error at each \ac{FAST} point,
+and lock time.
 
 \subsection{Search Phase: Whole-Body Coverage and Dual-Sensor Lock}
 
@@ -121,30 +101,14 @@ these were skipped gracefully.  Each tier contributed measurably to mission
 completeness, with the movement penalty ensuring that base walking is used
 only when strictly needed.
 
-\subsection{Exposure Body Scanning and Interactive Review}
+\subsection{Exposure Body Scanning and Injury Detection}
 
-The exposure pipeline was evaluated with XX trials across supine, sitting, and
-standing patient postures. The adaptive grid generated XX~$\pm$~XX points
-(supine), XX~$\pm$~XX (sitting), and XX~$\pm$~XX (standing). Per-point dwell of
-\SI{2}{\second} yielded scan durations of XX~$\pm$~XX\,s, XX~$\pm$~XX\,s, and
-XX~$\pm$~XX\,s respectively. The injury detection pipeline achieved a wound
-recall of XX\,\% and burn classification accuracy of XX\,\% across all trials,
+The exposure pipeline was evaluated with XX trials on supine patients,
+generating XX~$\pm$~XX scan points. Per-point dwell of
+\SI{2}{\second} yielded scan durations of XX~$\pm$~XX\,s. The injury detection pipeline achieved a wound
+recall of XX\,\% and burn classification accuracy of XX\,\%,
 with a false positive rate of XX per scan on average. The 3D localisation error
 of detected injuries was XX~$\pm$~XX\,mm.
-
-The interactive review phase was evaluated by XX operators. Operators
-re-inspected XX~$\pm$~XX grid points per trial. The click-to-revisit
-latency---from browser click to the arm beginning its \ac{IK} trajectory---was
-XX~$\pm$~XX\,ms (measured via rosbridge round-trip plus \ac{ROS}~2 topic
-propagation). The full re-positioning sequence (body posture change, settle,
-and \ac{IK} trajectory) completed in XX~$\pm$~XX\,s per point. All operators
-successfully used the interface without prior training, reporting that the
-visual overlay and direct click interaction provided intuitive spatial
-awareness of injury locations on the patient's body. The web-based interface,
-combined with the manual scan gate toggle, allowed operators to control the
-pace of the mission: autonomous scanning was paused at each phase boundary
-until the operator confirmed readiness, balancing automation with human
-oversight.
 
 \subsection{Discussion}
 
