@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.26 (TeX Live 2024) (preloaded format=pdflatex 2024.3.29)  13 JUN 2026 23:23
+This is pdfTeX, Version 3.141592653-2.6-1.40.26 (TeX Live 2024) (preloaded format=pdflatex 2024.3.29)  13 JUN 2026 23:34
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -1095,21 +1095,15 @@ although it is yet undefined on input line 140.
 (./sections/problem_formulation.tex
 Package acronym Info: Label `acro:DOF' newly defined as it shall be overridden
 although it is yet undefined on input line 10.
-LaTeX Font Info:    Trying to load font information for T1+pcr on input line 27
-.
-
-(/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/t1pcr.fd
-File: t1pcr.fd 2001/06/04 font definitions for T1/pcr.
-)
 Package acronym Info: Label `acro:RGBD' newly defined as it shall be overridden
 
 although it is yet undefined on input line 40.
- [2])
-(./sections/active_perception.tex
+ [2]) (./sections/active_perception.tex
 Package acronym Info: Label `acro:YOLO' newly defined as it shall be overridden
 
 although it is yet undefined on input line 33.
- [3]
+
+[3]
 Package acronym Info: Label `acro:IK' newly defined as it shall be overridden
 although it is yet undefined on input line 125.
 ) (./sections/system_architecture.tex
@@ -1117,9 +1111,8 @@ Package acronym Info: Label `acro:ROS' newly defined as it shall be overridden
 although it is yet undefined on input line 8.
 Package acronym Info: Label `acro:DDS' newly defined as it shall be overridden
 although it is yet undefined on input line 9.
-
-[4]
-<figures/system_overview_annotated.pdf, id=304, 294.67644pt x 432.01521pt>
+ [4]
+<figures/system_overview_annotated.pdf, id=303, 294.67644pt x 432.01521pt>
 File: figures/system_overview_annotated.pdf Graphic file (type pdf)
 <use figures/system_overview_annotated.pdf>
 Package pdftex.def Info: figures/system_overview_annotated.pdf  used on input l
@@ -1129,40 +1122,33 @@ Package acronym Info: Label `acro:JTC' newly defined as it shall be overridden
 although it is yet undefined on input line 33.
 Package acronym Info: Label `acro:TF' newly defined as it shall be overridden
 although it is yet undefined on input line 68.
- (./figures/control_loop.tex) (./figures/fsm.tex)
-Underfull \hbox (badness 2293) in paragraph at lines 116--116
-\T1/ptm/m/n/8 Fig. 3.  []Mission [][] with 13 states. The robot searches for th
+ (./figures/fsm.tex)
+Underfull \hbox (badness 2293) in paragraph at lines 105--105
+\T1/ptm/m/n/8 Fig. 2.  []Mission [][] with 13 states. The robot searches for th
 e pa-tient through body ro-ta-tion and dual-sensor con-fir-ma-tion (SEARCH-
  []
 
 (./figures/system_block.tex)
 Package acronym Info: Label `acro:NLF' newly defined as it shall be overridden
-although it is yet undefined on input line 131.
+although it is yet undefined on input line 120.
 
 
-Package acronym Warning: Acronym `NLF' is not defined on input line 131.
+Package acronym Warning: Acronym `NLF' is not defined on input line 120.
 
 
-Package acronym Warning: Acronym `NLF' is not defined on input line 131.
+Package acronym Warning: Acronym `NLF' is not defined on input line 120.
 
 
-Package acronym Warning: Acronym `NLF' is not defined on input line 131.
+Package acronym Warning: Acronym `NLF' is not defined on input line 120.
 
-[5 <./figures/system_overview_annotated.pdf>]
-<figures/Web_interface.png, id=367, 2768.3425pt x 1575.8875pt>
+<figures/Web_interface.png, id=307, 2768.3425pt x 1575.8875pt>
 File: figures/Web_interface.png Graphic file (type png)
 <use figures/Web_interface.png>
-Package pdftex.def Info: figures/Web_interface.png  used on input line 156.
+Package pdftex.def Info: figures/Web_interface.png  used on input line 145.
 (pdftex.def)             Requested size: 252.0pt x 143.43484pt.
-)
-(./sections/experimental_results.tex
-Underfull \vbox (badness 10000) has occurred while \output is active []
-
-
-Underfull \vbox (badness 3635) has occurred while \output is active []
-
- [6 <./figures/Web_interface.png>]) (./sections/conclusion.tex) [7] (./TERESA.b
-bl
+) (./sections/experimental_results.tex [5 <./figures/system_overview_annotated.
+pdf>] [6 <./figures/Web_interface.png>]) (./sections/conclusion.tex)
+(./TERESA.bbl [7]
 Underfull \hbox (badness 1755) in paragraph at lines 185--188
 \T1/ptm/m/n/8 tion and rep-re-sen-ta-tion for robotic ma-nip-u-la-tion,'' \T1/p
 tm/m/it/8 arXiv preprint
@@ -1179,13 +1165,13 @@ Package rerunfilecheck Info: File `TERESA.out' has not changed.
 (rerunfilecheck)             Checksum: B70F62D7CF6C0AAC165032EBFCC74E3F;6342.
  ) 
 Here is how much of TeX's memory you used:
- 38347 strings out of 474116
- 924703 string characters out of 5743682
- 1971187 words of memory out of 5000000
- 59973 multiletter control sequences out of 15000+600000
- 679843 words of font info for 170 fonts, out of 8000000 for 9000
+ 38176 strings out of 474116
+ 921887 string characters out of 5743682
+ 1973187 words of memory out of 5000000
+ 59811 multiletter control sequences out of 15000+600000
+ 679222 words of font info for 168 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
- 84i,11n,87p,785b,1098s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 84i,10n,87p,785b,1100s stack positions out of 10000i,1000n,20000p,200000b,200000s
 </usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx10.pfb
 ></usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx8.pfb><
 /usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmex10.pfb></
@@ -1205,15 +1191,14 @@ e/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb></usr/local/texlive
 024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></usr/local/texlive/202
 4/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy8.pfb></usr/local/texlive/2024/
 texmf-dist/fonts/type1/public/amsfonts/symbols/msbm10.pfb></usr/local/texlive/2
-024/texmf-dist/fonts/type1/urw/courier/ucrr8a.pfb></usr/local/texlive/2024/texm
-f-dist/fonts/type1/urw/times/utmb8a.pfb></usr/local/texlive/2024/texmf-dist/fon
-ts/type1/urw/times/utmbi8a.pfb></usr/local/texlive/2024/texmf-dist/fonts/type1/
-urw/times/utmr8a.pfb></usr/local/texlive/2024/texmf-dist/fonts/type1/urw/times/
-utmri8a.pfb>
-Output written on TERESA.pdf (9 pages, 1897678 bytes).
+024/texmf-dist/fonts/type1/urw/times/utmb8a.pfb></usr/local/texlive/2024/texmf-
+dist/fonts/type1/urw/times/utmbi8a.pfb></usr/local/texlive/2024/texmf-dist/font
+s/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/texmf-dist/fonts/type1/ur
+w/times/utmri8a.pfb>
+Output written on TERESA.pdf (9 pages, 1882940 bytes).
 PDF statistics:
- 523 PDF objects out of 1000 (max. 8388607)
- 423 compressed objects within 5 object streams
- 122 named destinations out of 1000 (max. 500000)
+ 516 PDF objects out of 1000 (max. 8388607)
+ 418 compressed objects within 5 object streams
+ 121 named destinations out of 1000 (max. 500000)
  287 words of extra memory for PDF output out of 10000 (max. 10000000)
 

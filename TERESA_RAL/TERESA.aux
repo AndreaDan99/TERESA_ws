@@ -189,8 +189,6 @@
 \newlabel{acro:JTC}{{\mbox  {IV-A}}{5}{Hardware Platform}{section*.15}{}}
 \acronymused{JTC}
 \acronymused{RGBD}
-\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Control loop diagram showing the two actuation paths: the WBC QP path for positioning and the Impedance Control path with FK feedback for compliant contact during ultrasound scanning.}}{5}{figure.2}\protected@file@percent }
-\newlabel{fig:control_loop}{{2}{5}{Control loop diagram showing the two actuation paths: the WBC QP path for positioning and the Impedance Control path with FK feedback for compliant contact during ultrasound scanning}{figure.2}{}}
 \acronymused{EE}
 \acronymused{WBC}
 \acronymused{YOLO}
@@ -213,11 +211,14 @@
 \acronymused{FAST}
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-C}}Web-Based Operator Interface}{5}{subsection.4.3}\protected@file@percent }
 \acronymused{TERESA}
-\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Mission \ac {FSM} with 13 states. The robot searches for the patient through body rotation and dual-sensor confirmation (SEARCHING~$\to $~SEMI\_LOCKING~$\to $~LOCKING), approaches while running the anticipatory scanner (PRE\_APPROACH~$\to $~APPROACHING), performs a posture-adaptive exposure body scan with integrated wound and burn detection (EXPOSURE\_SCANNING), enters an interactive review phase for operator-driven re-inspection (EXPOSURE\_REVIEW), and executes \ac {FAST} ultrasound scanning with pre-planned body reconfiguration (SCANNING). Transitions are triggered by perception confidence (dashed) or geometric conditions (solid).}}{6}{figure.3}\protected@file@percent }
+\acronymused{TERESA}
+\acronymused{IK}
+\acronymused{ROS}
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Mission \ac {FSM} with 13 states. The robot searches for the patient through body rotation and dual-sensor confirmation (SEARCHING~$\to $~SEMI\_LOCKING~$\to $~LOCKING), approaches while running the anticipatory scanner (PRE\_APPROACH~$\to $~APPROACHING), performs a posture-adaptive exposure body scan with integrated wound and burn detection (EXPOSURE\_SCANNING), enters an interactive review phase for operator-driven re-inspection (EXPOSURE\_REVIEW), and executes \ac {FAST} ultrasound scanning with pre-planned body reconfiguration (SCANNING). Transitions are triggered by perception confidence (dashed) or geometric conditions (solid).}}{6}{figure.2}\protected@file@percent }
 \acronymused{FSM}
 \acronymused{FAST}
-\newlabel{fig:fsm}{{3}{6}{Mission \ac {FSM} with 13 states. The robot searches for the patient through body rotation and dual-sensor confirmation (SEARCHING~$\to $~SEMI\_LOCKING~$\to $~LOCKING), approaches while running the anticipatory scanner (PRE\_APPROACH~$\to $~APPROACHING), performs a posture-adaptive exposure body scan with integrated wound and burn detection (EXPOSURE\_SCANNING), enters an interactive review phase for operator-driven re-inspection (EXPOSURE\_REVIEW), and executes \ac {FAST} ultrasound scanning with pre-planned body reconfiguration (SCANNING). Transitions are triggered by perception confidence (dashed) or geometric conditions (solid)}{figure.3}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces System block diagram. The Perception layer processes dual-sensor \ac {RGBD} streams via \ac {YOLO}-pose, Kalman filtering, \ac {NLF} skeleton detection, surface estimation, and injury detection. The 13-state Mission \ac {FSM} orchestrates four Planning modules: Exposure Scanner, \ac {FAST} Ultrasound, Body Pose Optimizer, and the Web UI for interactive review. The Control layer executes real-time decisions through the \ac {WBC} \ac {QP}, \ac {IK} Goal Multiplexer, and Impedance Controller. Dashed arrows denote operator-triggered or posture-optimisation paths.}}{6}{figure.4}\protected@file@percent }
+\newlabel{fig:fsm}{{2}{6}{Mission \ac {FSM} with 13 states. The robot searches for the patient through body rotation and dual-sensor confirmation (SEARCHING~$\to $~SEMI\_LOCKING~$\to $~LOCKING), approaches while running the anticipatory scanner (PRE\_APPROACH~$\to $~APPROACHING), performs a posture-adaptive exposure body scan with integrated wound and burn detection (EXPOSURE\_SCANNING), enters an interactive review phase for operator-driven re-inspection (EXPOSURE\_REVIEW), and executes \ac {FAST} ultrasound scanning with pre-planned body reconfiguration (SCANNING). Transitions are triggered by perception confidence (dashed) or geometric conditions (solid)}{figure.2}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces System block diagram. The Perception layer processes dual-sensor \ac {RGBD} streams via \ac {YOLO}-pose, Kalman filtering, \ac {NLF} skeleton detection, surface estimation, and injury detection. The 13-state Mission \ac {FSM} orchestrates four Planning modules: Exposure Scanner, \ac {FAST} Ultrasound, Body Pose Optimizer, and the Web UI for interactive review. The Control layer executes real-time decisions through the \ac {WBC} \ac {QP}, \ac {IK} Goal Multiplexer, and Impedance Controller. Dashed arrows denote operator-triggered or posture-optimisation paths.}}{6}{figure.3}\protected@file@percent }
 \acronymused{RGBD}
 \acronymused{YOLO}
 \acronymused{NLF}
@@ -226,12 +227,7 @@
 \acronymused{WBC}
 \acronymused{QP}
 \acronymused{IK}
-\newlabel{fig:system_block}{{4}{6}{System block diagram. The Perception layer processes dual-sensor \ac {RGBD} streams via \ac {YOLO}-pose, Kalman filtering, \ac {NLF} skeleton detection, surface estimation, and injury detection. The 13-state Mission \ac {FSM} orchestrates four Planning modules: Exposure Scanner, \ac {FAST} Ultrasound, Body Pose Optimizer, and the Web UI for interactive review. The Control layer executes real-time decisions through the \ac {WBC} \ac {QP}, \ac {IK} Goal Multiplexer, and Impedance Controller. Dashed arrows denote operator-triggered or posture-optimisation paths}{figure.4}{}}
-\acronymused{TERESA}
-\acronymused{IK}
-\acronymused{ROS}
-\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Web-based operator interface during the exposure scanning phase. The Body Map (top-down view) shows the patient mannequin skeleton with colour-coded body regions, the exposure scan grid points, and the Spot robot position (yellow). The info panel (top-left) displays Spot's current posture parameters. During exposure review, the operator can click any grid marker to command the robot to re-inspect that body region.}}{6}{figure.5}\protected@file@percent }
-\newlabel{fig:web_interface}{{5}{6}{Web-based operator interface during the exposure scanning phase. The Body Map (top-down view) shows the patient mannequin skeleton with colour-coded body regions, the exposure scan grid points, and the Spot robot position (yellow). The info panel (top-left) displays Spot's current posture parameters. During exposure review, the operator can click any grid marker to command the robot to re-inspect that body region}{figure.5}{}}
+\newlabel{fig:system_block}{{3}{6}{System block diagram. The Perception layer processes dual-sensor \ac {RGBD} streams via \ac {YOLO}-pose, Kalman filtering, \ac {NLF} skeleton detection, surface estimation, and injury detection. The 13-state Mission \ac {FSM} orchestrates four Planning modules: Exposure Scanner, \ac {FAST} Ultrasound, Body Pose Optimizer, and the Web UI for interactive review. The Control layer executes real-time decisions through the \ac {WBC} \ac {QP}, \ac {IK} Goal Multiplexer, and Impedance Controller. Dashed arrows denote operator-triggered or posture-optimisation paths}{figure.3}{}}
 \@writefile{toc}{\contentsline {section}{\numberline {V}Experimental Results}{6}{section.5}\protected@file@percent }
 \newlabel{sec:experimental_results}{{V}{6}{Experimental Results}{section.5}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-A}}Experimental Setup}{6}{subsection.5.1}\protected@file@percent }
@@ -240,10 +236,15 @@
 \acronymused{TERESA}
 \acronymused{EE}
 \acronymused{FAST}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-B}}Search Phase: Whole-Body Coverage and Dual-Sensor Lock}{7}{subsection.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-B}}Search Phase: Whole-Body Coverage and Dual-Sensor Lock}{6}{subsection.5.2}\protected@file@percent }
+\acronymused{TERESA}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Web-based operator interface during the exposure scanning phase. The Body Map (top-down view) shows the patient mannequin skeleton with colour-coded body regions, the exposure scan grid points, and the Spot robot position (yellow). The info panel (top-left) displays Spot's current posture parameters. During exposure review, the operator can click any grid marker to command the robot to re-inspect that body region.}}{6}{figure.4}\protected@file@percent }
+\newlabel{fig:web_interface}{{4}{6}{Web-based operator interface during the exposure scanning phase. The Body Map (top-down view) shows the patient mannequin skeleton with colour-coded body regions, the exposure scan grid points, and the Spot robot position (yellow). The info panel (top-left) displays Spot's current posture parameters. During exposure review, the operator can click any grid marker to command the robot to re-inspect that body region}{figure.4}{}}
 \acronymused{TERESA}
 \acronymused{TERESA}
-\acronymused{TERESA}
+\bibstyle{IEEEtran}
+\bibdata{references}
+\bibcite{rozycki1996}{1}
 \acronymused{WBC}
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-C}}End-to-End Mission Performance}{7}{subsection.5.3}\protected@file@percent }
 \acronymused{TERESA}
@@ -258,9 +259,13 @@
 \@writefile{toc}{\contentsline {section}{\numberline {VI}Conclusion}{7}{section.6}\protected@file@percent }
 \newlabel{sec:conclusion}{{VI}{7}{Conclusion}{section.6}{}}
 \acronymused{TERESA}
-\bibstyle{IEEEtran}
-\bibdata{references}
-\bibcite{rozycki1996}{1}
+\acronymused{FAST}
+\acronymused{TERESA}
+\acronymused{FAST}
+\acronymused{FAST}
+\acronymused{TERESA}
+\acronymused{ABCDE}
+\@writefile{toc}{\contentsline {section}{References}{7}{section*.18}\protected@file@percent }
 \bibcite{vonhaxthausen2021}{2}
 \bibcite{li2021overview}{3}
 \bibcite{munir2025}{4}
@@ -295,13 +300,6 @@
 \bibcite{tordesillas2022}{33}
 \bibcite{breyer2022}{34}
 \bibcite{hu2022}{35}
-\acronymused{FAST}
-\acronymused{TERESA}
-\acronymused{FAST}
-\acronymused{FAST}
-\acronymused{TERESA}
-\acronymused{ABCDE}
-\@writefile{toc}{\contentsline {section}{References}{8}{section*.18}\protected@file@percent }
 \bibcite{ren2023}{36}
 \bibcite{mittal2022}{37}
 \bibcite{jauhri2024}{38}

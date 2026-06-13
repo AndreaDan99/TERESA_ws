@@ -193,8 +193,8 @@ Z.~Zhang and D.~Scaramuzza, ``Fisher information field: An efficient and
 
 \bibitem{tordesillas2022}
 J.~Tordesillas and J.~P. How, ``{PANTHER}: Perception-aware trajectory planner
-  in dynamic environments,'' \emph{IEEE Access}, vol.~10, pp. 22\,662--22\,677,
-  2022.
+  in dynamic environments,'' in \emph{Proc. IEEE International Conference on
+  Robotics and Automation (ICRA)}, 2022, pp. 22\,662--22\,677.
 
 \bibitem{breyer2022}
 M.~Breyer, L.~Ott, R.~Siegwart, and J.~J. Chung, ``Closed-loop next-best-view
