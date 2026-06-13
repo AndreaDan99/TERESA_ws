@@ -389,7 +389,7 @@ body{
       <span class="legend-item"><span class="legend-swatch" style="background:#b333ff;border:2px solid #b333ff;background:transparent"></span>FEET</span>
       <span class="sep" style="color:var(--border);margin:0 4px">|</span>
       <span class="legend-label">POINTS:</span>
-      <span class="legend-item"><span class="legend-swatch" style="background:#ff8844"></span>Scan point</span>
+      <span class="legend-item">● Scan points = region color</span>
     </div>
   </div>
 
@@ -886,7 +886,7 @@ class TeresaController{
     // legend — bottom-right
     const lgX=W-160,lgY=H-210;
     ctx.fillStyle='rgba(10,10,20,.8)';ctx.strokeStyle='rgba(100,100,140,.4)';ctx.lineWidth=1;
-    ctx.beginPath();ctx.roundRect(lgX,lgY,152,202,6);ctx.fill();ctx.stroke();
+    ctx.beginPath();ctx.roundRect(lgX,lgY,152,175,6);ctx.fill();ctx.stroke();
     ctx.fillStyle='#888';ctx.font='bold 10px monospace';ctx.fillText('BODY REGIONS',lgX+8,lgY+18);
     ctx.font='9px monospace';
     let li=0;
@@ -897,9 +897,7 @@ class TeresaController{
       ctx.fillStyle='#ccc';ctx.fillText(r.name,lgX+26,y+10);
       li++;
     }
-    ctx.fillStyle='#888';ctx.font='bold 10px monospace';ctx.fillText('GRID',lgX+8,lgY+188);
-    ctx.beginPath();ctx.arc(lgX+14,lgY+196,4,0,Math.PI*2);ctx.fillStyle='#ff8844';ctx.fill();
-    ctx.fillStyle='#ccc';ctx.font='9px monospace';ctx.fillText('Scan points',lgX+26,lgY+199);
+
   }
 
   toggleBodyMapSkel(){
