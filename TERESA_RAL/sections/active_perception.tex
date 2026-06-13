@@ -28,7 +28,7 @@ configuration that maximises detection confidence.
 \subsubsection{Coarse rotation with targeted refinement}
 
 The robot sweeps through a sequence of body yaw orientations using
-\texttt{cmd\_vel} angular control, pausing at each to allow two cameras to
+velocity control, pausing at each to allow two cameras to
 observe the environment. A wide-field Orbbec \ac{RGBD} camera mounted on Spot's
 body runs \ac{YOLO}11-pose~\cite{maji2022} and a posture classifier that
 outputs a confidence score $c \in [0, 1]$. An \ac{EE}-mounted RealSense
@@ -106,7 +106,7 @@ four torso landmarks (shoulders and hips), which drive the grid generation. If
 all four keypoints are detected with high confidence, the scan uses a minimal
 two-pose grid: the current \ac{EE} pose advanced toward the patient plus an
 elevated viewpoint. If any keypoint falls below the threshold, the grid expands
-to a four-pose comprehensive pattern with symmetric lateral offsets, an
+to a three-pose comprehensive pattern with symmetric lateral offsets, an
 elevated frontal viewpoint, and the home pose interleaved between lateral
 transits. All scanning poses include a forward advance toward the patient. At
 each pose, depth and skeleton data are fused into 3D keypoint estimates via a
@@ -145,7 +145,10 @@ regularisation term that penalises lateral displacement:
 where $\mathbf{p}_{\mathrm{sweet}} \in \mathbb{R}^3$ is the empirically
 determined centre of the Z1 arm's preferred manipulation region in
 $\mathcal{F}_0$, and $\lambda = 0.50$ weights lateral movement against
-reachability.  This penalty encourages the optimiser to prefer height and pitch
+reachability.  The value $\lambda=0.50$ was chosen empirically to balance
+reachability against energy cost: $\lambda>1.0$ prevented necessary base
+displacement, while $\lambda<0.25$ caused excessive walking for marginal
+reachability gains.  This penalty encourages the optimiser to prefer height and pitch
 adjustments over base walking---reducing energy consumption and producing
 smoother, more predictable motion---while still allowing longitudinal
 displacement when strictly necessary.  The two-tier escalation proceeds as

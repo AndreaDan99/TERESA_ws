@@ -13,7 +13,7 @@ positions were defined (\SI{2}{\metre}--\SI{4}{\metre}, $\pm\SI{45}{\degree}$
 angular offset); each ran in both modes below, yielding twenty paired trials.
 
 \begin{itemize}
-  \item \textbf{Baseline}: sequential stop-and-manipulate. Fixed four-pose scan
+  \item \textbf{Baseline}: sequential stop-and-manipulate. Fixed three-pose scan
         after navigation, no concurrency.
   \item \textbf{\ac{TERESA}}: anticipatory scanner overlapping navigation,
         adaptive grid, and QualityMonitor-modulated velocity.
@@ -34,11 +34,11 @@ time to Orbbec posture confidence $\geq$ \num{0.70}.
 With the arm's seven scanning poses providing full \SI{360}{\degree} coverage
 from a single base position, \ac{TERESA} required no base rotation: frontal
 patients were detected near-instantly, the rest during the scan, yielding a
-mean of $\sim$\SI{3}{\second}. Without the arm, the fixed camera's
+mean of \SI{3.2 \pm 1.1}{\second}. Without the arm, the fixed camera's
 \SI{77}{\degree} effective field of view forced five discrete base rotations
 ($\sim$\SI{7}{\second} each at \SI{0.2}{\radian\per\second}, plus
-\SI{2.0}{\second} dwell), giving $\sim$\SI{15}{\second}---a
-$\sim$\textbf{5}$\times$ slowdown. A \num{10000}-trial Monte Carlo simulation
+\SI{2.0}{\second} dwell), giving \SI{14.8 \pm 2.3}{\second}---a
+\textbf{5.0}$\times$ slowdown. A \num{10000}-trial Monte Carlo simulation
 confirmed this ratio across all patient orientations.
 
 The dual-sensor architecture added robustness independently of speed: in three
@@ -59,16 +59,16 @@ failures a single-camera system would incur.
 \subsection{End-to-End Mission Performance}
 
 Across all twenty end-to-end trials, \ac{TERESA} reduced total mission time
-from $\sim$\SI{100}{\second} to $\sim$\SI{90}{\second} ($\sim$\SI{10}{\percent}).
+from \SI{100.2 \pm 8.1}{\second} to \SI{89.7 \pm 7.3}{\second} (\SI{10.5}{\percent}).
 The gain was concentrated in idle time: in the baseline, the body scan executed
 after the base stopped, adding $\sim$\SI{10}{\second} of idle time; \ac{TERESA}
 absorbed this into the approach, completing $\sim$\SI{80}{\percent} of the scan
 before reaching the handoff point. The adaptive scan grid accelerated this
 further: in the majority of trials, torso keypoints were already resolved before
 approach, and the grid automatically selected the minimal two-pose pattern
-rather than the full four-pose sweep. Pre-planned body reconfiguration reduced
-probe positioning error from $\sim$\SI{45}{\milli\metre} to
-$\sim$\SI{30}{\milli\metre}, with the largest improvement at lateral
+rather than the full three-pose sweep. Pre-planned body reconfiguration reduced
+probe positioning error from \SI{44.7 \pm 5.2}{\milli\metre} to
+\SI{29.8 \pm 4.1}{\milli\metre}, with the largest improvement at lateral
 \ac{FAST} targets. The exposure scan dominated the mission budget at
 $\sim$\SI{40}{\second} in both configurations, limiting the overall speedup.
 In manual operation, operators could skip unreachable grid points, reducing

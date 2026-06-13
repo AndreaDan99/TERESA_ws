@@ -90,6 +90,17 @@ the \ac{WBC} coordinator: during the \ac{FAST} cycle posture changes are
 applied before each target arm trajectory.  An emergency stop immediately
 halts the base and returns the arm to a safe configuration.
 
+Fig.~\ref{fig:control_loop} illustrates the two actuation paths.
+
+\begin{figure}[t]
+  \centering
+  \resizebox{\columnwidth}{!}{\input{figures/control_loop}}
+  \caption{Control loop diagram showing the two actuation paths: the WBC QP path
+           for positioning and the Impedance Control path with FK feedback for
+           compliant contact during ultrasound scanning.}
+  \label{fig:control_loop}
+\end{figure}
+
 \begin{figure*}[t]
   \centering
   \resizebox{\textwidth}{!}{\input{figures/fsm}}

@@ -100,23 +100,31 @@ models into its onboard perception pipeline, running inference on the
 interactive web-based review interface enabling operator-guided re-inspection
 of detected injuries.
 
-The key contributions of this paper are as follows.  First, we introduce a
-whole-body active perception framework in which body posture---height, pitch,
-and yaw---is optimised to improve perceptual quality rather than solely to
-minimise kinematic error (Section~\ref{sec:active_perception}).  Second, a
-hybrid confidence-gated search strategy combines coarse body rotation with
-targeted pitch refinement and dual-sensor locking, ensuring robust patient
-localisation before the robot commits to navigation.  Third, an exposure body
-scanning pipeline acquires multi-view anatomical data through an adaptive
-skeleton-keypoint grid, integrating pre-trained forensic wound and burn
-classification models with an interactive web-based review interface
-(Sections~\ref{sec:active_perception} and~\ref{sec:system_architecture}).
-Fourth, a pre-planned body reconfiguration method optimises the legged base
-posture for each anatomical scanning target through offline grid search,
-maximising arm manipulability without real-time whole-body optimisation.
-Finally, experimental validation on a physical Spot+Z1 platform demonstrates
-fully autonomous emergency assessment with reduced idle time compared to a
-sequential stop-and-manipulate baseline (Section~\ref{sec:experimental_results}).
+The key contributions of this paper are as follows.
+\begin{enumerate}
+  \item \textbf{Whole-body active perception framework} in which body
+        posture---height, pitch, and yaw---is optimised to improve perceptual
+        quality rather than solely to minimise kinematic error
+        (Section~\ref{sec:active_perception}).
+  \item \textbf{Hybrid confidence-gated search strategy} that combines coarse
+        body rotation with targeted pitch refinement and dual-sensor locking,
+        ensuring robust patient localisation before the robot commits to
+        navigation.
+  \item \textbf{Exposure body scanning pipeline} that acquires multi-view
+        anatomical data through an adaptive skeleton-keypoint grid, integrating
+        pre-trained forensic wound and burn classification models with an
+        interactive web-based review interface
+        (Sections~\ref{sec:active_perception}
+        and~\ref{sec:system_architecture}).
+  \item \textbf{Pre-planned body reconfiguration method} that optimises the
+        legged base posture for each anatomical scanning target through offline
+        grid search, maximising arm manipulability without real-time whole-body
+        optimisation.
+  \item \textbf{Experimental validation} on a physical Spot+Z1 platform
+        demonstrating fully autonomous emergency assessment with reduced idle
+        time compared to a sequential stop-and-manipulate baseline
+        (Section~\ref{sec:experimental_results}).
+\end{enumerate}
 
 To the best of our knowledge, \ac{TERESA} is the first legged robotic system to
 demonstrate perception-driven whole-body reconfiguration for autonomous
