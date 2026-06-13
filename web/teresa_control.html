@@ -380,7 +380,7 @@ body{
     </div>
     <div id="exposure-legend" style="display:none">
       <span class="legend-label">REGIONS:</span>
-      <span class="legend-item"><span class="legend-swatch" style="background:#ffdc00;border:2px solid #ffdc00;background:transparent"></span>HEAD</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#ff44cc;border:2px solid #ff44cc;background:transparent"></span>HEAD</span>
       <span class="legend-item"><span class="legend-swatch" style="background:#3366ff;border:2px solid #3366ff;background:transparent"></span>TORSO</span>
       <span class="legend-item"><span class="legend-swatch" style="background:#ff3333;border:2px solid #ff3333;background:transparent"></span>L-ARM</span>
       <span class="legend-item"><span class="legend-swatch" style="background:#ff8000;border:2px solid #ff8000;background:transparent"></span>R-ARM</span>
@@ -829,7 +829,7 @@ class TeresaController{
     const proj=(wx,wy)=>({x:ox+(wx-xMin)*scale,y:oy+(wy-yMin)*scale});
 
       const BODY_REGIONS = {
-  HEAD:  {name:'HEAD',  color:'#ffdc00', joints:[12,15]},
+  HEAD: {name:'HEAD', color:'#ff44cc', joints:[12,15]},
   TORSO: {name:'TORSO', color:'#3366ff', joints:[0,1,2,12,13,14,16,17]},
   LARM:  {name:'L-ARM', color:'#ff3333', joints:[16,18,20,22]},
   RARM:  {name:'R-ARM', color:'#ff8000', joints:[17,19,21,23]},

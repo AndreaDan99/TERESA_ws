@@ -74,7 +74,7 @@ REGION_ORDER = [
 ]
 
 REGION_COLORS = {
-    BodyRegion.HEAD:      (1.0, 0.9, 0.0),  # yellow
+    BodyRegion.HEAD: (1.0, 0.27, 0.8),  # yellow
     BodyRegion.TORSO:     (0.2, 0.4, 1.0),  # blue
     BodyRegion.LEFT_ARM:  (1.0, 0.2, 0.2),  # red
     BodyRegion.RIGHT_ARM: (1.0, 0.5, 0.0),  # orange
