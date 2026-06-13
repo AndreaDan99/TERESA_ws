@@ -1081,7 +1081,7 @@ class ExposurePoseTester(Node):
                     else:
                         twist = Twist()
                         speed = min(abs(dy) * 0.3, self._nav_y_speed)
-                        twist.linear.y = -math.copysign(max(speed, 0.12), dy)  # min 0.12 m/s (Spot deadband ~0.10)
+                        twist.linear.y = math.copysign(max(speed, 0.12), dy)  # +Y = left in body frame, match odom
                         twist.angular.z = 0.0
                         self._pub_cmd_vel.publish(twist)
 
