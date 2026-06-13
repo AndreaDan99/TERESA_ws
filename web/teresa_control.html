@@ -720,9 +720,6 @@ class TeresaController{
         const q = msg.pose.orientation;
         const yaw = Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
         this.spotMapPose = {x: msg.pose.position.x, y: msg.pose.position.y, yaw: yaw};
-        const yawDeg = (yaw * 180 / Math.PI).toFixed(1);
-        $('start-indicator').textContent = `(${msg.pose.position.x.toFixed(2)},${msg.pose.position.y.toFixed(2)}) ${yawDeg}° (test)`;
-        $('start-indicator').style.color = '#ffdc00';
         this.drawBodyMap();
       }
     });
@@ -852,7 +849,7 @@ class TeresaController{
         if(rpts.length<2)continue;
         let rx1=Infinity,ry1=Infinity,rx2=-Infinity,ry2=-Infinity;
         for(const p of rpts){rx1=Math.min(rx1,p.x);ry1=Math.min(ry1,p.y);rx2=Math.max(rx2,p.x);ry2=Math.max(ry2,p.y);}
-        const pad=Math.max(8,(rx2-rx1)*.15,(ry2-ry1)*.15);
+        const pad=Math.max(6,(rx2-rx1)*.10,(ry2-ry1)*.10);
         ctx.strokeStyle=r.color;ctx.lineWidth=2;ctx.globalAlpha=.7;
         ctx.strokeRect(rx1-pad,ry1-pad,rx2-rx1+pad*2,ry2-ry1+pad*2);
         ctx.globalAlpha=1;
@@ -881,6 +878,24 @@ class TeresaController{
       ctx.fillStyle='#ffdc00';ctx.font='9px monospace'
       ctx.fillText('SPOT',sw/2+4,4)
       ctx.restore()
+    }
+
+    // Spot info — top-left
+    if(this.spotMapPose){
+      const ix=12,iy=18
+      ctx.fillStyle='rgba(10,10,20,.75)';ctx.strokeStyle='rgba(100,100,140,.3)';ctx.lineWidth=1
+      ctx.beginPath();ctx.roundRect(ix-6,iy-12,170,58,5);ctx.fill();ctx.stroke()
+      ctx.fillStyle='#ffdc00';ctx.font='bold 9px monospace'
+      ctx.fillText('SPOT',ix,iy)
+      ctx.fillStyle='#aaa';ctx.font='9px monospace'
+      const yawDeg=(this.spotMapPose.yaw*180/Math.PI).toFixed(1)
+      ctx.fillText(`X: ${this.spotMapPose.x.toFixed(2)}  Y: ${this.spotMapPose.y.toFixed(2)}  Yaw: ${yawDeg}°`,ix,iy+16)
+      const h=this.bodyInOdom?this.bodyInOdom.translation.z:'---'
+      const hStr=typeof h==='number'?h.toFixed(2)+'m':h
+      ctx.fillText(`Height: ${hStr}`,ix,iy+32)
+      const pitch=this.bodyInOdom?Math.asin(-2*(this.bodyInOdom.rotation.x*this.bodyInOdom.rotation.z-this.bodyInOdom.rotation.w*this.bodyInOdom.rotation.y))*180/Math.PI:'---'
+      const pStr=typeof pitch==='number'?pitch.toFixed(1)+'°':pitch
+      ctx.fillText(`Pitch:  ${pStr}`,ix,iy+48)
     }
 
     // legend — bottom-right
