@@ -815,7 +815,7 @@ class TeresaController{
     if(skel){for(const p of skel){if(p.position&&!isNaN(p.position.x))allPts.push({x:p.position.x,y:p.position.y});}}
     if(grid){for(const m of grid){allPts.push({x:m.pose.position.x,y:m.pose.position.y});}}
     if(this.spotMapPose){
-      const hw=0.3,hh=0.175,c=Math.cos(this.spotMapPose.yaw),s=Math.sin(this.spotMapPose.yaw)
+      const hw=0.4,hh=0.225,c=Math.cos(this.spotMapPose.yaw),s=Math.sin(this.spotMapPose.yaw)
       const cx=this.spotMapPose.x,cy=this.spotMapPose.y
       for(const[lx,ly]of[[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]])allPts.push({x:cx+lx*c-ly*s,y:cy+lx*s+ly*c})
     }
@@ -869,7 +869,7 @@ class TeresaController{
     // Spot start position
     if(this.spotMapPose){
       const sc=proj(this.spotMapPose.x,this.spotMapPose.y)
-      const sw=0.6*scale,sh=0.35*scale
+      const sw=0.8*scale,sh=0.45*scale
       ctx.save()
       ctx.translate(sc.x,sc.y)
       ctx.rotate(this.spotMapPose.yaw)
@@ -882,20 +882,20 @@ class TeresaController{
 
     // Spot info — top-left
     if(this.spotMapPose){
-      const ix=12,iy=18
+      const ix=24,iy=32
       ctx.fillStyle='rgba(10,10,20,.75)';ctx.strokeStyle='rgba(100,100,140,.3)';ctx.lineWidth=1
-      ctx.beginPath();ctx.roundRect(ix-6,iy-12,170,58,5);ctx.fill();ctx.stroke()
-      ctx.fillStyle='#ffdc00';ctx.font='bold 9px monospace'
+      ctx.beginPath();ctx.roundRect(ix-12,iy-24,310,100,5);ctx.fill();ctx.stroke()
+      ctx.fillStyle='#ffdc00';ctx.font='bold 13px monospace'
       ctx.fillText('SPOT',ix,iy)
-      ctx.fillStyle='#aaa';ctx.font='9px monospace'
+      ctx.fillStyle='#aaa';ctx.font='11px monospace'
       const yawDeg=(this.spotMapPose.yaw*180/Math.PI).toFixed(1)
-      ctx.fillText(`X: ${this.spotMapPose.x.toFixed(2)}  Y: ${this.spotMapPose.y.toFixed(2)}  Yaw: ${yawDeg}°`,ix,iy+16)
+      ctx.fillText(`X: ${this.spotMapPose.x.toFixed(2)}  Y: ${this.spotMapPose.y.toFixed(2)}  Yaw: ${yawDeg}°`,ix,iy+22)
       const h=this.bodyInOdom?this.bodyInOdom.translation.z:'---'
       const hStr=typeof h==='number'?h.toFixed(2)+'m':h
-      ctx.fillText(`Height: ${hStr}`,ix,iy+32)
+      ctx.fillText(`Height: ${hStr}`,ix,iy+44)
       const pitch=this.bodyInOdom?Math.asin(-2*(this.bodyInOdom.rotation.x*this.bodyInOdom.rotation.z-this.bodyInOdom.rotation.w*this.bodyInOdom.rotation.y))*180/Math.PI:'---'
       const pStr=typeof pitch==='number'?pitch.toFixed(1)+'°':pitch
-      ctx.fillText(`Pitch:  ${pStr}`,ix,iy+48)
+      ctx.fillText(`Pitch:  ${pStr}`,ix,iy+66)
     }
 
     // legend — bottom-right
