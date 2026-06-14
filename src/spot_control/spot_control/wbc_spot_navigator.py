@@ -66,7 +66,7 @@ class WBCSpotNavigator(Node):
         self.declare_parameter('nav_y_min_speed',      0.12)
         self.declare_parameter('nav_y_tolerance',      0.05)
         self.declare_parameter('nav_y_timeout',        10.0)
-        self.declare_parameter('nav_y_invert',         True)  # invert Y direction (Spot +Y=right)
+        self.declare_parameter('nav_y_invert',         False)  # set True if +Y=right
         self._p = _Params(self)
 
         self._tf = Buffer()

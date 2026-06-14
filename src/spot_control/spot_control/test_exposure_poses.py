@@ -509,7 +509,7 @@ class ExposurePoseTester(Node):
             self.declare_parameter('nav_y_speed', 0.15)
             .get_parameter_value().double_value)
         self._nav_y_invert = bool(
-            self.declare_parameter('nav_y_invert', True)  # invert Y direction (Spot driver uses +Y=right in body frame)
+            self.declare_parameter('nav_y_invert', False)  # set True if +Y=right in Spot body frame
             .get_parameter_value().bool_value)
 
         # Publishers
@@ -764,6 +764,16 @@ class ExposurePoseTester(Node):
         mx, mz = self._z1_mount_x, self._z1_mount_z
         penalty = self._spot_y_penalty  # cost multiplier for Y displacement
 
+        # Get Spot's real position from TF (link00 base is relative to this)
+        try:
+            t = self._tf_buffer.lookup_transform(
+                'my_spot/odom', 'my_spot/body', rclpy.time.Time())
+            spot_x_real = t.transform.translation.x
+            spot_z_real = t.transform.translation.z
+        except TransformException:
+            spot_x_real = 0.0
+            spot_z_real = 0.0
+
         best_spot_y = 0.0
         best_h, best_p = 0.0, 0.0
         best_dist = float('inf')
@@ -776,8 +786,8 @@ class ExposurePoseTester(Node):
                     c = math.cos(p)
                     s = math.sin(p)
 
-                    link00_x = c * mx + s * mz
-                    link00_z = h - s * mx + c * mz
+                    link00_x = spot_x_real + c * mx + s * mz
+                    link00_z = spot_z_real + h - s * mx + c * mz
 
                     dx = camera_odom[0] - link00_x
                     dz = camera_odom[2] - link00_z
