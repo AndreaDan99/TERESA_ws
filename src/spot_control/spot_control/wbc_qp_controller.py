@@ -494,7 +494,7 @@ class WBCQPControllerNode(Node):
         poses = []
         for pos, quat, label in SEARCH_POSES:
             clipped, was_clipped, _ = self._ws_checker.clip_target(pos)
-            poses.append(_make_pose_stamped(clipped, quat))
+            poses.append(_make_pose_stamped(clipped, quat, frame_id='link00'))
             if was_clipped:
                 self.get_logger().warn(f'{label} clipped: {pos} → {clipped}')
         return poses
