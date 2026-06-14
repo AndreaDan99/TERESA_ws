@@ -1228,7 +1228,7 @@ class WBCCoordinatorNode(Node):
                    timeout_sec: float = 10.0) -> TransformStamped | None:
         try:
             return self._tf.lookup_transform(
-                source, target, self.get_clock().now(),
+                source, target, rclpy.time.Time(),
                 timeout=Duration(seconds=timeout_sec))
         except TransformException:
             if not self._tf_ready:
