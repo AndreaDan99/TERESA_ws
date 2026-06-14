@@ -575,7 +575,7 @@ class ExposurePoseTester(Node):
             self.get_logger().info(
                 f'  Body scale: {self._body_scale:.2f}, offset_x: {self._offset_x:.2f}, offset_y: {self._offset_y:.2f}, standoff: {self._standoff:.2f} (arm-only)')
 
-        # Anchor virtual body to Spot's real position, rotating body-frame offsets to odom
+        # Anchor virtual body to Spot's real position (offsets in odom frame)
         anchored = False
         for attempt in range(6):
             rclpy.spin_once(self, timeout_sec=0.1)
@@ -586,27 +586,11 @@ class ExposurePoseTester(Node):
                 spot_x = t.transform.translation.x
                 spot_y = t.transform.translation.y
                 spot_z = t.transform.translation.z
-
-                # Extract Spot yaw from quaternion to rotate body-frame offsets
-                qx = t.transform.rotation.x
-                qy = t.transform.rotation.y
-                qz = t.transform.rotation.z
-                qw = t.transform.rotation.w
-                sin_yaw = 2.0 * (qw * qz + qx * qy)
-                cos_yaw = 1.0 - 2.0 * (qy * qy + qz * qz)
-                yaw = math.atan2(sin_yaw, cos_yaw)
-
-                # Rotate body-frame offsets (X=forward, Y=left) to odom frame
-                cos_y = math.cos(yaw)
-                sin_y = math.sin(yaw)
-                odom_off_x = self._offset_x * cos_y - self._offset_y * sin_y
-                odom_off_y = self._offset_x * sin_y + self._offset_y * cos_y
-
-                self._offset_x = spot_x + odom_off_x
-                self._offset_y = spot_y + odom_off_y
+                self._offset_x += spot_x
+                self._offset_y += spot_y
                 # Z stays at 0 (body on ground), Spot height is irrelevant for lying body
                 self.get_logger().info(
-                    f'  Spot at ({spot_x:.2f}, {spot_y:.2f}, {spot_z:.2f}) yaw={math.degrees(yaw):.0f}° — '
+                    f'  Spot at ({spot_x:.2f}, {spot_y:.2f}, {spot_z:.2f}) — '
                     f'virtual body at ({self._offset_x:.2f}, {self._offset_y:.2f}, {self._offset_z:.2f})')
                 anchored = True
                 break
