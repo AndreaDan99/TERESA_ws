@@ -575,23 +575,31 @@ class ExposurePoseTester(Node):
             self.get_logger().info(
                 f'  Body scale: {self._body_scale:.2f}, offset_x: {self._offset_x:.2f}, offset_y: {self._offset_y:.2f}, standoff: {self._standoff:.2f} (arm-only)')
 
-        # Center virtual body on Spot's real position (read from TF)
-        try:
-            t = self._tf_buffer.lookup_transform(
-                'my_spot/odom', 'my_spot/body', rclpy.time.Time(),
-                timeout=rclpy.duration.Duration(seconds=2.0))
-            spot_x = t.transform.translation.x
-            spot_y = t.transform.translation.y
-            spot_z = t.transform.translation.z
-            self._offset_x += spot_x
-            self._offset_y += spot_y
-            self._offset_z += spot_z
-            self.get_logger().info(
-                f'  Spot real position from TF: ({spot_x:.2f}, {spot_y:.2f}, {spot_z:.2f}) — '
-                f'virtual body centered on Spot')
-        except TransformException:
+        # Center virtual body on Spot's real position (retry until TF is available)
+        anchored = False
+        for attempt in range(6):  # up to 15s total (2.5s per attempt)
+            try:
+                t = self._tf_buffer.lookup_transform(
+                    'my_spot/odom', 'my_spot/body', rclpy.time.Time(),
+                    timeout=rclpy.duration.Duration(seconds=2.5))
+                spot_x = t.transform.translation.x
+                spot_y = t.transform.translation.y
+                spot_z = t.transform.translation.z
+                self._offset_x += spot_x
+                self._offset_y += spot_y
+                self._offset_z += spot_z
+                self.get_logger().info(
+                    f'  Spot real position from TF: ({spot_x:.2f}, {spot_y:.2f}, {spot_z:.2f}) — '
+                    f'virtual body centered on Spot')
+                anchored = True
+                break
+            except TransformException:
+                self.get_logger().info(
+                    f'  Waiting for Spot TF... (attempt {attempt + 1}/6)',
+                    throttle_duration_sec=2.0)
+        if not anchored:
             self.get_logger().warn(
-                '  TF lookup failed — virtual body at absolute odom position (may not match Spot)')
+                '  TF lookup failed after 6 attempts — virtual body at absolute odom position')
 
         # Compute body Y half-span from virtual keypoints (max |Y|, e.g. 0.85 for lying)
         _body_template = _VIRTUAL_BODY_LYING if self._orientation == 'lying' else _VIRTUAL_BODY_STANDING
