@@ -925,13 +925,15 @@ class ExposurePoseTester(Node):
                 float(self._camera_link00[1]),
                 float(self._camera_link00[2]),
             )
+            frame = 'link00'  # _camera_link00 is in link00 frame
         else:
             cx = float(ep.camera_xyz[0])
             cy = float(ep.camera_xyz[1])
             cz = float(ep.camera_xyz[2])
+            frame = 'world'   # ep.camera_xyz is in odom frame
 
         goal = PoseStamped()
-        goal.header.frame_id = 'world'
+        goal.header.frame_id = frame
         goal.header.stamp = self.get_clock().now().to_msg()
         goal.pose.position.x = cx
         goal.pose.position.y = cy
