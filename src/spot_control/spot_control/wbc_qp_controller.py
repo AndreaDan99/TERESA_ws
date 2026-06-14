@@ -559,13 +559,13 @@ class WBCQPControllerNode(Node):
         if not self._enabled:
             self.get_logger().warn('_send_home: QP not enabled')
             return
-        home_pos = np.array([0.067, -0.070, 0.520])
-        home_quat = np.array([0.0906, 0.1890, -0.3976, 0.8932])
+        home_pos = np.array([0.144, -0.005, 0.520])
+        home_quat = np.array([0.0182, 0.1521, -0.0217, 0.9880])
         clipped, _, _ = self._ws_checker.clip_target(home_pos)
-        home_pose = _make_pose_stamped(clipped, home_quat)
+        home_pose = _make_pose_stamped(clipped, home_quat, frame_id='link00')
         self._pub_ik.publish(home_pose)
         self._pub_en.publish(Bool(data=True))
-        self.get_logger().info('🔒 Lock pose sent (FWD-L FK-reader)')
+        self.get_logger().info('🔒 Lock pose sent (FWD-C)')
 
     # ── PERCEPTUAL_SCAN mode (APPROACHING) ───────────────────────────────
 
