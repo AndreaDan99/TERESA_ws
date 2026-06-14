@@ -575,8 +575,7 @@ class ExposurePoseTester(Node):
             self.get_logger().info(
                 f'  Body scale: {self._body_scale:.2f}, offset_x: {self._offset_x:.2f}, offset_y: {self._offset_y:.2f}, standoff: {self._standoff:.2f} (arm-only)')
 
-        # Center virtual body on Spot's real position (retry until TF is available)
-        # Must call spin_once() to populate the TF buffer before lookup
+        # Anchor virtual body to Spot's real X/Y (not Z — Spot stands ~1m, body is on ground)
         anchored = False
         for attempt in range(6):
             rclpy.spin_once(self, timeout_sec=0.1)
@@ -589,10 +588,10 @@ class ExposurePoseTester(Node):
                 spot_z = t.transform.translation.z
                 self._offset_x += spot_x
                 self._offset_y += spot_y
-                self._offset_z += spot_z
+                # Z stays at 0 (body on ground), Spot height is irrelevant for lying body
                 self.get_logger().info(
-                    f'  Spot real position from TF: ({spot_x:.2f}, {spot_y:.2f}, {spot_z:.2f}) — '
-                    f'virtual body centered on Spot')
+                    f'  Spot at ({spot_x:.2f}, {spot_y:.2f}, {spot_z:.2f}) — '
+                    f'virtual body anchored at Z={self._offset_z:.2f} (ground)')
                 anchored = True
                 break
             except TransformException:
