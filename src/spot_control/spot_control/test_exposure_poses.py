@@ -930,15 +930,18 @@ class ExposurePoseTester(Node):
         # X_ee points DOWN (-Z in link00), orthogonalized to Y_ee.
         quat = compute_exposure_orientation(self._spot_p)
 
-        # IK retry: reset count for new point, use look-at orientation for retry
+        # IK retry: reset count for new point, use tilted orientation for retries
         if self._ik_retry_deadline is None:
             self._ik_retry_count = 0
         if self._ik_retry_count >= 1:
-            x_ee = ep.look_dir  # point toward surface
+            # Try tilted orientations: lean forward/backward to reach the point
+            tilt_angles = [0.2, -0.15, 0.3, -0.25]  # rad, alternating forward/back
+            tilt = tilt_angles[min(self._ik_retry_count - 1, len(tilt_angles) - 1)]
+            x_ee = np.array([math.sin(tilt), 0.0, -math.cos(tilt)])
             home_ori = [-0.0062, 0.4107, 0.0021, 0.9118]
             quat = compute_ee_orientation(x_ee, home_ori)
             self.get_logger().info(
-                f'  🔄 IK retry with look-at orientation (attempt {self._ik_retry_count + 1})')
+                f'  🔄 IK retry with tilt={math.degrees(tilt):.0f}° (attempt {self._ik_retry_count + 1})')
 
         if self._spot_enabled and self._best_h is not None and self._camera_link00 is not None:
             cx, cy, cz = (
@@ -1007,20 +1010,9 @@ class ExposurePoseTester(Node):
         self._settling = False
         self._resetting = False
 
-        # If Spot is far from Y=0, navigate back first (async)
-        if self._spot_enabled and abs(self._spot_y) > 0.01:
-            self._pending_h = None
-            self._pending_p = None
-            self._navigate_to_y(0.0)
-            self._homing = True
-            self.get_logger().info(
-                '🏠 Navigating Spot to Y=0 before arm home...')
-            return
-
-        # Already at Y=0 (or spot disabled): apply body pose + arm HOME directly
+        # Apply zero body pose + arm HOME directly (no Y navigation)
         if self._spot_enabled:
-            self._apply_body_pose(0.0, 0.0, smooth=False)  # HOME: instant, no async transition
-            self.get_logger().info('🏠 Spot reset to default (h=0, p=0)')
+            self._apply_body_pose(0.0, 0.0, smooth=False)
         self._spot_y = 0.0
         self._spot_h = 0.0
         self._spot_p = 0.0
