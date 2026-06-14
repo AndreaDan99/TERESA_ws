@@ -705,8 +705,10 @@ class WBCCoordinatorNode(Node):
             self._set_state(CoordState.LOCKING)
             return
 
-        # FASE 3 — Check semi-lock da RealSense
-        if self._torso_tracker_state in ('GUIDING', 'ESTIMATING', 'LOCKED') \
+        # FASE 3 — Check semi-lock da RealSense (only between search positions,
+        # not during pitch settling or active arm scan)
+        if self._search_position_start is None and not self._search_settling \
+                and self._torso_tracker_state in ('GUIDING', 'ESTIMATING', 'LOCKED') \
                 and self._torso_pos is not None:
             if self._check_realsense_guidance():
                 return
