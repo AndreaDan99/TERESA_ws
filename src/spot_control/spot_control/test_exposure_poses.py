@@ -765,9 +765,11 @@ class ExposurePoseTester(Node):
             t = self._tf_buffer.lookup_transform(
                 'my_spot/odom', 'my_spot/body', rclpy.time.Time())
             spot_x_real = t.transform.translation.x
+            spot_y_real = t.transform.translation.y
             spot_z_real = t.transform.translation.z
         except TransformException:
             spot_x_real = 0.0
+            spot_y_real = 0.0
             spot_z_real = 0.0
 
         best_spot_y = 0.0
@@ -794,7 +796,7 @@ class ExposurePoseTester(Node):
                     ])
 
                     dist = float(np.linalg.norm(cam_link00 - sweet_spot))
-                    cost = dist + penalty * abs(spot_y)  # penalize Y displacement
+                    cost = dist + penalty * abs(spot_y - spot_y_real)  # penalize walking distance
                     if cost < best_cost:
                         best_cost = cost
                         best_dist = dist
