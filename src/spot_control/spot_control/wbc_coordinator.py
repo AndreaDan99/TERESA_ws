@@ -1402,16 +1402,19 @@ class WBCCoordinatorNode(Node):
         if new_state == CoordState.WAITING_TF:
             self._set_wbc_enabled(False)
             self._pub_cmd_vel.publish(Twist())
+            self._pub_spot_ctrl.publish(Bool(data=False))  # stop navigator
             self._pub_guidance.publish(Bool(data=False))
             self._set_body_pose(0.0)
         if new_state == CoordState.IDLE:
             self._quality.reset()
             self._pub_cmd_vel.publish(Twist())
+            self._pub_spot_ctrl.publish(Bool(data=True))   # re-enable navigator after TF recovery
             self._pub_guidance.publish(Bool(data=False))
             self._set_body_pose(0.0)   # ripristina altezza nominale
             self._pub_nav_mode.publish(String(data='approaching'))
             self._pub_perception_enable.publish(Bool(data=False))
         if new_state == CoordState.SEARCHING:
+            self._pub_spot_ctrl.publish(Bool(data=False))  # navigator off during search
             self._pub_guidance.publish(Bool(data=True))
             self._pub_perception_enable.publish(Bool(data=True))
             old = self._state
