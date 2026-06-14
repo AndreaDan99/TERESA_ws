@@ -801,7 +801,7 @@ class WBCCoordinatorNode(Node):
         """Reset orientation to original yaw and go back to SEARCHING."""
         if self._search_original_yaw is not None:
             self._set_body_pose(self._search_body_height, 0.0, yaw=self._search_original_yaw)
-        self._search_position_idx = self._search_saved_idx
+        self._search_position_idx = self._search_saved_idx + 1  # skip to next pitch to avoid re-triggering same semi-lock
         self._search_position_start = None
         self._set_state(CoordState.SEARCHING)
 
