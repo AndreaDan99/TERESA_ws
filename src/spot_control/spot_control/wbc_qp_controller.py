@@ -528,7 +528,7 @@ class WBCQPControllerNode(Node):
             f'ACTIVE_SEARCH: {len(poses)} poses '
             f'(3 forward + 3 behind with transit + final return)')
 
-    def _tick_active_search(self) -> None:
+     def _tick_active_search(self) -> None:
         if self._scan_scanner is None:
             return
 
@@ -541,7 +541,7 @@ class WBCQPControllerNode(Node):
 
         if st.action == ScanAction.SEND_IK and st.goal is not None:
             self._scan_ik_done = False
-            self._pub_tracker_reset.publish(Bool(data=True))
+            # Publish IK goal without tracker reset (guidance keeps running)
             self._pub_ik.publish(st.goal)
             self._pub_en.publish(Bool(data=True))
 
