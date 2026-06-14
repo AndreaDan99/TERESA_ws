@@ -23,7 +23,7 @@ wbc_qp_controller:
     cartesian_step_wide: 0.20     # [m] passo Y sweep ampio (compensa rotazione Spot)
 
     # Timing per ACTIVE_SEARCH (SEARCHING)
-    search_timeout_per_point: 1.2 # [s] per-pose timeout in SEARCHING (IK + data collection)
+    search_timeout_per_point: 4.0 # [s] per-pose timeout in SEARCHING (IK + data collection)
 
     # Timing per PERCEPTUAL_SCAN (APPROACHING)
     scan_timeout_per_point: 3.0   # [s] raccolta dati per posa in APPROACHING
