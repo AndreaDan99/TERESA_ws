@@ -576,8 +576,10 @@ class ExposurePoseTester(Node):
                 f'  Body scale: {self._body_scale:.2f}, offset_x: {self._offset_x:.2f}, offset_y: {self._offset_y:.2f}, standoff: {self._standoff:.2f} (arm-only)')
 
         # Center virtual body on Spot's real position (retry until TF is available)
+        # Must call spin_once() to populate the TF buffer before lookup
         anchored = False
-        for attempt in range(6):  # up to 15s total (2.5s per attempt)
+        for attempt in range(6):
+            rclpy.spin_once(self, timeout_sec=0.1)
             try:
                 t = self._tf_buffer.lookup_transform(
                     'my_spot/odom', 'my_spot/body', rclpy.time.Time(),
