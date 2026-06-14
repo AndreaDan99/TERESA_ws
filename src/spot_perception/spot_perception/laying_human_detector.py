@@ -11,6 +11,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseArray, PoseStamped, TransformStamped, Vector3Stamped
 from rclpy.duration import Duration
+from rclpy.time import Time
 from std_msgs.msg import String, Float32
 from tf2_ros import Buffer, TransformBroadcaster, TransformListener
 import tf2_geometry_msgs  # noqa: F401 — registers PoseStamped transform support
@@ -340,7 +341,7 @@ class LayingHumanDetector(Node):
 
         try:
             pose_cam = PoseStamped()
-            pose_cam.header.stamp = self.get_clock().now().to_msg()
+            pose_cam.header.stamp = Time().to_msg()  # latest available, not now()
             pose_cam.header.frame_id = self._body_frame_frame_id
             pose_cam.pose.position.x = float(self._body_frame_trans[0])
             pose_cam.pose.position.y = float(self._body_frame_trans[1])
