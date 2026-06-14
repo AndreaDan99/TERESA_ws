@@ -754,10 +754,11 @@ class ExposurePoseTester(Node):
         Returns:
             (best_spot_y, best_height, best_pitch) in meters and radians.
         """
-        # Scale spot_y search range proportionally to body_scale (15 values, keeps 0 included)
+        # Scale spot_y search range proportionally to body_scale, centered on camera Y
         _max_y = 0.6 * self._body_half_span * self._body_scale  # 60% of body half-span
         _n_y = 15
-        spot_y_values = np.linspace(-_max_y, _max_y, _n_y)
+        _center_y = float(camera_odom[1])
+        spot_y_values = np.linspace(_center_y - _max_y, _center_y + _max_y, _n_y)
         heights = [-0.25, -0.20, -0.15, -0.10, -0.05, 0.0, 0.05, 0.10]
         pitches = [0.0, 0.087, 0.17, 0.26, 0.35]  # 0°, 5°, 10°, 15°, 20° in rad
         sweet_spot = np.array([0.35, 0.0, 0.30])
