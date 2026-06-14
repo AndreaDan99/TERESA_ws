@@ -30,7 +30,7 @@ def generate_launch_description():
 
     use_orbbec_driver_arg = DeclareLaunchArgument(
         'use_orbbec_driver',
-        default_value='true',
+        default_value='false',
         description='Lancia driver Orbbec + TF statiche. false se già in teresa_core'
     )
     use_orbbec_driver = LaunchConfiguration('use_orbbec_driver')
@@ -207,12 +207,12 @@ def generate_launch_description():
         # Orbbec subito (solo se use_orbbec_driver=true)
         orbbec_launch,
 
-        # TF statiche dopo 2s (solo se use_orbbec_driver=true)
+        # TF statiche dopo 2s
         TimerAction(period=2.0, actions=[
             LogInfo(msg=['[2s] TF statiche: body → orbbec_link → orbbec_color_optical_frame']),
             static_tf_body_camera,
             static_tf_camera_optical,
-        ], condition=IfCondition(use_orbbec_driver)),
+        ]),
 
         # Perception: 4s se Orbbec parte qui, 1s se già avviato dal core
         # Sceglie backend in base a perception_backend (nlf o yolo)
