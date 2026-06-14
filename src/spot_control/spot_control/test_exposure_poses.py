@@ -575,6 +575,24 @@ class ExposurePoseTester(Node):
             self.get_logger().info(
                 f'  Body scale: {self._body_scale:.2f}, offset_x: {self._offset_x:.2f}, offset_y: {self._offset_y:.2f}, standoff: {self._standoff:.2f} (arm-only)')
 
+        # Center virtual body on Spot's real position (read from TF)
+        try:
+            t = self._tf_buffer.lookup_transform(
+                'my_spot/odom', 'my_spot/body', rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=2.0))
+            spot_x = t.transform.translation.x
+            spot_y = t.transform.translation.y
+            spot_z = t.transform.translation.z
+            self._offset_x += spot_x
+            self._offset_y += spot_y
+            self._offset_z += spot_z
+            self.get_logger().info(
+                f'  Spot real position from TF: ({spot_x:.2f}, {spot_y:.2f}, {spot_z:.2f}) — '
+                f'virtual body centered on Spot')
+        except TransformException:
+            self.get_logger().warn(
+                '  TF lookup failed — virtual body at absolute odom position (may not match Spot)')
+
         # Spot body pose state
         self._settling = False
         self._settle_deadline = None
