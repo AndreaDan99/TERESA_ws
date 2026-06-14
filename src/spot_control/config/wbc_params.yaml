@@ -16,7 +16,7 @@ wbc_qp_controller:
     damping: 1.0e-3 # base damping (adattivo: λ * (1 + 1/m))
 
     # Joint velocity limit
-    q_dot_max: 0.6   # [rad/s]
+    q_dot_max: 1.0   # [rad/s]
 
     # Active perception Cartesian scanning (replaces null-space joint-space grids)
     cartesian_step: 0.12          # [m] passo base Cartesian per inner ring e scan

@@ -939,24 +939,23 @@ class WBCCoordinatorNode(Node):
                     f'Step done ({elapsed:.1f}s) → new search cycle')
             return
 
-        # ── Both yaws complete → start HOME sequence ──────────────────
+        # ── Both yaws complete → send arm HOME (keep WBC enabled) ──
         if self._search_position_idx >= len(self._search_positions):
             self.get_logger().info('Both yaws complete → sending arm HOME')
-            self._set_wbc_enabled(False)
             self._search_home_phase = True
             self._search_ik_done_count = 0
             self._search_position_start = None
             self._search_rotating = False
-            # Publish HOME pose via ik_goal_mux path
+            # Publish HOME via ik_goal_mux (keep WBC enabled for next cycle)
             home_pose = PoseStamped()
-            home_pose.header.frame_id = 'world'
-            home_pose.pose.position.x = float(SEARCH_HOME_POS[0])
-            home_pose.pose.position.y = float(SEARCH_HOME_POS[1])
-            home_pose.pose.position.z = float(SEARCH_HOME_POS[2])
-            home_pose.pose.orientation.x = float(SEARCH_HOME_ORI[0])
-            home_pose.pose.orientation.y = float(SEARCH_HOME_ORI[1])
-            home_pose.pose.orientation.z = float(SEARCH_HOME_ORI[2])
-            home_pose.pose.orientation.w = float(SEARCH_HOME_ORI[3])
+            home_pose.header.frame_id = 'link00'
+            home_pose.pose.position.x = 0.144
+            home_pose.pose.position.y = -0.005
+            home_pose.pose.position.z = 0.52
+            home_pose.pose.orientation.x = 0.0182
+            home_pose.pose.orientation.y = 0.1521
+            home_pose.pose.orientation.z = -0.0217
+            home_pose.pose.orientation.w = 0.9880
             self._pub_ik_goal.publish(home_pose)
             return
 
