@@ -103,6 +103,18 @@ body{
   cursor:default;display:flex;align-items:center;justify-content:center;
 }
 
+/* rotate row */
+#rotate-row{
+  display:flex;align-items:center;justify-content:center;gap:8px;font-size:11px;
+}
+#rotate-row button{
+  font-family:var(--font);font-size:18px;font-weight:700;padding:6px 16px;
+  border:1px solid var(--border);border-radius:6px;background:var(--bg);
+  color:var(--text-dim);cursor:pointer;transition:all .12s;
+}
+#rotate-row button:hover{background:rgba(255,255,255,.08);border-color:var(--accent);color:var(--accent)}
+#rotate-row button:active{background:var(--accent);color:var(--bg);box-shadow:0 0 12px rgba(80,200,120,.2);transform:scale(.95)}
+
 /* mode toggle */
 #mode-toggle{
   display:flex;align-items:center;justify-content:center;gap:8px;font-size:11px;
@@ -294,6 +306,11 @@ body{
         <div id="dpad-center">DRV</div>
         <button class="dpad-btn" id="dpad-right" data-direction="right">→</button>
         <button class="dpad-btn" id="dpad-down"  data-direction="down">↓</button>
+      </div>
+      <div id="rotate-row">
+        <span class="mode-label">ROTATE</span>
+        <button id="rotate-left-btn" data-direction="rot-left">↺</button>
+        <button id="rotate-right-btn" data-direction="rot-right">↻</button>
       </div>
       <div id="mode-toggle">
         <span class="mode-label">MODE</span>
@@ -502,6 +519,8 @@ class TeresaController{
         case'v':e.preventDefault();this.toggleCameras();break;
         case'm':e.preventDefault();this.toggleBodyMap();break;
         case'p':case' ':e.preventDefault();this.togglePause();break;
+        case'z':e.preventDefault();this.sendRotateCommand('rot-left');break;
+        case'x':e.preventDefault();this.sendRotateCommand('rot-right');break;
         case'escape':e.preventDefault();this.onStop();break;
       }
     });
@@ -525,6 +544,23 @@ class TeresaController{
       btn.addEventListener('touchend',e=>{e.preventDefault();this.stopAll();});
     });
     document.addEventListener('mouseup',()=>{if(this.joystickActive)this.stopAll();});
+    // rotate buttons
+    const startRotate=(e,dir)=>{
+      e.preventDefault();
+      if(!this.joystickEnabled)return;
+      this.joystickActive=true;
+      this.sendRotateCommand(dir);
+    };
+    $('rotate-left-btn').addEventListener('mousedown',e=>startRotate(e,'rot-left'));
+    $('rotate-left-btn').addEventListener('mouseup',()=>this.stopAll());
+    $('rotate-left-btn').addEventListener('mouseleave',()=>{if(this.joystickActive)this.stopAll();});
+    $('rotate-left-btn').addEventListener('touchstart',e=>startRotate(e,'rot-left'),{passive:false});
+    $('rotate-left-btn').addEventListener('touchend',e=>{e.preventDefault();this.stopAll();});
+    $('rotate-right-btn').addEventListener('mousedown',e=>startRotate(e,'rot-right'));
+    $('rotate-right-btn').addEventListener('mouseup',()=>this.stopAll());
+    $('rotate-right-btn').addEventListener('mouseleave',()=>{if(this.joystickActive)this.stopAll();});
+    $('rotate-right-btn').addEventListener('touchstart',e=>startRotate(e,'rot-right'),{passive:false});
+    $('rotate-right-btn').addEventListener('touchend',e=>{e.preventDefault();this.stopAll();});
     // mode toggle
     $('mode-drive-btn').addEventListener('click',()=>this.setJoystickMode('drive'));
     $('mode-body-btn').addEventListener('click',()=>this.setJoystickMode('body'));
@@ -1280,6 +1316,11 @@ ctx.fillText('TERESA',0,0);ctx.textAlign='start';ctx.textBaseline='alphabetic'
     else if(dir==='left')ly=s;
     else if(dir==='right')ly=-s;
     this.cmdVelPub.publish({linear:{x:lx,y:ly,z:0},angular:{x:0,y:0,z:0}});
+  }
+  sendRotateCommand(dir){
+    const s=0.3; // rad/s
+    const az=dir==='rot-left'?s:-s;
+    this.cmdVelPub.publish({linear:{x:0,y:0,z:0},angular:{x:0,y:0,z:az}});
   }
   sendBodyCommand(dir){
     const hs=$('height-slider'),ps=$('pitch-slider');
