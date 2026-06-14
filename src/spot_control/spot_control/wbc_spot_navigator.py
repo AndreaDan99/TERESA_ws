@@ -202,6 +202,16 @@ class WBCSpotNavigator(Node):
                 self._p.odom_frame, self._p.robot_frame, rclpy.time.Time())
             current_x = t.transform.translation.x
             current_y = t.transform.translation.y
+            # Extract yaw for odom→body error projection
+            qx = t.transform.rotation.x
+            qy = t.transform.rotation.y
+            qz = t.transform.rotation.z
+            qw = t.transform.rotation.w
+            sin_yaw = 2.0 * (qw * qz + qx * qy)
+            cos_yaw = 1.0 - 2.0 * (qy * qy + qz * qz)
+            yaw = math.atan2(sin_yaw, cos_yaw)
+            cy = math.cos(yaw)
+            sy = math.sin(yaw)
         except TransformException:
             self._pub_vel.publish(Twist())
             return
@@ -214,19 +224,23 @@ class WBCSpotNavigator(Node):
                 self._exp_active = True
                 self._exp_start_time = self.get_clock().now()
 
-            dx_body = goal.pose.position.x - current_x
+            # Odom-frame errors
+            dx_odom = goal.pose.position.x - current_x
             dy_odom = goal.pose.position.y - current_y
+
+            # Project odom errors onto body-frame axes (accounts for yaw)
+            dx_body =  dx_odom * cy + dy_odom * sy
+            dy_body = -dx_odom * sy + dy_odom * cy
 
             if abs(dx_body) > self._p.goal_tolerance:
                 speed_x = min(abs(dx_body) * self._p.kp_lin, self._p.linear_speed_max)
                 twist.linear.x = speed_x if dx_body > 0 else -speed_x
 
-            if abs(dy_odom) > self._p.nav_y_tolerance:
-                speed_y = min(abs(dy_odom) * self._p.nav_y_gain, self._p.nav_y_speed)
-                sign = -1.0 if self._p.nav_y_invert else 1.0
-                twist.linear.y = sign * math.copysign(max(speed_y, self._p.nav_y_min_speed), dy_odom)
+            if abs(dy_body) > self._p.nav_y_tolerance:
+                speed_y = min(abs(dy_body) * self._p.nav_y_gain, self._p.nav_y_speed)
+                twist.linear.y = math.copysign(max(speed_y, self._p.nav_y_min_speed), dy_body)
 
-            if (abs(dx_body) <= self._p.goal_tolerance
+            if (abs(dx_odom) <= self._p.goal_tolerance
                     and abs(dy_odom) <= self._p.nav_y_tolerance):
                 self._exp_active = False
                 self._goal_odom = None

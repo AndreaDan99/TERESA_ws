@@ -1115,17 +1115,27 @@ class ExposurePoseTester(Node):
                         t = self._tf_buffer.lookup_transform(
                             'my_spot/odom', 'my_spot/body', rclpy.time.Time())
                         current_y = t.transform.translation.y
+                        # Extract yaw to project odom error onto body Y axis
+                        qx = t.transform.rotation.x
+                        qy = t.transform.rotation.y
+                        qz = t.transform.rotation.z
+                        qw = t.transform.rotation.w
+                        sin_yaw = 2.0 * (qw * qz + qx * qy)
+                        cos_yaw = 1.0 - 2.0 * (qy * qy + qz * qz)
+                        yaw = math.atan2(sin_yaw, cos_yaw)
                     except TransformException:
                         self.get_logger().warn(
                             'TF lookup failed during Y-nav — skipping navigation')
                         self._nav_state = NavState.TIMEOUT
                         self._pub_cmd_vel.publish(Twist())
-                        continue  # skip to next spin iteration
+                        continue
 
-                    dy = self._target_y - current_y   # standard error: + = need to move +Y (left)
+                    dy_odom = self._target_y - current_y  # error in odom frame
+                    # Project odom Y error onto body-frame Y axis (accounts for yaw)
+                    dy_body = dy_odom * float(math.cos(yaw))
                     now = self.get_clock().now()
 
-                    if abs(dy) < self._nav_y_tolerance:
+                    if abs(dy_odom) < self._nav_y_tolerance:
                         self._nav_state = NavState.ARRIVED
                         self._pub_cmd_vel.publish(Twist())
                         self.get_logger().info(
@@ -1140,14 +1150,13 @@ class ExposurePoseTester(Node):
                             f'target={self._target_y:.3f}, actual={current_y:.3f}')
                     else:
                         twist = Twist()
-                        speed = min(abs(dy) * 0.3, self._nav_y_speed)
-                        sign = -1.0 if self._nav_y_invert else 1.0
-                        vel_y = sign * math.copysign(max(speed, 0.12), dy)
-                        twist.linear.y = vel_y
+                        speed = min(abs(dy_body) * 0.3, self._nav_y_speed)
+                        twist.linear.y = math.copysign(max(speed, 0.12), dy_body)
                         twist.angular.z = 0.0
                         self._pub_cmd_vel.publish(twist)
                         self.get_logger().info(
-                            f'🚶 Y-nav: dy={dy:+.3f} vel_y={vel_y:+.3f} '
+                            f'🚶 Y-nav: dy_odom={dy_odom:+.3f} dy_body={dy_body:+.3f} '
+                            f'vel_y={twist.linear.y:+.3f} yaw={math.degrees(yaw):.0f}° '
                             f'target={self._target_y:.3f} current={current_y:.3f}',
                             throttle_duration_sec=1.0)
 
