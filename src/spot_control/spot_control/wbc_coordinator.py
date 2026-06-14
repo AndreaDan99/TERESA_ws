@@ -198,6 +198,7 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('search_lock_confidence',          0.70)  # [0-1] soglia LYING per lock
         self.declare_parameter('search_lock_samples',           5)
         self.declare_parameter('search_refine_trigger_orb_conf', 0.30)  # soglia Orbbec per trigger refinement
+        self.declare_parameter('search_arm_dwell',                30.0)  # [s] dwell time per yaw for arm scan
 
         # FAST body pose optimization
         self.declare_parameter('body_grid_heights',       [-0.20, -0.18, -0.15])
@@ -250,6 +251,7 @@ class WBCCoordinatorNode(Node):
         self._search_semi_lock_pitch_tol      = float(p('search_semi_lock_pitch_tol'))
         self._search_lock_confidence = float(p('search_lock_confidence'))
         self._search_lock_samples   = int(p('search_lock_samples'))
+        self._search_arm_dwell       = float(p('search_arm_dwell'))
         self._search_refine_trigger_orb_conf = float(p('search_refine_trigger_orb_conf'))
         self._nlf_excellent_conf = float(p('nlf_excellent_confidence'))
         self._pre_approach_duration = float(p('pre_approach_duration'))
@@ -959,19 +961,16 @@ class WBCCoordinatorNode(Node):
             self._pub_ik_goal.publish(home_pose)
             return
 
-        # ── Waiting for arm to finish 7 poses after rotation ──────────
+        # ── Waiting for arm scan to complete (timed dwell, no ik_done counting) ──
         if not self._search_rotating and self._search_position_start is not None:
-            if self._ik_done:
-                self._search_ik_done_count += 1
-                self._ik_done = False
-                if self._search_ik_done_count >= 7:
-                    self.get_logger().info(
-                        f'Search pos {self._search_position_idx+1}: arm 7 poses done → next')
-                    self._search_position_idx += 1
-                    self._search_position_start = None
-                    self._search_ik_done_count = 0
-                    return
-            # Still waiting for arm — check refinement trigger
+            elapsed = (self.get_clock().now() - self._search_position_start).nanoseconds / 1e9
+            if elapsed >= self._search_arm_dwell:
+                self.get_logger().info(
+                    f'Search pos {self._search_position_idx+1}: arm dwell done ({elapsed:.1f}s) → next')
+                self._search_position_idx += 1
+                self._search_position_start = None
+                return
+            # Still waiting — check refinement trigger
             if self._should_refine():
                 self._start_refinement()
                 return
