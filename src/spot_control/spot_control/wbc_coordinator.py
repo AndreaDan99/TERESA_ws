@@ -4,7 +4,7 @@ WBC Coordinator — phase FSM (WBC is master, Z1 FSM waits for SCANNING)
 
 States:
   WAITING_TF    waits for tf_monitor to confirm TF chains ready
-  SEARCHING     Spot alternates ±30° yaw, arm 7 poses each; after both: HOME + step forward,
+  SEARCHING     Spot alternates pitch 0°/-5°/-10°, arm 7 poses each; after all: HOME + step forward,
                repeat. Hybrid lock: Orbbec (full) + RealSense (semi-lock guidance)
   SEMI_LOCKING  RealSense found torso → Spot rotates+tilts toward it, arm freezes, Orbbec gets 3s clean window
   LOCKING       Orbbec confirmed LYING → arm goes home, collect 5 approach_point samples
@@ -34,6 +34,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
+from rclpy.qos import QoSProfile, DurabilityPolicy
 import rclpy.time
 
 from geometry_msgs.msg import PoseStamped, TransformStamped, Twist, Vector3Stamped, Pose, Point, PoseArray
@@ -183,21 +184,16 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('min_body_height',             -0.20)
         self.declare_parameter('max_body_height',              0.0)
         self.declare_parameter('search_body_height',           0.0)   # [m] altezza nominale
-        self.declare_parameter('search_yaw_angles',         [30.0, -30.0])  # degrees, relative steps
-        self.declare_parameter('search_step_forward',          0.20)  # [m] forward step after each arm cycle
+        self.declare_parameter('search_step_forward',          0.50)  # [m] forward step after each pitch cycle
         self.declare_parameter('search_step_speed',            0.3)   # [m/s] forward step speed
-        self.declare_parameter('search_pitch_angles',       [0.0, 0.087, 0.17])  # 0°,5°,10°
-        self.declare_parameter('search_refine_dwell',           4.0)   # [s] dwell per pitch in refinement
-        self.declare_parameter('search_yaw_kp',                    0.8)   # P-gain per rotazione yaw
-        self.declare_parameter('search_yaw_tolerance',             0.08)  # [rad] ~4.6° tolleranza yaw raggiunto
-        self.declare_parameter('search_max_angular_vel',          0.5)   # [rad/s] max velocità angolare search
+        self.declare_parameter('search_yaw_kp',                    0.8)   # P-gain per rotazione yaw (semi-lock)
+        self.declare_parameter('search_max_angular_vel',          0.5)   # [rad/s] max velocità angolare (semi-lock)
         self.declare_parameter('search_semi_lock_dwell',         3.0)   # [s] Orbbec dwell dopo settle
         self.declare_parameter('search_semi_lock_settle_timeout', 5.0)   # [s] timeout settle Spot
         self.declare_parameter('search_semi_lock_yaw_tol',        0.05)  # [rad] ≈3° tolleranza yaw
         self.declare_parameter('search_semi_lock_pitch_tol',      0.03)  # [rad] ≈2° tolleranza pitch
         self.declare_parameter('search_lock_confidence',          0.70)  # [0-1] soglia LYING per lock
         self.declare_parameter('search_lock_samples',           5)
-        self.declare_parameter('search_refine_trigger_orb_conf', 0.30)  # soglia Orbbec per trigger refinement
         self.declare_parameter('search_arm_dwell',                30.0)  # [s] dwell time per yaw for arm scan
 
         # FAST body pose optimization
@@ -237,13 +233,9 @@ class WBCCoordinatorNode(Node):
         self._body_grid_heights = self._read_float_array('body_grid_heights')
         self._body_grid_pitches = self._read_float_array('body_grid_pitches')
         self._body_sweet_spot   = self._read_float_array('body_sweet_spot')
-        self._search_yaw_angles     = self._read_float_array('search_yaw_angles')  # degrees
         self._search_step_forward   = float(p('search_step_forward'))
         self._search_step_speed     = float(p('search_step_speed'))
-        self._search_pitch_angles   = self._read_float_array('search_pitch_angles')
-        self._search_refine_dwell      = float(p('search_refine_dwell'))
         self._search_yaw_kp         = float(p('search_yaw_kp'))
-        self._search_yaw_tolerance  = float(p('search_yaw_tolerance'))
         self._search_max_angular_vel = float(p('search_max_angular_vel'))
         self._search_semi_lock_dwell          = float(p('search_semi_lock_dwell'))
         self._search_semi_lock_settle_timeout = float(p('search_semi_lock_settle_timeout'))
@@ -252,7 +244,6 @@ class WBCCoordinatorNode(Node):
         self._search_lock_confidence = float(p('search_lock_confidence'))
         self._search_lock_samples   = int(p('search_lock_samples'))
         self._search_arm_dwell       = float(p('search_arm_dwell'))
-        self._search_refine_trigger_orb_conf = float(p('search_refine_trigger_orb_conf'))
         self._nlf_excellent_conf = float(p('nlf_excellent_confidence'))
         self._pre_approach_duration = float(p('pre_approach_duration'))
         self._body_settle_time      = float(p('body_settle_time'))
@@ -266,6 +257,10 @@ class WBCCoordinatorNode(Node):
         # ── Body pose publisher (height + pitch via /my_spot/body_pose) ──
         self._pub_body_pose = self.create_publisher(Pose, '/my_spot/body_pose', 10)
         self._pub_cmd_vel = self.create_publisher(Twist, '/my_spot/cmd_vel', 10)
+
+        # Perception enable publisher (transient_local — enables posture classifier + torso tracker)
+        qos_transient_local = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self._pub_perception_enable = self.create_publisher(Bool, '/wbc/perception_enable', qos_transient_local)
 
         # ── Approach point quality monitor ────────────────────────────
         self._quality = _QualityMonitor(
@@ -300,10 +295,8 @@ class WBCCoordinatorNode(Node):
         self._search_position_idx: int = 0
         self._search_position_start: rclpy.time.Time | None = None
         self._search_saved_idx: int = 0               # idx da riprendere dopo semi-lock
-        self._search_initial_yaw: float | None = None  # yaw Spot all'ingresso in SEARCHING [rad, odom]
-        self._search_rotating: bool = False           # True mentre ruota verso il target yaw
-        self._search_target_yaw: float = 0.0          # yaw assoluto desiderato [rad, odom]
-        self._search_rotation_start: rclpy.time.Time | None = None  # timed open-loop rotation start
+        self._search_settling: bool = False            # True mentre attende che il body_pose si stabilizzi
+        self._search_settle_start: rclpy.time.Time | None = None  # inizio attesa settle pitch
         self._lock_lost_ticks: int = 0                # tick consecutivi senza Orbbec in LOCKING
         self._ik_done: bool = False                    # IK trajectory completion status
         self._search_ik_done_count: int = 0  # count ik_done events per search position
@@ -323,14 +316,6 @@ class WBCCoordinatorNode(Node):
         self._semi_lock_settle_done: bool = False
         self._semi_lock_dwell_start: rclpy.time.Time | None = None
         self._semi_lock_entry_time: float = 0.0      # timestamp ingresso per timeout assoluto
-
-        # Refinement mode — sweep pitch adattivo durante SEARCHING
-        self._refining: bool = False
-        self._refine_pitch_idx: int = 0
-        self._refine_best_conf: float = 0.0
-        self._refine_best_pitch: float = 0.0
-        self._refine_best_approach: np.ndarray | None = None
-        self._refine_dwell_start: float = 0.0
 
         # FAST body pose optimization
         self._fast_points: PoseArray | None = None
@@ -394,7 +379,7 @@ class WBCCoordinatorNode(Node):
         self.get_logger().info(
             f'WBC Coordinator ready — in attesa TF da SpotCore.\n'
             f'  Attendo {self._odom_frame} → {self._body_frame} ...\n'
-            f'  FSM: 10 Hz  |  Search: ±30° yaw × 7 arm poses × step forward\n'
+            f'  FSM: 10 Hz  |  Search: pitch 0°/-5°/-10° × 7 arm poses × step forward\n'
             f'  Lock: conf≥{self._search_lock_confidence}  |  samples: {self._search_lock_samples}')
 
     # ── Callbacks ─────────────────────────────────────────────────────
@@ -720,9 +705,8 @@ class WBCCoordinatorNode(Node):
             self._set_state(CoordState.LOCKING)
             return
 
-        # FASE 3 — Check semi-lock da RealSense (solo fuori dal refinement)
-        if not self._refining \
-                and self._torso_tracker_state in ('GUIDING', 'ESTIMATING', 'LOCKED') \
+        # FASE 3 — Check semi-lock da RealSense
+        if self._torso_tracker_state in ('GUIDING', 'ESTIMATING', 'LOCKED') \
                 and self._torso_pos is not None:
             if self._check_realsense_guidance():
                 return
@@ -917,12 +901,7 @@ class WBCCoordinatorNode(Node):
         return True
 
     def _tick_search_positions(self) -> None:
-        # ── Refinement mode attivo ────────────────────────────────────
-        if self._refining:
-            self._tick_refinement()
-            return
-
-        # ── HOME phase: waiting for arm to reach HOME after both yaws ─
+        # ── HOME phase: waiting for arm to reach HOME after all pitches ─
         if self._search_home_phase:
             if self._ik_done:
                 self._ik_done = False
@@ -943,23 +922,23 @@ class WBCCoordinatorNode(Node):
                 self._pub_cmd_vel.publish(Twist())
                 self._search_step_phase = False
                 self._search_step_start = None
-                # Reset cycle: back to yaw +30°
+                # Reset cycle: back to pitch position 0
                 self._search_position_idx = 0
                 self._search_position_start = None
                 self._search_ik_done_count = 0
-                self._search_rotating = False
+                self._search_settling = False
                 self._set_wbc_enabled(True)
                 self.get_logger().info(
                     f'Step done ({elapsed:.1f}s) → new search cycle')
             return
 
-        # ── Both yaws complete → send arm HOME (keep WBC enabled) ──
+        # ── All pitches complete → send arm HOME (keep WBC enabled) ──
         if self._search_position_idx >= len(self._search_positions):
-            self.get_logger().info('Both yaws complete → sending arm HOME')
+            self.get_logger().info('All pitches complete → sending arm HOME')
             self._search_home_phase = True
             self._search_ik_done_count = 0
             self._search_position_start = None
-            self._search_rotating = False
+            self._search_settling = False
             # Publish HOME via ik_goal_mux (keep WBC enabled for next cycle)
             home_pose = PoseStamped()
             home_pose.header.frame_id = 'link00'
@@ -974,7 +953,7 @@ class WBCCoordinatorNode(Node):
             return
 
         # ── Waiting for QP controller scan to complete ──
-        if not self._search_rotating and self._search_position_start is not None:
+        if not self._search_settling and self._search_position_start is not None:
             if self._search_scan_done:
                 self._search_scan_done = False
                 self.get_logger().info(
@@ -982,138 +961,32 @@ class WBCCoordinatorNode(Node):
                 self._search_position_idx += 1
                 self._search_position_start = None
                 return
-            # Still waiting — check refinement trigger
-            if self._should_refine():
-                self._start_refinement()
-                return
             return
 
-        # ── New position: set height+pitch, begin yaw rotation via cmd_vel ──
-        if self._search_position_start is None and not self._search_rotating:
-            if self._search_initial_yaw is None:
-                return
+        # ── New pitch position: set body_pose and start settling ──
+        if self._search_position_start is None and not self._search_settling:
             pos = self._search_positions[self._search_position_idx]
             self._set_body_pose(self._search_body_height, pos['pitch'])
-            self._search_target_yaw = normalize_angle(
-                self._search_initial_yaw + pos['yaw'])
-            self._search_rotating = True
-            self._search_rotation_start = self.get_clock().now()
+            self._search_settling = True
+            self._search_settle_start = self.get_clock().now()
             self.get_logger().info(
                 f'Search pos {self._search_position_idx+1}/{len(self._search_positions)}: '
-                f'yaw={math.degrees(pos["yaw"]):.0f}° '
-                f'pitch={math.degrees(pos["pitch"]):.0f}° '
-                f'(abs target={math.degrees(self._search_target_yaw):.0f}°)')
+                f'pitch={math.degrees(pos["pitch"]):.0f}°')
             return
 
-        # ── Rotating: timed open-loop (no TF needed) ──
-        if self._search_rotating:
-            elapsed = (self.get_clock().now() - self._search_rotation_start).nanoseconds / 1e9
-            pos = self._search_positions[self._search_position_idx]
-            expected = abs(pos['yaw']) / self._search_max_angular_vel + 1.0  # +1s for accel/decel
-            if elapsed >= expected:
-                self._pub_cmd_vel.publish(Twist())
-                self._search_rotating = False
+        # ── Settling: wait for body pose to stabilize (2s dwell) ──
+        if self._search_settling:
+            elapsed = (self.get_clock().now() - self._search_settle_start).nanoseconds / 1e9
+            if elapsed >= 2.0:
+                self._search_settling = False
                 self._search_position_start = self.get_clock().now()
-                self._search_scan_done = False  # wait for next scan completion
+                self._search_scan_done = False
                 self._ik_done = False
                 self._search_ik_done_count = 0
                 self.get_logger().info(
-                    f'Search pos {self._search_position_idx+1}: rotation done '
+                    f'Search pos {self._search_position_idx+1}: pitch settled '
                     f'({elapsed:.1f}s) → arm 7 poses')
-                return
-            t = Twist()
-            t.angular.z = float(math.copysign(self._search_max_angular_vel, pos['yaw']))
-            self._pub_cmd_vel.publish(t)
             return
-
-    # ── Refinement mode (sweep pitch adattivo) ──────────────────────────
-
-    def _should_refine(self) -> bool:
-        """Trigger refinement se una camera vede qualcosa."""
-        if self._torso_tracker_state == 'GUIDING' and self._torso_pos is not None:
-            return True
-        return self._confidence >= self._search_refine_trigger_orb_conf
-
-    def _start_refinement(self) -> None:
-        self._refining = True
-        self._refine_pitch_idx = 0
-        self._refine_best_conf = 0.0
-        self._refine_best_pitch = 0.0
-        self._refine_best_approach = None
-        self._refine_dwell_start = 0.0
-        self._pub_cmd_vel.publish(Twist())
-        trigger_src = ('RealSense GUIDING'
-                       if self._torso_tracker_state == 'GUIDING'
-                       else f'Orbbec conf={self._confidence:.2f}')
-        self.get_logger().info(
-            f'Refinement: sweep pitch a yaw='
-            f'{math.degrees(self._search_target_yaw):.0f}° '
-            f'(trigger: {trigger_src})')
-
-    def _tick_refinement(self) -> None:
-        now_ns = self.get_clock().now().nanoseconds * 1e-9
-
-        pitches = self._search_pitch_angles
-        if self._refine_pitch_idx >= len(pitches):
-            if self._refine_best_conf >= self._search_lock_confidence:
-                self._finish_refinement_lock()
-            else:
-                self._finish_refinement_fail()
-            return
-
-        # Primo tick del pitch corrente: applica body_pose
-        if self._refine_dwell_start == 0.0:
-            pitch = pitches[self._refine_pitch_idx]
-            self._set_body_pose(self._search_body_height, pitch)
-            self._refine_dwell_start = now_ns
-            self.get_logger().info(
-                f'Refinement pitch {self._refine_pitch_idx+1}/{len(pitches)}: '
-                f'{math.degrees(pitch):.1f}°')
-            return
-
-        # Traccia la miglior confidence Orbbec
-        if self._confidence > self._refine_best_conf:
-            self._refine_best_conf = self._confidence
-            self._refine_best_pitch = pitches[self._refine_pitch_idx]
-            if (approach := self._get_approach_odom()) is not None:
-                self._refine_best_approach = approach
-
-        # Dwell scaduto → prossimo pitch
-        elapsed = now_ns - self._refine_dwell_start
-        if elapsed >= self._search_refine_dwell:
-            self.get_logger().info(
-                f'Refinement pitch {self._refine_pitch_idx+1}/{len(pitches)} '
-                f'done (best_conf={self._refine_best_conf:.2f} '
-                f'at pitch={math.degrees(self._refine_best_pitch):.1f}°)')
-            self._refine_pitch_idx += 1
-            self._refine_dwell_start = 0.0
-
-    def _finish_refinement_lock(self) -> None:
-        self._refining = False
-        if self._refine_best_approach is not None:
-            z = self._refine_best_approach.copy()
-        elif (z := self._get_approach_odom()) is not None:
-            pass
-        else:
-            self.get_logger().error(
-                'Refinement lock: no approach_point available — aborting lock')
-            self._finish_refinement_fail()
-            return
-        self._search_lock_buffer = [z]
-        self._set_body_pose(self._search_body_height, self._refine_best_pitch)
-        self.get_logger().info(
-            f'Refinement lock: best_conf={self._refine_best_conf:.2f} '
-            f'at pitch={math.degrees(self._refine_best_pitch):.1f}° → LOCKING')
-        self._set_wbc_enabled(False)
-        self._set_state(CoordState.LOCKING)
-
-    def _finish_refinement_fail(self) -> None:
-        self._refining = False
-        self.get_logger().info(
-            f'Refinement failed: best_conf={self._refine_best_conf:.2f} '
-            f'< {self._search_lock_confidence} → resume coarse from next yaw')
-        self._search_position_idx += 1
-        self._search_position_start = None
 
     def _get_current_yaw(self) -> float | None:
         """Return current Spot yaw in odom frame [rad], or None if TF unavailable."""
@@ -1538,27 +1411,21 @@ class WBCCoordinatorNode(Node):
             self._pub_guidance.publish(Bool(data=False))
             self._set_body_pose(0.0)   # ripristina altezza nominale
             self._pub_nav_mode.publish(String(data='approaching'))
+            self._pub_perception_enable.publish(Bool(data=False))
         if new_state == CoordState.SEARCHING:
             self._pub_guidance.publish(Bool(data=True))
+            self._pub_perception_enable.publish(Bool(data=True))
             old = self._state
             self._search_lock_buffer = None
             self._set_wbc_enabled(True)
             if old == CoordState.IDLE:
-                # Fresh start: full reset, save initial yaw
+                # Fresh start: full reset
                 self._search_start = self.get_clock().now()
-                yaw = self._get_current_yaw()
-                if yaw is not None:
-                    self._search_initial_yaw = yaw
-                else:
-                    self.get_logger().warn(
-                        'TF odom→body non disponibile all\'ingresso SEARCHING '
-                        '→ _search_initial_yaw=0.0 (fallback)')
-                    self._search_initial_yaw = 0.0
                 self._search_positions = self._build_search_sequence()
                 self._search_position_idx = 0
                 self._search_position_start = None
                 self._search_saved_idx = 0
-                self._search_rotating = False
+                self._search_settling = False
                 self._search_home_phase = False
                 self._search_step_phase = False
                 self._search_step_start = None
@@ -1591,10 +1458,7 @@ class WBCCoordinatorNode(Node):
         if new_state == CoordState.LOCKING:
             self._pub_cmd_vel.publish(Twist())
             self._pub_guidance.publish(Bool(data=False))
-            self._search_rotating = False
-            # Apply best pitch from refinement for optimal NLF camera view
-            if self._refine_best_pitch > 0.0:
-                self._set_body_pose(self._search_body_height, self._refine_best_pitch)
+            self._search_settling = False
             self._ik_done = False
             self._lock_ik_ticks = 0
             self._lock_nlf_ticks = 0
@@ -1680,11 +1544,10 @@ class WBCCoordinatorNode(Node):
         return [float(val)]
 
     def _build_search_sequence(self) -> list:
-        """Build search sequence from yaw_angles list (degrees, relative).
-        Each step: rotate by angle degrees, then arm does 7 poses.
-        Pitch sweep is handled by refinement mode when a detection triggers."""
-        yaw_list = [math.radians(a) for a in self._search_yaw_angles]
-        return [{'yaw': y, 'pitch': 0.0} for y in yaw_list]
+        """Build pitch-based search sequence. Each step: set body pitch, then arm does 7 poses.
+        Pitch values: 0°, -5°, -10° (downward) in radians."""
+        pitch_angles = [0.0, math.radians(-5.0), math.radians(-10.0)]
+        return [{'yaw': 0.0, 'pitch': p} for p in pitch_angles]
 
     def _set_wbc_enabled(self, enabled: bool) -> None:
         msg = Bool(); msg.data = enabled
