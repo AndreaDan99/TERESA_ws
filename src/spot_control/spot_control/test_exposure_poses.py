@@ -787,7 +787,7 @@ class ExposurePoseTester(Node):
                     s = math.sin(p)
 
                     link00_x = spot_x_real + c * mx + s * mz
-                    link00_z = spot_z_real + h - s * mx + c * mz
+                    link00_z = h - s * mx + c * mz  # ground level, not Spot height
 
                     dx = camera_odom[0] - link00_x
                     dz = camera_odom[2] - link00_z
