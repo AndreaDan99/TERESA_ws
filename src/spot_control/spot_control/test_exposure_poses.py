@@ -508,6 +508,9 @@ class ExposurePoseTester(Node):
         self._nav_y_speed = float(
             self.declare_parameter('nav_y_speed', 0.15)
             .get_parameter_value().double_value)
+        self._nav_y_invert = bool(
+            self.declare_parameter('nav_y_invert', False)  # invert Y direction (some Spot drivers need +Y=right)
+            .get_parameter_value().bool_value)
 
         # Publishers
         self._pub_goal = self.create_publisher(
@@ -1084,7 +1087,8 @@ class ExposurePoseTester(Node):
                     else:
                         twist = Twist()
                         speed = min(abs(dy) * 0.3, self._nav_y_speed)
-                        twist.linear.y = math.copysign(max(speed, 0.12), dy)  # +Y = left in body frame, match odom
+                        sign = -1.0 if self._nav_y_invert else 1.0
+                        twist.linear.y = sign * math.copysign(max(speed, 0.12), dy)  # +Y = left in body frame, match odom
                         twist.angular.z = 0.0
                         self._pub_cmd_vel.publish(twist)
 
@@ -1196,7 +1200,13 @@ class ExposurePoseTester(Node):
                                                 f'⏳ Settling for '
                                                 f'{self._body_settle_s:.1f}s... (already at target Y)')
                                         else:
-                                            self._navigate_to_y(spot_y)
+                                            if not self._navigate_to_y(spot_y):
+                                                # TF not available — clear pending, warn user
+                                                self._pending_h = None
+                                                self._pending_p = None
+                                                self.get_logger().error(
+                                                    '❌ Cannot navigate: TF my_spot/odom→my_spot/body unavailable. '
+                                                    'Is Spot driver running? Press ENTER to retry or "b" to bypass.')
                                     else:
                                         self._send_ik_goal(self._current_idx)
                                         self._current_idx += 1
