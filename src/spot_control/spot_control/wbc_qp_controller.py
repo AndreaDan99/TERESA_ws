@@ -528,7 +528,7 @@ class WBCQPControllerNode(Node):
             f'ACTIVE_SEARCH: {len(poses)} poses '
             f'(3 forward + 3 behind with transit + final return)')
 
-     def _tick_active_search(self) -> None:
+    def _tick_active_search(self) -> None:
         if self._scan_scanner is None:
             return
 
