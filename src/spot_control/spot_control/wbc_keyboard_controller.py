@@ -85,6 +85,7 @@ class WBCKeyboardControllerNode(Node):
         self._start_has_goal: bool             = False  # True = we have a saved start
         self._goal_odom:    PoseStamped | None = None
         self._is_returning: bool               = False
+        self._manual_yaw: float = 0.0  # +1=rotating left, -1=rotating right, 0=stop
         self._lock = threading.Lock()
 
         period = 1.0 / self._update_rate
@@ -97,6 +98,7 @@ class WBCKeyboardControllerNode(Node):
             f'WBC Keyboard Controller ready — in attesa TF SpotCore...\n'
             f'  "s" = avvia missione  |  "r" = torna a start  |  "u" = aggiorna start\n'
             f'  "c" = sit  |  "a" = stand  |  "n" = step mode: conferma prossima fase\n'
+            f'  "z" = rotate LEFT  |  "x" = rotate RIGHT  |  SPACE = stop rotation\n'
             f'  ESC = STOP emergenza')
 
     def _cb_wbc_state(self, msg: String) -> None:
@@ -148,6 +150,19 @@ class WBCKeyboardControllerNode(Node):
                     self._call_trigger(self._stand_client, 'Stand')
                 elif ch == 'n':
                     self._on_step_confirm()
+                elif ch == 'z':  # rotate left (continuous)
+                    with self._lock:
+                        self._manual_yaw = 1.0
+                    self.get_logger().info('↺ Rotating LEFT (press SPACE to stop)')
+                elif ch == 'x':  # rotate right (continuous)
+                    with self._lock:
+                        self._manual_yaw = -1.0
+                    self.get_logger().info('↻ Rotating RIGHT (press SPACE to stop)')
+                elif ch == ' ':  # SPACE — stop manual rotation
+                    with self._lock:
+                        self._manual_yaw = 0.0
+                    self._cmd_pub.publish(Twist())
+                    self.get_logger().info('⏹ Rotation stopped')
                 elif ch == '\x1b':  # ESC
                     self._on_emergency_stop()
                 elif ch == '\x03':  # Ctrl+C
@@ -239,6 +254,15 @@ class WBCKeyboardControllerNode(Node):
             f'Navigating to start: ({start.pose.position.x:.2f}, {start.pose.position.y:.2f})')
 
     def _control_loop(self) -> None:
+        # Manual yaw rotation (overrides navigation)
+        with self._lock:
+            manual = self._manual_yaw
+        if manual != 0.0:
+            twist = Twist()
+            twist.angular.z = float(manual * self._ang_speed_max)
+            self._cmd_pub.publish(twist)
+            return
+
         with self._lock:
             state = self._kc_state
             goal_odom = self._goal_odom
