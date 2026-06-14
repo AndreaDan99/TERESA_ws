@@ -184,7 +184,7 @@ class WBCCoordinatorNode(Node):
         self.declare_parameter('search_step_speed',            0.3)   # [m/s] forward step speed
         self.declare_parameter('search_yaw_kp',                    0.8)   # P-gain per rotazione yaw (semi-lock)
         self.declare_parameter('search_max_angular_vel',          0.5)   # [rad/s] max velocità angolare (semi-lock)
-        self.declare_parameter('search_semi_lock_dwell',         3.0)   # [s] Orbbec dwell dopo settle
+        self.declare_parameter('search_semi_lock_dwell',         5.0)   # [s] Orbbec dwell dopo settle
         self.declare_parameter('search_semi_lock_settle_timeout', 5.0)   # [s] timeout settle Spot
         self.declare_parameter('search_semi_lock_yaw_tol',        0.05)  # [rad] ≈3° tolleranza yaw
         self.declare_parameter('search_semi_lock_pitch_tol',      0.03)  # [rad] ≈2° tolleranza pitch
@@ -760,14 +760,31 @@ class WBCCoordinatorNode(Node):
             elapsed = now_ns - self._semi_lock_entry_time
             if elapsed >= self._search_semi_lock_settle_timeout:
                 self._pub_cmd_vel.publish(Twist())
-                self._semi_lock_settle_done = True
-                self._semi_lock_dwell_start = self.get_clock().now()
-                self.get_logger().warn(
-                    f'Semi-lock: settle timeout ({self._search_semi_lock_settle_timeout:.1f}s) '
-                    f'→ dwell anyway')
+                # Only dwell if RealSense still sees the person after rotation attempt
+                if self._torso_tracker_state in ('GUIDING', 'ESTIMATING', 'LOCKED'):
+                    self._semi_lock_settle_done = True
+                    self._semi_lock_dwell_start = self.get_clock().now()
+                    self.get_logger().warn(
+                        f'Semi-lock: settle timeout ({self._search_semi_lock_settle_timeout:.1f}s) '
+                        f'→ dwell anyway (RealSense still {self._torso_tracker_state})')
+                else:
+                    self.get_logger().warn(
+                        f'Semi-lock: settle timeout + RealSense lost → skip dwell, resume search')
+                    self._search_position_idx = self._search_saved_idx
+                    self._search_position_start = None
+                    self._set_state(CoordState.SEARCHING)
             return
 
         # ── Fase B — Spot è fermo e allineato, Orbbec cerca LYING ──
+        # Only linger if RealSense still confirms the person is visible
+        if self._torso_tracker_state not in ('GUIDING', 'ESTIMATING', 'LOCKED'):
+            self.get_logger().info(
+                f'Semi-lock: RealSense lost person ({self._torso_tracker_state}) → skip dwell, resume search')
+            self._search_position_idx = self._search_saved_idx
+            self._search_position_start = None
+            self._set_state(CoordState.SEARCHING)
+            return
+
         if self._posture == 'LYING' \
                 and self._confidence >= self._search_lock_confidence \
                 and (z := self._get_approach_odom()) is not None:
