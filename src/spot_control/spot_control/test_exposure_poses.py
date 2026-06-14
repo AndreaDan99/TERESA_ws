@@ -74,19 +74,14 @@ from spot_perception.sml_pose_indices import (
 from teresa_utils.orientation import compute_ee_orientation
 
 def compute_exposure_orientation(pitch: float = 0.0) -> np.ndarray:
-    """Compute EE orientation for exposure scan, compensating Spot pitch.
+    """Compute EE orientation for exposure scan — always vertical in link00.
 
-    X_ee = [0, 0, -1] in link00 would point straight down only if Spot
-    has zero pitch.  When Spot tilts forward by `pitch` radians, link00
-    rotates with it.  We pre-rotate X_ee by -pitch so that after Spot's
-    body rotation the camera ends up vertical in the world frame:
-        X_ee_link00 = Ry(-pitch) @ [0, 0, -1] = [-sin(p), 0, -cos(p)]
+    With frame_id='link00', the IK solver uses the orientation directly.
+    X_ee = [0, 0, -1] points the camera straight down in link00 frame.
+    Pitch is handled by Spot's body TF, no pre-compensation needed.
     """
     home_ori = [-0.0062, 0.4107, 0.0021, 0.9118]
-    c = math.cos(pitch)
-    s = math.sin(pitch)
-    # X_ee in link00 that becomes [0,0,-1] in world after Spot pitch
-    x_ee = np.array([s, 0.0, -c])
+    x_ee = np.array([0.0, 0.0, -1.0])
     return compute_ee_orientation(x_ee, home_ori)
 
 
