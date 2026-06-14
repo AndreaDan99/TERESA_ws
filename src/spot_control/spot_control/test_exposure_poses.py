@@ -503,7 +503,7 @@ class ExposurePoseTester(Node):
             self.declare_parameter('nav_y_timeout', 10.0)
             .get_parameter_value().double_value)
         self._spot_y_penalty = float(
-            self.declare_parameter('spot_y_penalty', 0.50)  # cost = dist + penalty * |spot_y|
+            self.declare_parameter('spot_y_penalty', 1.00)  # cost = dist + penalty * |spot_y| (discourage Y walking)
             .get_parameter_value().double_value)
         self._nav_y_speed = float(
             self.declare_parameter('nav_y_speed', 0.15)
@@ -742,7 +742,7 @@ class ExposurePoseTester(Node):
             (best_spot_y, best_height, best_pitch) in meters and radians.
         """
         # Scale spot_y search range proportionally to body_scale (15 values, keeps 0 included)
-        _max_y = 0.68 * self._body_scale
+        _max_y = 0.60 * self._body_scale  # 70% of body span (was 80% = 0.68)
         _n_y = 15
         spot_y_values = np.linspace(-_max_y, _max_y, _n_y)
         heights = [-0.25, -0.20, -0.15, -0.10, -0.05, 0.0, 0.05, 0.10]
