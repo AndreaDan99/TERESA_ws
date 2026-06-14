@@ -509,7 +509,7 @@ class ExposurePoseTester(Node):
             self.declare_parameter('nav_y_speed', 0.15)
             .get_parameter_value().double_value)
         self._nav_y_invert = bool(
-            self.declare_parameter('nav_y_invert', False)  # invert Y direction (some Spot drivers need +Y=right)
+            self.declare_parameter('nav_y_invert', True)  # invert Y direction (Spot driver uses +Y=right in body frame)
             .get_parameter_value().bool_value)
 
         # Publishers
