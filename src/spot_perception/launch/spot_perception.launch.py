@@ -37,8 +37,8 @@ def generate_launch_description():
 
     perception_backend_arg = DeclareLaunchArgument(
         'perception_backend',
-        default_value='nlf',
-        description='Perception backend: nlf (default) or yolo'
+        default_value='yolo',
+        description='Perception backend: yolo (default) or nlf'
     )
     perception_backend = LaunchConfiguration('perception_backend')
 
@@ -131,7 +131,7 @@ def generate_launch_description():
     )
 
     # ============================================================
-    # 3b) NLF SKELETON (Orbbec) — alternative to YOLO
+    # 3b) NLF SKELETON (Orbbec) — always launched, idle until /nlf/trigger
     # ============================================================
     nlf_skeleton_node = Node(
         package='spot_perception',
@@ -139,7 +139,6 @@ def generate_launch_description():
         name='nlf_skeleton',
         output='screen',
         parameters=[nlf_params_file],
-        condition=IfCondition(PythonExpression(['"', perception_backend, '" == "nlf"']))
     )
 
     # ============================================================
