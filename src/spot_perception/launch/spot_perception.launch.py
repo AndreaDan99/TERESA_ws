@@ -193,6 +193,19 @@ def generate_launch_description():
     )
 
     # ============================================================
+    # 7) Z1 PERCEPTION (Realsense torso tracker + surface node)
+    # ============================================================
+    z1_perception_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            PathJoinSubstitution([
+                FindPackageShare('z1_vision'),
+                'launch',
+                'z1_perception.launch.py'
+            ])
+        ]),
+    )
+
+    # ============================================================
     # SEQUENZA DI AVVIO
     # ============================================================
     return LaunchDescription([
@@ -228,6 +241,9 @@ def generate_launch_description():
             bbox_visualizer_node,
             laying_detector_node,
         ]),
+
+        # Z1 perception (Realsense torso tracker + surface node)
+        z1_perception_launch,
 
         TimerAction(period=PythonExpression([
             '5.0 if "', use_orbbec_driver, '" == "true" else 2.0'
