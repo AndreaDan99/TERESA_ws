@@ -865,7 +865,7 @@ class ExposurePoseTester(Node):
         Non-blocking: sets state to WALKING and returns immediately.
         The actual navigation happens asynchronously in the spin() loop.
 
-        Returns True if already at target (within tolerance), False otherwise.
+        Returns True if nav started or already at target, False only on TF failure.
         """
         try:
             t = self._tf_buffer.lookup_transform(
@@ -890,7 +890,7 @@ class ExposurePoseTester(Node):
         self.get_logger().info(
             f'Y-nav started: '
             f'target={self._target_y:.3f}, current={current_y:.3f}')
-        return False
+        return True
 
     # ── IK goal sending ────────────────────────────────────────────────
 
