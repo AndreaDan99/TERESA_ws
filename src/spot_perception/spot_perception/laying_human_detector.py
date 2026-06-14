@@ -13,6 +13,7 @@ from geometry_msgs.msg import PoseArray, PoseStamped, TransformStamped, Vector3S
 from rclpy.duration import Duration
 from std_msgs.msg import String, Float32
 from tf2_ros import Buffer, TransformBroadcaster, TransformListener
+import tf2_geometry_msgs  # noqa: F401 — registers PoseStamped transform support
 from visualization_msgs.msg import Marker
 
 from spot_perception.sml_pose_indices import *
