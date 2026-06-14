@@ -558,7 +558,7 @@ class ExposurePoseTester(Node):
         # Body scale: Spot mode uses full body with Y-walking, arm-only uses 30%
         if self._spot_enabled:
             self._body_scale = self._body_scale if self._body_scale > 0 else 1.0
-            self._offset_x = 0.65  # body center X in odom (sweet=0.55, +10cm for clearance)
+            self._offset_x = 0.95  # Spot body→front 55cm + 40cm clearance
             self._torso_center_y = (0.60 + (-0.15)) / 2.0 * self._body_scale
             self._offset_y = -self._torso_center_y
             self._standoff = 0.30
