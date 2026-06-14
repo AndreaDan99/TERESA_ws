@@ -87,7 +87,7 @@ class BodyPoseOptimizer(Node):
             self.declare_parameter('spot_y_penalty', 1.00)  # cost = dist + penalty * |dy_body| (discourage Y walking)
             .get_parameter_value().double_value)
         self._spot_y_range = float(
-            self.declare_parameter('spot_y_range', 0.51)  # max lateral displacement for 3D search (60% body span)
+            self.declare_parameter('spot_y_range', 0.51)  # 60% of body half-span (0.85m for 1.70m body)
             .get_parameter_value().double_value)
 
         # ── Subscribers ───────────────────────────────────────────────────────

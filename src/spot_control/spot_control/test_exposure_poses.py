@@ -593,6 +593,10 @@ class ExposurePoseTester(Node):
             self.get_logger().warn(
                 '  TF lookup failed — virtual body at absolute odom position (may not match Spot)')
 
+        # Compute body Y half-span from virtual keypoints (max |Y|, e.g. 0.85 for lying)
+        _body_template = _VIRTUAL_BODY_LYING if self._orientation == 'lying' else _VIRTUAL_BODY_STANDING
+        self._body_half_span = max(abs(rel[1]) for rel in _body_template.values())
+
         # Spot body pose state
         self._settling = False
         self._settle_deadline = None
@@ -742,7 +746,7 @@ class ExposurePoseTester(Node):
             (best_spot_y, best_height, best_pitch) in meters and radians.
         """
         # Scale spot_y search range proportionally to body_scale (15 values, keeps 0 included)
-        _max_y = 0.51 * self._body_scale  # 60% of body span
+        _max_y = 0.6 * self._body_half_span * self._body_scale  # 60% of body half-span
         _n_y = 15
         spot_y_values = np.linspace(-_max_y, _max_y, _n_y)
         heights = [-0.25, -0.20, -0.15, -0.10, -0.05, 0.0, 0.05, 0.10]
