@@ -81,14 +81,22 @@ def generate_launch_description():
         parameters=[params_file],
     )
 
+    mux_node = Node(
+        package='spot_control',
+        executable='ik_goal_mux',
+        name='ik_goal_mux',
+        output='screen',
+    )
+
     return LaunchDescription([
         dry_run_arg,
         step_mode_arg,
-        LogInfo(msg=['WBC — arm-only QP + coordinator + spot navigator + body optimizer + exposure scanner + snapshot']),
+        LogInfo(msg=['WBC — arm-only QP + coordinator + spot navigator + body optimizer + exposure scanner + snapshot + ik_goal_mux']),
         qp_node,
         coord_node,
         navigator_node,
         optimizer_node,
         exposure_node,
         snapshot_node,
+        mux_node,
     ])
