@@ -23,7 +23,7 @@ wbc_qp_controller:
     cartesian_step_wide: 0.20     # [m] passo Y sweep ampio (compensa rotazione Spot)
 
     # Timing per ACTIVE_SEARCH (SEARCHING)
-    search_timeout_per_point: 4.0 # [s] per-pose timeout in SEARCHING (IK + data collection)
+    search_timeout_per_point: 1.0 # [s] data collection timeout (arm movement unlimited)
 
     # Timing per PERCEPTUAL_SCAN (APPROACHING)
     scan_timeout_per_point: 3.0   # [s] raccolta dati per posa in APPROACHING
@@ -82,8 +82,8 @@ wbc_coordinator:
     # Coarse: Spot alterna ±30° yaw, arm 7 poses per yaw; dopo entrambi: HOME + step forward 20cm, repeat.
     search_body_height: 0.0                       # [m] altezza nominale
     search_yaw_angles: [30.0, -30.0]  # degrees, relative steps
-    search_step_forward: 0.20  # [m] forward step after each arm cycle
-    search_step_speed: 0.3     # [m/s] forward step speed
+    search_step_forward: 0.30  # [m] forward step after each arm cycle
+    search_step_speed: 0.5     # [m/s] forward step speed
     search_pitch_angles: [0.0, 0.087, 0.17]       # [rad] 0°, 5°, 10° — usati nel refinement
     search_refine_dwell: 4.0                      # [s] dwell per pitch durante refinement
     search_yaw_kp: 0.8                            # P-gain for yaw rotation via cmd_vel.angular.z

@@ -516,7 +516,8 @@ class WBCQPControllerNode(Node):
         self._scan_data_queue.clear()
         self._scan_scanner = BodySearchScanner(
             scan_poses=poses,
-            scan_point_timeout=self._search_timeout_pp,
+            scan_point_timeout=30.0,  # IK movement: wait as long as needed
+            collect_timeout=self._search_timeout_pp,  # data collection: short wait
             scan_min_frames=SEARCH_MIN_FRAMES,
             early_stop_score=SEARCH_EARLY_STOP,
             logger=self.get_logger(),

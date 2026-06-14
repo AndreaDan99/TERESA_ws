@@ -127,6 +127,7 @@ class BodySearchScanner:
         logger: Any = None,
         transit_indices:    set[int] | None = None,
         stability_k:        float = 10.0,
+        collect_timeout:    float | None = None,  # separate timeout for collection phase
     ):
         self._poses          = scan_poses
         self._timeout        = scan_point_timeout
@@ -135,6 +136,7 @@ class BodySearchScanner:
         self._log            = logger
         self._transit        = transit_indices or set()
         self._stability_k    = stability_k
+        self._collect_timeout = collect_timeout if collect_timeout is not None else scan_point_timeout
 
         # Stato della macchina a stati interna
         self._state:     _St               = _St.INIT
@@ -299,7 +301,7 @@ class BodySearchScanner:
 
         elapsed   = now - self._point_t0
         ready     = self._frames_valid >= self._min_frames
-        timed_out = elapsed >= self._timeout
+        timed_out = elapsed >= self._collect_timeout
 
         if not ready and not timed_out:
             return ScanTick(ScanAction.WAIT)

@@ -1009,7 +1009,7 @@ class WBCCoordinatorNode(Node):
         if self._search_rotating:
             elapsed = (self.get_clock().now() - self._search_rotation_start).nanoseconds / 1e9
             pos = self._search_positions[self._search_position_idx]
-            expected = abs(pos['yaw']) / self._search_max_angular_vel
+            expected = abs(pos['yaw']) / self._search_max_angular_vel + 1.0  # +1s for accel/decel
             if elapsed >= expected:
                 self._pub_cmd_vel.publish(Twist())
                 self._search_rotating = False
