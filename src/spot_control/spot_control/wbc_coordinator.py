@@ -1548,6 +1548,9 @@ class WBCCoordinatorNode(Node):
         pose.orientation.z = q[2]
         pose.orientation.w = q[3]
         self._pub_body_pose.publish(pose)
+        # Workaround spot_ros2 bug: body_pose is accepted but not applied
+        # until a cmd_vel (even zero) triggers the driver to actuate
+        self._pub_cmd_vel.publish(Twist())
 
     def _read_float_array(self, param_name: str) -> list:
         val = self.get_parameter(param_name).value
