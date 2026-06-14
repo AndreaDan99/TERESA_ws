@@ -294,6 +294,7 @@ class WBCCoordinatorNode(Node):
         self._search_settling: bool = False            # True mentre attende che il body_pose si stabilizzi
         self._search_settle_start: rclpy.time.Time | None = None  # inizio attesa settle pitch
         self._search_semi_cooldown: int = 0           # tick cooldown after SEARCHING entry before semi-lock
+        self._search_original_yaw: float | None = None  # yaw at SEARCHING entry, restored after failed semi-lock
         self._lock_lost_ticks: int = 0                # tick consecutivi senza Orbbec in LOCKING
         self._ik_done: bool = False                    # IK trajectory completion status
         self._search_ik_done_count: int = 0  # count ik_done events per search position
@@ -770,9 +771,7 @@ class WBCCoordinatorNode(Node):
                 else:
                     self.get_logger().warn(
                         f'Semi-lock: settle timeout + RealSense lost → skip dwell, resume search')
-                    self._search_position_idx = self._search_saved_idx
-                    self._search_position_start = None
-                    self._set_state(CoordState.SEARCHING)
+                    self._return_from_semi_lock()
             return
 
         # ── Fase B — Spot è fermo e allineato, Orbbec cerca LYING ──
@@ -780,9 +779,7 @@ class WBCCoordinatorNode(Node):
         if self._torso_tracker_state not in ('GUIDING', 'ESTIMATING', 'LOCKED'):
             self.get_logger().info(
                 f'Semi-lock: RealSense lost person ({self._torso_tracker_state}) → skip dwell, resume search')
-            self._search_position_idx = self._search_saved_idx
-            self._search_position_start = None
-            self._set_state(CoordState.SEARCHING)
+            self._return_from_semi_lock()
             return
 
         if self._posture == 'LYING' \
@@ -798,9 +795,15 @@ class WBCCoordinatorNode(Node):
             if self._semi_lock_dwell_start is not None else 0.0
         if dwell_elapsed >= self._search_semi_lock_dwell:
             self.get_logger().info('Semi-lock dwell timeout → resuming search')
-            self._search_position_idx = self._search_saved_idx
-            self._search_position_start = None
-            self._set_state(CoordState.SEARCHING)
+            self._return_from_semi_lock()
+
+    def _return_from_semi_lock(self) -> None:
+        """Reset orientation to original yaw and go back to SEARCHING."""
+        if self._search_original_yaw is not None:
+            self._set_body_pose(self._search_body_height, 0.0, yaw=self._search_original_yaw)
+        self._search_position_idx = self._search_saved_idx
+        self._search_position_start = None
+        self._set_state(CoordState.SEARCHING)
 
     def _tick_locking(self) -> None:
         """Braccio va in home (QP), coordinator raccoglie campioni in parallelo.
@@ -1440,7 +1443,8 @@ class WBCCoordinatorNode(Node):
             # Fresh start or re-entry: reset cooldown to allow pitch cycling before semi-lock
             self._search_semi_cooldown = 3  # 3 ticks (0.3s at 10Hz) before FASE 3 can fire
             if old == CoordState.IDLE:
-                # Fresh start: full reset
+                # Fresh start: full reset, save original yaw for return after semi-lock
+                self._search_original_yaw = self._get_current_yaw()
                 self._search_start = self.get_clock().now()
                 self._search_positions = self._build_search_sequence()
                 self._search_position_idx = 0
