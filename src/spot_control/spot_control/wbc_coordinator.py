@@ -1352,7 +1352,7 @@ class WBCCoordinatorNode(Node):
     # ── Helpers ───────────────────────────────────────────────────────
 
     def _tf_lookup(self, source: str, target: str,
-                   timeout_sec: float = 1.0) -> TransformStamped | None:
+                   timeout_sec: float = 10.0) -> TransformStamped | None:
         try:
             return self._tf.lookup_transform(
                 source, target, self.get_clock().now(),
