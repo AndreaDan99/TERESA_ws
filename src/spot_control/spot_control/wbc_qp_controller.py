@@ -195,6 +195,7 @@ class WBCQPControllerNode(Node):
 
         self._pub_fast       = self.create_publisher(PoseArray, '/z1/fast_points', 10)
         self._pub_fast_ready = self.create_publisher(Bool,      '/z1/fast_ready',  10)
+        self._pub_scan_done  = self.create_publisher(Bool,      '/wbc/scan_done',  10)
         self._pub_tracker_scan = self.create_publisher(Bool, '/tracker_scan_mode', 10)
         self._pub_tracker_reset = self.create_publisher(Bool, '/tracker_reset',    10)
         self._pub_grid_type     = self.create_publisher(String, '/wbc/scan_grid_type', 10)
@@ -545,6 +546,7 @@ class WBCQPControllerNode(Node):
 
         elif st.action in (ScanAction.EXIT_SCAN_MODE, ScanAction.DONE, ScanAction.FAILED):
             self._scan_scanner = None
+            self._pub_scan_done.publish(Bool(data=True))  # signal coordinator
             self._start_active_search()
 
     def _end_search(self, re_enable: bool = False) -> None:

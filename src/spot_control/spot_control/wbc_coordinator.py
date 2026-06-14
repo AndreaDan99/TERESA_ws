@@ -308,6 +308,7 @@ class WBCCoordinatorNode(Node):
         self._ik_done: bool = False                    # IK trajectory completion status
         self._search_ik_done_count: int = 0  # count ik_done events per search position
         self._search_home_phase: bool = False    # True while sending arm HOME between cycles
+        self._search_scan_done: bool = False     # True when QP controller completes 7-pose scan
         self._search_step_phase: bool = False    # True while stepping Spot forward
         self._search_step_start: rclpy.time.Time | None = None  # forward step start time
         self._torso_tracker_state: str = ''           # LOCKED / TRACKING / IDLE
@@ -385,6 +386,7 @@ class WBCCoordinatorNode(Node):
         self._pub_handoff  = self.create_publisher(Bool, '/wbc/handoff_reached', 10)
         self._pub_manual_gate = self.create_publisher(Bool, '/wbc/manual_scan_gate', 10)
         self.create_subscription(Bool, '/wbc/step_confirm', self._cb_step_confirm, 10)
+        self.create_subscription(Bool, '/wbc/scan_done',    self._cb_scan_done,    10)
 
         self.create_timer(0.1, self._tick)   # 10 Hz FSM
         self._set_state(CoordState.WAITING_TF)
@@ -457,6 +459,10 @@ class WBCCoordinatorNode(Node):
             if msg.data and self._step_pending_state is not None:
                 self._step_confirmed = True
                 self.get_logger().info(f'[STEP] Confermato passaggio a {self._step_pending_state}')
+
+    def _cb_scan_done(self, msg: Bool) -> None:
+        self._search_scan_done = True
+        self.get_logger().info('📡 QP controller: scan completato')
             if msg.data and self._state == CoordState.WAITING_EXPOSURE:
                 self.get_logger().info('Step confirm → EXPOSURE_SCANNING')
                 self._set_state(CoordState.EXPOSURE_SCANNING)
@@ -961,12 +967,12 @@ class WBCCoordinatorNode(Node):
             self._pub_ik_goal.publish(home_pose)
             return
 
-        # ── Waiting for arm scan to complete (timed dwell, no ik_done counting) ──
+        # ── Waiting for QP controller scan to complete ──
         if not self._search_rotating and self._search_position_start is not None:
-            elapsed = (self.get_clock().now() - self._search_position_start).nanoseconds / 1e9
-            if elapsed >= self._search_arm_dwell:
+            if self._search_scan_done:
+                self._search_scan_done = False
                 self.get_logger().info(
-                    f'Search pos {self._search_position_idx+1}: arm dwell done ({elapsed:.1f}s) → next')
+                    f'Search pos {self._search_position_idx+1}: scan done → next')
                 self._search_position_idx += 1
                 self._search_position_start = None
                 return
@@ -1002,7 +1008,8 @@ class WBCCoordinatorNode(Node):
                 self._pub_cmd_vel.publish(Twist())
                 self._search_rotating = False
                 self._search_position_start = self.get_clock().now()
-                self._ik_done = False  # reset for arm to start 7 poses
+                self._search_scan_done = False  # wait for next scan completion
+                self._ik_done = False
                 self._search_ik_done_count = 0
                 self.get_logger().info(
                     f'Search pos {self._search_position_idx+1}: rotation done '
