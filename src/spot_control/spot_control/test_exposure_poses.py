@@ -1142,9 +1142,14 @@ class ExposurePoseTester(Node):
                         twist = Twist()
                         speed = min(abs(dy) * 0.3, self._nav_y_speed)
                         sign = -1.0 if self._nav_y_invert else 1.0
-                        twist.linear.y = sign * math.copysign(max(speed, 0.12), dy)  # +Y = left in body frame, match odom
+                        vel_y = sign * math.copysign(max(speed, 0.12), dy)
+                        twist.linear.y = vel_y
                         twist.angular.z = 0.0
                         self._pub_cmd_vel.publish(twist)
+                        self.get_logger().info(
+                            f'🚶 Y-nav: dy={dy:+.3f} vel_y={vel_y:+.3f} '
+                            f'target={self._target_y:.3f} current={current_y:.3f}',
+                            throttle_duration_sec=1.0)
 
                 # After nav tick: process arrival
                 if self._nav_state in (NavState.ARRIVED, NavState.TIMEOUT):
