@@ -241,7 +241,10 @@ class NLFSkeletonNode(Node):
             self.get_logger().warn('NLF burst already active — ignoring duplicate trigger')
             return
         if not self._nlf_ready:
-            self.get_logger().warn('NLF trigger received but model not ready')
+            # Model not loaded yet — try to init now (triggered on demand)
+            self._init_model()
+        if not self._nlf_ready:
+            self.get_logger().warn('NLF trigger received but model failed to load')
             return
         if self._last_color_msg is None:
             self.get_logger().warn('NLF trigger received but no image available')
@@ -419,8 +422,8 @@ class NLFSkeletonNode(Node):
         if self._frame_count % self._process_every != 0:
             return
 
-        if not self._nlf_ready and not self._nlf_stub_warned:
-            self._init_model()
+        if not self._nlf_ready:
+            return  # model not loaded yet — wait for /nlf/trigger
         if self.cam_info is None:
             self.get_logger().warn(
                 'NLF waiting for camera info — /orbbec/color/camera_info not received yet',
