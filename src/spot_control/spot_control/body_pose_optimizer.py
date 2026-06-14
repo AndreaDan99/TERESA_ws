@@ -86,6 +86,9 @@ class BodyPoseOptimizer(Node):
         self._spot_y_penalty = (
             self.declare_parameter('spot_y_penalty', 0.50)  # cost = dist + penalty * |dy_body|
             .get_parameter_value().double_value)
+        self._spot_y_range = float(
+            self.declare_parameter('spot_y_range', 0.68)  # max lateral displacement for 3D search
+            .get_parameter_value().double_value)
 
         # ── Subscribers ───────────────────────────────────────────────────────
         self._sub_approach_point = self.create_subscription(
@@ -445,7 +448,7 @@ class BodyPoseOptimizer(Node):
             self.get_logger().warn('_optimize_3d: body frame TF not available')
             return {}
 
-        dy_body_values = np.arange(-0.68, 0.73, 0.10)  # 15 values, ±0.68 m
+        dy_body_values = np.linspace(-self._spot_y_range, self._spot_y_range, 15)
         heights = self._body_grid_heights
         pitches = self._body_grid_pitches
         sweet = np.array(self._body_sweet_spot)
