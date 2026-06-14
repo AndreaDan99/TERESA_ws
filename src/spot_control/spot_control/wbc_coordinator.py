@@ -948,10 +948,10 @@ class WBCCoordinatorNode(Node):
             home_pose.pose.position.x = 0.144
             home_pose.pose.position.y = -0.005
             home_pose.pose.position.z = 0.52
-            home_pose.pose.orientation.x = 0.0182
-            home_pose.pose.orientation.y = 0.1521
-            home_pose.pose.orientation.z = -0.0217
-            home_pose.pose.orientation.w = 0.9880
+            home_pose.pose.orientation.x = 0.0162
+            home_pose.pose.orientation.y = 0.2376
+            home_pose.pose.orientation.z = -0.0232
+            home_pose.pose.orientation.w = 0.9709
             self._pub_ik_goal.publish(home_pose)
             return
 

@@ -478,19 +478,19 @@ class WBCQPControllerNode(Node):
         wrist path. Final FWD-C returns arm to center before Spot changes yaw.
         """
         SEARCH_POSES = [
-            # FORWARD
-            (np.array([0.144, -0.005, 0.52]), np.array([0.0182, 0.1521, -0.0217, 0.9880]), "FWD-C"),
-            (np.array([0.067, -0.070, 0.52]), np.array([0.0906, 0.1890, -0.3976, 0.8932]), "FWD-L"),
+            # FORWARD (10° camera tilt)
+            (np.array([0.144, -0.005, 0.52]), np.array([0.0162, 0.2376, -0.0232, 0.9709]), "FWD-C"),
+            (np.array([0.067, -0.070, 0.52]), np.array([0.0556, 0.2662, -0.4040, 0.8734]), "FWD-L"),
             # BEHIND LEFT (via forward)
-            (np.array([-0.052, -0.042, 0.52]), np.array([-0.208, -0.175, 0.910, -0.313]), "BWD-L"),
+            (np.array([-0.052, -0.042, 0.52]), np.array([-0.1279, -0.2016, 0.9247, -0.2966]), "BWD-L"),
             # BEHIND CENTER
-            (np.array([-0.075, -0.013, 0.52]), np.array([-0.152, -0.109, 0.982, 0.000]), "BWD-C"),
+            (np.array([-0.075, -0.013, 0.52]), np.array([-0.0659, -0.1086, 0.9919, 0.0095]), "BWD-C"),
             # TRANSIT to center
-            (np.array([0.144, -0.005, 0.52]), np.array([0.0182, 0.1521, -0.0217, 0.9880]), "FWD-C"),
+            (np.array([0.144, -0.005, 0.52]), np.array([0.0162, 0.2376, -0.0232, 0.9709]), "FWD-C"),
             # BEHIND RIGHT
-            (np.array([-0.077, 0.071, 0.52]), np.array([-0.115, 0.009, 0.932, 0.345]), "BWD-R"),
+            (np.array([-0.077, 0.071, 0.52]), np.array([-0.0333, 0.0390, 0.9380, 0.3427]), "BWD-R"),
             # RETURN to center (before Spot changes yaw)
-            (np.array([0.144, -0.005, 0.52]), np.array([0.0182, 0.1521, -0.0217, 0.9880]), "FWD-C"),
+            (np.array([0.144, -0.005, 0.52]), np.array([0.0162, 0.2376, -0.0232, 0.9709]), "FWD-C"),
         ]
         poses = []
         for pos, quat, label in SEARCH_POSES:
