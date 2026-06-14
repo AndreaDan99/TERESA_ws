@@ -297,6 +297,7 @@ class WBCCoordinatorNode(Node):
         self._search_saved_idx: int = 0               # idx da riprendere dopo semi-lock
         self._search_settling: bool = False            # True mentre attende che il body_pose si stabilizzi
         self._search_settle_start: rclpy.time.Time | None = None  # inizio attesa settle pitch
+        self._search_semi_cooldown: int = 0           # tick cooldown after SEARCHING entry before semi-lock
         self._lock_lost_ticks: int = 0                # tick consecutivi senza Orbbec in LOCKING
         self._ik_done: bool = False                    # IK trajectory completion status
         self._search_ik_done_count: int = 0  # count ik_done events per search position
@@ -674,6 +675,10 @@ class WBCCoordinatorNode(Node):
             self._pub_spot_ctrl.publish(Bool(data=True))  # navigator active
 
     def _tick_searching(self) -> None:
+        # Cooldown: prevent semi-lock from firing immediately on SEARCHING entry
+        if self._search_semi_cooldown > 0:
+            self._search_semi_cooldown -= 1
+
         # FASE 1 — Lock in corso: raccolta campioni
         if self._search_lock_buffer is not None:
             lock_ok = (self._posture == 'LYING'
@@ -706,8 +711,9 @@ class WBCCoordinatorNode(Node):
             return
 
         # FASE 3 — Check semi-lock da RealSense (only between search positions,
-        # not during pitch settling or active arm scan)
-        if self._search_position_start is None and not self._search_settling \
+        # not during pitch settling or active arm scan, and after cooldown)
+        if self._search_semi_cooldown <= 0 \
+                and self._search_position_start is None and not self._search_settling \
                 and self._torso_tracker_state in ('GUIDING', 'ESTIMATING', 'LOCKED') \
                 and self._torso_pos is not None:
             if self._check_realsense_guidance():
@@ -1420,6 +1426,8 @@ class WBCCoordinatorNode(Node):
             old = self._state
             self._search_lock_buffer = None
             self._set_wbc_enabled(True)
+            # Fresh start or re-entry: reset cooldown to allow pitch cycling before semi-lock
+            self._search_semi_cooldown = 3  # 3 ticks (0.3s at 10Hz) before FASE 3 can fire
             if old == CoordState.IDLE:
                 # Fresh start: full reset
                 self._search_start = self.get_clock().now()
@@ -1437,6 +1445,8 @@ class WBCCoordinatorNode(Node):
                 self._search_home_phase = False
                 self._search_step_phase = False
                 self._search_step_start = None
+                self._search_scan_done = False
+                self._search_settling = False
             # else: re-entry from LOCKING or SEMI_LOCKING — resume, don't rebuild
         if new_state == CoordState.SCANNING:
             self._set_body_pose(self._handoff_body_height)
