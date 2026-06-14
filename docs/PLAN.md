@@ -2,6 +2,32 @@
 
 ---
 
+## ✅ Pitch-Based Search + NLF Lazy-Load + Semi-Lock Robustness — IMPLEMENTED (14 June 2026)
+
+### Fatto
+- ✅ **SEARCHING redesign**: pitch-based (+10°/+5°/0°), no yaw rotation, 50cm step forward (was 20cm)
+- ✅ **7 arm search poses**: 3 forward with 10° camera tilt + 3 behind (original quaternions) + return
+- ✅ **SEMI_LOCKING**: RealSense gate (dwell only if person still visible), yaw restoration on fail, Orbbec dwell 3s→5s, cooldown 3 ticks
+- ✅ **TF fixes**: `_tf_lookup()` uses `rclpy.time.Time()` instead of `get_clock().now()`, timeout 1s→10s
+- ✅ **NLF lazy-load**: skeleton always launched, model loads only on `/nlf/trigger`
+- ✅ **`/wbc/perception_enable`**: transient_local QoS, enables perception on SEARCHING, disables on IDLE
+- ✅ **spot_control gating**: navigator disabled in WAITING_TF and SEARCHING
+- ✅ **Dead code removed**: `wbc_approach_scanner.py`, `test_legacy/`, `SEARCH_HOME_POS`/`SEARCH_HOME_ORI`, `_pub_debug_marker()`
+- ✅ **Refinement mode removed**: pitch sweep is now part of main search cycle
+
+### File modificati
+| File | +/- |
+|------|-----|
+| `wbc_coordinator.py` | ~+200/−150 |
+| `wbc_qp_controller.py` | ~+50/−30 |
+| `nlf_skeleton.py` | ~+20/−5 |
+| `wbc_params.yaml` | ~+10/−5 |
+| `spot_perception.launch.py` | ~+2/−1 |
+| `wbc_approach_scanner.py` | −40 |
+| `test_legacy/` | −all |
+
+---
+
 ## ✅ Body Pose Optimizer + Y-Walking + Patient Body TF — IMPLEMENTED (12 June 2026)
 
 ### Fatto
@@ -669,8 +695,8 @@ Analisi fase-per-fase del FSM con fix mirati. Ogni fase viene analizzata, i prob
 
 | Fase | Stato | Problemi risolti |
 |------|:-----:|------------------|
-| **SEARCHING** | ✅ | Timed ±30° open-loop rotation, 7 pose FK reader, step 20cm (8 Giugno) |
-| **SEMI_LOCKING** | ✅ | Pitch flush, GUIDING conf≥0.5 + ≥2 kp, `_end_search(re_enable=True)` |
+| **SEARCHING** | ✅ | Pitch-based (+10°/+5°/0°), no yaw, 7 arm poses (3 forward 10° tilt + 3 behind + return), step 50cm (14 Giugno) |
+| **SEMI_LOCKING** | ✅ | RealSense gate (dwell only if person visible), yaw restore on fail, Orbbec dwell 5s, cooldown 3 ticks, `_end_search(re_enable=True)` |
 | **LOCKING** | ✅ | `ik_done` gate, home_lock_z=0.60 → sostituita da prima posa search (8 Giugno). NLF burst multi-frame + blocco PRE_APPROACH (9 Giugno) |
 | **PRE_APPROACH** | ✅ | LOOKAT → `/laying_human/body_center`, soglia ESTIMATING/LOCKED ×3 |
 | **APPROACHING** | ✅ | Griglia adattiva 2/4 pose + advance X=0.10, `_do_set_state` pulizia, timeout 60s |

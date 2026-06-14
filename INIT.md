@@ -18,46 +18,59 @@ git status --short
 
 | Document | Contents |
 |----------|----------|
-| [`docs/CHANGELOG.md`](docs/CHANGELOG.md) | Changelog storico (6 May – 10 June 2026) |
+| [`docs/CHANGELOG.md`](docs/CHANGELOG.md) | Changelog storico (6 May – 14 June 2026) |
 | [`docs/DESCRIPTION.md`](docs/DESCRIPTION.md) | Architettura sistema, frame tree, FSM, build/run |
 | [`docs/PLAN.md`](docs/PLAN.md) | Piano futuro (exposure, injury detection, refactoring) |
 | [`web/README.md`](web/README.md) | Web control panel + camera view con YOLO overlay |
 
 ---
 
-## Current State (12 June 2026)
+## Current State (14 June 2026)
 
-### Body Pose Optimizer Node
-- **Nuovo nodo**: `body_pose_optimizer.py` (~600 righe). Ottimizzazione 2D (h,p), 3D (dy_body,h,p), 4D (dx_body,dy_body,h,p) con retry loop IK-driven
-- **Retry IK-driven**: 2D→3D→4D basato su `/ik_done` timeout (2s), non su distanza euristica
-- **FAST + Exposure**: entrambi i path WBC ora usano lo stesso optimizer
-- **Topic interface**: `~/optimize_request` (PoseArray) → `~/optimize_result` (PoseArray)
+### SEARCHING — Pitch-Based Design (completely redesigned)
+- **NO yaw rotation** — Spot stays at current yaw throughout search
+- **Pitch cycling**: Spot tilts +10° → +5° → 0° (nose down). Each pitch: 2s body pose settle → arm does 7 poses
+- **7 arm search poses**: 3 forward (FWD-C, FWD-L, FWD-R) + 3 behind (BWD-L, BWD-C, BWD-R) with transit + final return
+- **Forward poses**: 10° camera tilt downward (FWD-C, FWD-L). Behind poses: original quaternions, no tilt
+- **After all 3 pitches**: arm HOME → Spot steps forward **50cm** (was 20cm) → repeat
+- **Search positions**: `[{yaw:0, pitch:+10°}, {yaw:0, pitch:+5°}, {yaw:0, pitch:0°}]`
+- TF `odom→body` no longer needed for search rotation
 
-### Y-Walking Simulation
-- `test_exposure_poses.py`: Spot cammina lungo Y per ogni punto (3D grid search spot_y×h×p, 600 combo)
-- Corpo virtuale a grandezza 1.0 (1.70m reale) in frame odom, non più link00
-- Navigazione cmd_vel.linear.y + TF feedback chiuso, NavState machine, safety guards
+### SEMI_LOCKING Improvements
+- **RealSense gate**: dwell starts ONLY if RealSense still sees person (GUIDING/ESTIMATING/LOCKED). If lost → skip dwell, return to SEARCHING
+- Same check at settle timeout
+- **Yaw restoration**: after failed semi-lock, Spot returns to original yaw via body_pose
+- **Orbbec dwell**: 3s → 5s
+- **Cooldown**: 3 ticks (0.3s) after SEARCHING entry before semi-lock can fire; prevents immediate re-trigger loop
 
-### Patient Body TF
-- **Nuova TF**: `my_spot/odom` → `patient_body` pubblicata da `laying_human_detector.py`
-- Body frame da keypoint detector: X=attraverso corpo, Y=testa→piedi, Z=UP
-- `body_pose_optimizer` usa TF per convertire dy_body/dx_body in odom
-- `wbc_coordinator` usa TF per yaw corpo e approccio (sostituisce 3 subscriber)
+### TF Fixes
+- `_tf_lookup()` uses `rclpy.time.Time()` instead of `get_clock().now()` to avoid extrapolation errors with DDS latency
+- Timeout: 1s → 10s
 
-### WBC Refactoring
-- **Rimossi 11 metodi**: `_optimize_body_poses`, `_optimize_exposure_body_poses`, `_optimize_ws_extension`, `_drive_ws_ext_position`, `_tick_ws_ext_drive`, `_simulate_link00`, `_link00_to_odom_vec`, `_odom_to_link00_vec`, `_apply_fast_body_pose`, `_apply_exposure_body_pose`
-- **-340 righe nette**, FSM preservato
-- **Bug fix**: `_navigator_timeout` assegnato (era dichiarato ma mai inizializzato)
-- Sostituiti 3 subscriber (`/approach_point`, `/body_axis`, `/body_center`) con TF lookup
+### NLF Changes
+- NLF skeleton **always launched** but model loads **lazily** only on `/nlf/trigger` — near-zero CPU until LOCKING
+- YOLO remains default perception backend
+
+### New / Changed Features
+- `/wbc/perception_enable` publisher (transient_local QoS) — enables posture classifier and torso tracker on SEARCHING entry, disables on IDLE
+- **spot_control gating**: navigator disabled in WAITING_TF and SEARCHING, re-enabled in IDLE
+- **`Twist()` after every `body_pose`** as workaround for spot_ros2 actuation bug
+- **Dead code removed**: `wbc_approach_scanner.py` (deprecated), `test_legacy/` directory, `SEARCH_HOME_POS`/`SEARCH_HOME_ORI` constants, `_pub_debug_marker()` stub
+
+### Coordinator FSM Changes
+- Refinement mode (pitch sweep) REMOVED — pitch is now part of main search cycle
+- Semi-lock gated by `_search_position_start is None and not _search_settling`
 
 ### Modified files
 | File | +/- | Changes |
 |------|-----|---------|
-| `body_pose_optimizer.py` | +600 | Nuovo nodo: 2D/3D/4D + retry + TF |
-| `wbc_coordinator.py` | -340 | Rimosse ottimizzazioni interne, integrato optimizer, TF lookup |
-| `laying_human_detector.py` | +77 | Aggiunto TransformBroadcaster, pubblica patient_body TF |
-| `test_exposure_poses.py` | +190 | Y-walking 3D, corpo odom, NavState, safety guards |
-| `setup.py` | +1 | Entry point body_pose_optimizer |
+| `wbc_coordinator.py` | ~+200/−150 | Pitch-based search, semi-lock RealSense gate, yaw restore, TF fix, perception_enable, spot_control gating, dead code removal |
+| `wbc_qp_controller.py` | ~+50/−30 | 7 search poses (3 forward 10° tilt + 3 behind + return), ACTIVE_SEARCH mode updated |
+| `nlf_skeleton.py` | ~+20/−5 | Lazy model loading on `/nlf/trigger`, always launched |
+| `wbc_params.yaml` | ~+10/−5 | Search params updated (pitch angles, step 0.50m, semi-lock cooldown) |
+| `spot_perception.launch.py` | ~+2/−1 | NLF always launched (no condition) |
+| `wbc_approach_scanner.py` | −40 | Removed (deprecated) |
+| `test_legacy/` | −all | Removed |
 
 ---
 

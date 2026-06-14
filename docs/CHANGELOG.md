@@ -1,7 +1,56 @@
 # TERESA — Changelog
 
-Storico completo delle modifiche dal 6 maggio 2026 al 12 giugno 2026.
+Storico completo delle modifiche dal 6 maggio 2026 al 14 giugno 2026.
 Per la descrizione del sistema corrente vedi [`DESCRIPTION.md`](DESCRIPTION.md).
+
+---
+
+## 14 June 2026 — Pitch-Based Search + NLF Lazy-Load + Semi-Lock Robustness
+
+### SEARCHING — Complete Redesign (Pitch-Based)
+- **NO yaw rotation** — Spot stays at current yaw throughout search
+- **Pitch cycling instead**: Spot tilts +10° → +5° → 0° (nose down). Each pitch: 2s body pose settle → arm does 7 poses
+- **7 arm search poses**: 3 forward (FWD-C, FWD-L, FWD-R) + 3 behind (BWD-L, BWD-C, BWD-R) with transit + final return
+- **Forward poses (FWD-C, FWD-L): 10° camera tilt downward** for better body framing
+- **Behind poses (BWD-L, BWD-C, BWD-R): original quaternions, no tilt**
+- Transit and return poses use same 10° tilt as forward
+- After all 3 pitches: arm HOME → Spot steps forward **50cm** (was 20cm) → repeat
+- Search positions: `[{yaw:0, pitch:+10°}, {yaw:0, pitch:+5°}, {yaw:0, pitch:0°}]`
+- TF `odom→body` no longer needed for search rotation
+- **Refinement mode removed**: pitch sweep is now part of main search cycle
+
+### SEMI_LOCKING Improvements
+- **RealSense gate**: dwell starts ONLY if RealSense still sees person (GUIDING/ESTIMATING/LOCKED). If lost → skip dwell, return to SEARCHING
+- Same check at settle timeout
+- **Yaw restoration**: after failed semi-lock, Spot returns to original yaw via body_pose
+- **Orbbec dwell**: 3s → 5s
+- **Cooldown**: 3 ticks (0.3s) after SEARCHING entry before semi-lock can fire; prevents immediate re-trigger loop
+- Semi-lock gated by `_search_position_start is None and not _search_settling`
+
+### TF Fixes
+- `_tf_lookup()` uses `rclpy.time.Time()` instead of `get_clock().now()` to avoid extrapolation errors with DDS latency
+- Timeout: 1s → 10s
+
+### NLF Changes
+- NLF skeleton **always launched** but model loads **lazily** only on `/nlf/trigger` — near-zero CPU until LOCKING
+- YOLO remains default perception backend
+
+### New / Changed Features
+- **`/wbc/perception_enable`** publisher (transient_local QoS) — enables posture classifier and torso tracker on SEARCHING entry, disables on IDLE
+- **spot_control gating**: navigator disabled in WAITING_TF and SEARCHING, re-enabled in IDLE
+- **`Twist()` after every `body_pose`** as workaround for spot_ros2 actuation bug
+- **Dead code removed**: `wbc_approach_scanner.py` (deprecated), `test_legacy/` directory, `SEARCH_HOME_POS`/`SEARCH_HOME_ORI` constants, `_pub_debug_marker()` stub
+
+### Modified files
+| File | +/- | Changes |
+|------|-----|---------|
+| `wbc_coordinator.py` | ~+200/−150 | Pitch-based search, semi-lock RealSense gate, yaw restore, TF fix, perception_enable, spot_control gating, dead code removal |
+| `wbc_qp_controller.py` | ~+50/−30 | 7 search poses (3 forward 10° tilt + 3 behind + return), ACTIVE_SEARCH mode updated |
+| `nlf_skeleton.py` | ~+20/−5 | Lazy model loading on `/nlf/trigger`, always launched |
+| `wbc_params.yaml` | ~+10/−5 | Search params updated (pitch angles, step 0.50m, semi-lock cooldown) |
+| `spot_perception.launch.py` | ~+2/−1 | NLF always launched (no condition) |
+| `wbc_approach_scanner.py` | −40 | Removed (deprecated) |
+| `test_legacy/` | −all | Removed |
 
 ---
 

@@ -20,7 +20,7 @@ Due pipeline coesistono:
 Two perception backends are available, selectable via the `perception_backend` launch parameter:
 
 - **`yolo` (default since 8 June 2026)**: YOLO11n-pose — 2D keypoints + depth back-projection + Kalman filtering. 24 joints published (17 COCO mapped + 7 NaN for SMPL-only joints). Runs at ~40 FPS, used during SEARCHING.
-- **`nlf`**: NLF (Neural Localizer Fields) — direct 3D SMPL joints from RGB, no depth back-projection needed. 24 joints published. Runs at ~2.5 FPS. Starts in paused mode (`_streaming_paused = True`). Triggered at LOCKING con burst multi-frame (2 detection valide, EMA smoothing, timeout 30s). Pubblica prior raffinato su `/exposure/nlf_prior` e confidence su `/exposure/nlf_confidence`.
+- **`nlf`**: NLF (Neural Localizer Fields) — direct 3D SMPL joints from RGB, no depth back-projection needed. 24 joints published. Runs at ~2.5 FPS. **Skeleton always launched** but model loads **lazily** only on `/nlf/trigger` — near-zero CPU until LOCKING. Triggered at LOCKING con burst multi-frame (2 detection valide, EMA smoothing, timeout 30s). Pubblica prior raffinato su `/exposure/nlf_prior` e confidence su `/exposure/nlf_confidence`.
 
 Switch at launch:
 ```bash
@@ -123,19 +123,19 @@ HOMING → WAITING (aspetta segnale WBC + FAST points pre-calcolati dal QP)
 
 ---
 
-## Fase 1 — SEARCHING (rewritten 8 June 2026)
+## Fase 1 — SEARCHING (rewritten 14 June 2026)
 
 `IDLE → SEARCHING` (premi `s` sulla tastiera)
 
-### SEARCHING (rewritten 8 June 2026)
+### SEARCHING (rewritten 14 June 2026)
 
-**Coarse search**: Spot alternates ±30° yaw (timed open-loop, no TF dependency). Each yaw position: arm cycles through 6 symmetric mathematically-generated poses (3 forward X=+0.12 + 3 look-behind X=-0.15, all Z=0.53, Y=±0.20). Orientation computed via `compute_ee_orientation()` — no forced FK-reader quaternions. After both yaws complete: arm returns HOME, Spot steps forward 20cm, cycle repeats.
+**Pitch-based search**: Spot stays at current yaw (NO rotation). Cycles through 3 pitch angles: +10° → +5° → 0° (nose down). Each pitch: 2s body pose settle → arm does 7 poses. After all 3 pitches: arm HOME → Spot steps forward 50cm → repeat.
 
-- **Rotation**: timed `cmd_vel.angular.z = 0.2 rad/s` for ~2.6s per 30° step — no TF `odom→body` required
-- **Arm poses**: 6 pose simmetriche generate matematicamente (3 forward X=+0.12 + 3 look-behind X=-0.15, Z=0.53, Y=±0.20). Orientamento calcolato da `compute_ee_orientation()` — X_ee punta avanti/dietro, Y_ee vicino a home. Nessun quaternione FK-reader forzato.
-- **Wait logic**: coordinator counts 6 `ik_done` events before advancing to next yaw
-- **Step forward**: 20cm at 0.3 m/s (~0.67s) after each full cycle
-- **Refinement**: triggers when Orbbec posture confidence ≥ 0.30 during arm wait
+- **Pitch cycling**: `[{yaw:0, pitch:+10°}, {yaw:0, pitch:+5°}, {yaw:0, pitch:0°}]` — no yaw rotation, TF `odom→body` not needed
+- **Arm poses**: 7 poses (3 forward + 3 behind with transit + final return). Forward poses (FWD-C, FWD-L): 10° camera tilt downward. Behind poses (BWD-L, BWD-C, BWD-R): original quaternions, no tilt. Transit and return poses use same 10° tilt as forward.
+- **Wait logic**: coordinator counts 7 `ik_done` events before advancing to next pitch
+- **Step forward**: 50cm at 0.3 m/s after each full pitch cycle (was 20cm)
+- **Refinement removed**: pitch sweep is now part of main search cycle
 - **Lock**: confidence ≥ 0.70 → direct LOCKING (no SEMI_LOCKING needed)
 
 ### Sensori coinvolti
@@ -338,8 +338,8 @@ I target FSM sono in world frame — quando Spot cambia body_pose, il target si 
 
 | Fase | Spot | Braccio | WBC/QP |
 |------|:----:|:-------:|:------:|
-| **SEARCHING** | ±30° yaw timed open-loop + step forward 20cm | 6 pose simmetriche generate matematicamente in loop | Rotation + arm poses |
-| **SEMI_LOCKING** | Ruotato+inclinato verso torso | LOOKAT attivo subito (re_enable=True) | Arm LOOKAT |
+| **SEARCHING** | Pitch cycling +10°/+5°/0°, no yaw rotation, step forward 50cm | 7 pose (3 forward 10° tilt + 3 behind + return) in loop | Pitch cycling + arm poses |
+| **SEMI_LOCKING** | Inclinato verso torso, yaw restore on fail, Orbbec dwell 5s | LOOKAT attivo subito (re_enable=True) | Arm LOOKAT |
 | **LOCKING** | Fermo, al miglior pitch del refinement. Attende NLF burst (2 detection o 30s timeout). | Prima posa di search. Resta fermo. | Off → search pose. NLF burst pubblica prior raffinato. |
 | **PRE_APPROACH** | Dritto, fermo | LOOKAT verso body_center (ω_des + joint centering) | Arm-only WBC |
 | **APPROACHING** | Navigatore → goal (timeout 60s) | PERCEPTUAL_SCAN (2-4 pose adattive + advance X) | Cartesian grid adattiva |
@@ -353,10 +353,10 @@ I target FSM sono in world frame — quando Spot cambia body_pose, il target si 
 
 | Nodo | Ruolo |
 |------|-------|
-| `wbc_coordinator` | FSM (11 stati). PRE_APPROACH: LOOKAT verso body_center con Z offset +0.40m fallback, sliding window (≥1 ESTIMATING/LOCKED su 5 tick). |
+| `wbc_coordinator` | FSM (11 stati). SEARCHING: pitch-based (no yaw), 7 arm poses, 50cm step. SEMI_LOCKING: RealSense gate + yaw restore. PRE_APPROACH: LOOKAT verso body_center con Z offset +0.40m fallback, sliding window (≥1 ESTIMATING/LOCKED su 5 tick). Pubblica `/wbc/perception_enable` (transient_local) per abilitare posture classifier e torso tracker. |
 | `exposure_scanner` | Full-body exposure scan: 14-pose grid su 7 regioni, look-at dinamico, standoff orizzontale 0.50m, TF Orbbec→world, running-average scheletro raffinato su `/exposure/refined_skeleton`, JSON output. |
 | `exposure_snapshot` | Snapshot RealSense su click in EXPOSURE_REVIEW. Trigger `/exposure/goto_point` + `/ik_done`, delay 1s, pubblica `/exposure/snapshot`, salva JPEG su disco. |
-| `wbc_qp_controller` | **Arm-only WBC, 3 modalità**: ACTIVE_SEARCH (6 symmetric mathematically-generated poses), LOOKAT (ω_des + joint centering), PERCEPTUAL_SCAN (griglia adattiva 2-4 pose). |
+| `wbc_qp_controller` | **Arm-only WBC, 3 modalità**: ACTIVE_SEARCH (7 poses: 3 forward 10° tilt + 3 behind + return), LOOKAT (ω_des + joint centering), PERCEPTUAL_SCAN (griglia adattiva 2-4 pose). |
 | `wbc_spot_navigator` | Navigatore semplificato per APPROACHING e WS_EXT. |
 
 ### Coordinator FSM
@@ -367,6 +367,7 @@ WAITING_TF → IDLE → SEARCHING → SEMI_LOCKING → LOCKING → PRE_APPROACH 
                 │
                 └── restart (keyboard)
 ```
+**SEARCHING**: pitch cycling (+10°/+5°/0°, no yaw), 7 arm poses per pitch, 50cm step forward. Refinement mode removed (pitch is now part of main cycle). Semi-lock gated by `_search_position_start is None and not _search_settling`. Cooldown 3 ticks (0.3s) after SEARCHING entry before semi-lock can fire.
 
 ### Z1 FSM states
 ```
@@ -386,7 +387,7 @@ HOMING → WAITING → BODY_SCANNING → CHECKING_WORKSPACE ──────�
 
 ### WBC QP modes (SEARCHING → PRE_APPROACH → APPROACHING)
 
-Durante **SEARCHING** il QP opera in **ACTIVE_SEARCH mode**: 6 pose simmetriche generate matematicamente (3 forward X=+0.12 + 3 look-behind X=-0.15, Z=0.53, Y=±0.20), eseguite in loop mentre Spot ruota ±30° yaw. Orientamento calcolato da `compute_ee_orientation()` invece di quaternioni FK-reader forzati. Il braccio esplora lo spazio senza un target reale, compensando la rotazione di Spot. Spot ruota via cmd_vel a tempo (open-loop, no TF); il refinement (sweep pitch) avviene a livello body_pose nel coordinator.
+Durante **SEARCHING** il QP opera in **ACTIVE_SEARCH mode**: 7 pose (3 forward con 10° tilt camera + 3 behind con transit + final return), eseguite in loop mentre Spot cicla 3 pitch (+10°/+5°/0°). Orientamento calcolato da `compute_ee_orientation()`. Forward poses (FWD-C, FWD-L) hanno 10° tilt verso il basso per inquadrare meglio il corpo. Behind poses (BWD-L, BWD-C, BWD-R) usano quaternioni originali senza tilt. Transit e return pose usano lo stesso 10° tilt dei forward. Spot non ruota più in yaw — solo pitch cycling via body_pose. Il refinement (pitch sweep) è stato rimosso: il pitch è ora parte del ciclo principale.
 
 Durante **PRE_APPROACH** il QP opera in **LOOKAT mode**: calcola l'errore di orientamento tra X_ee e target (`ω_des = kp_ang * angle * axis`), risolve con damped pseudo-inverse su J_task (3×6), proietta joint centering nel null-space (`N @ k_null * (q_mid - q)`), integra in FK prediction, pubblica il goal all'IK solver. Loop a 10 Hz.
 
@@ -395,17 +396,17 @@ In **APPROACHING** il QP passa in **PERCEPTUAL_SCAN mode**: 6 pose Cartesiane mu
 Spot è sempre controllato dal navigatore (APPROACHING) o dal coordinator (body pose in SEARCHING/SCANNING), mai dal QP.
 
 #### SEMI_LOCKING e LOCKING (gestione QP)
-- **SEMI_LOCKING**: il QP va in pausa — il braccio si blocca nella posa corrente. Triggerato da RealSense `ESTIMATING` o `LOCKED`. L'Orbbec ha 3s di finestra pulita.
-- **LOCKING**: il WBC viene spento immediatamente, poi riattivato per mandare il braccio alla prima posa di search. Spot applica il best pitch dal refinement per la miglior visuale Orbbec. NLF esegue un burst multi-frame (2 detection valide con EMA, timeout 30s). Il coordinator raccoglie 5 campioni in parallelo. La transizione a PRE_APPROACH è bloccante: richiede (5 campioni + ik_done + NLF valido o timeout).
+- **SEMI_LOCKING**: il QP va in pausa — il braccio si blocca nella posa corrente. Triggerato da RealSense `ESTIMATING` o `LOCKED`. L'Orbbec ha **5s** di finestra pulita (era 3s). **RealSense gate**: il dwell parte SOLO se RealSense vede ancora la persona (GUIDING/ESTIMATING/LOCKED). Se persa → skip dwell, ritorno a SEARCHING. Stesso check al settle timeout. **Yaw restoration**: dopo semi-lock fallito, Spot torna allo yaw originale via body_pose. **Cooldown**: 3 tick (0.3s) dopo ingresso SEARCHING prima che semi-lock possa scattare — previene loop di ri-trigger immediato.
+- **LOCKING**: il WBC viene spento immediatamente, poi riattivato per mandare il braccio alla prima posa di search. Spot applica il miglior pitch per la miglior visuale Orbbec. NLF esegue un burst multi-frame (2 detection valide con EMA, timeout 30s). Il coordinator raccoglie 5 campioni in parallelo. La transizione a PRE_APPROACH è bloccante: richiede (5 campioni + ik_done + NLF valido o timeout).
 - Se RealSense perde il segnale durante SEMI_LOCKING, o se Orbbec perde LYING per >1s durante LOCKING: si riprende la ricerca dalla posizione corrente.
 ```
 SEARCHING:
-  QP Controller (ACTIVE_SEARCH) → 6 symmetric mathematically-generated poses, loop
-  Coordinator → ±30° yaw timed rotation (open-loop) + step forward 20cm
+  QP Controller (ACTIVE_SEARCH) → 7 poses (3 forward 10° tilt + 3 behind + return), loop
+  Coordinator → pitch cycling +10°/+5°/0° (no yaw) + step forward 50cm
 
 SEMI_LOCKING:
   QP Controller → PAUSA (braccio congelato)
-  Coordinator → Spot ruotato+inclinato verso torso
+  Coordinator → Spot inclinato verso torso, RealSense gate, yaw restore on fail
 
 LOCKING:
   WBC spento → QP Controller → home pose
@@ -449,7 +450,7 @@ JTC è il default di sicurezza.
 | `teresa_core.launch.py` | Core launch: driver Orbbec+RealSense+Z1 + TF statiche + tf_monitor |
 | `teresa_perception.launch.py` | Perception launch: Orbbec NLF skeleton + RealSense NLF torso tracker (default); YOLO fallback via `perception_backend:=yolo` |
 | `wbc.launch.py` | WBC launch: coordinator + QP + navigator |
-| `wbc_coordinator.py` | FSM Spot+Z1: WAITING_TF→IDLE→SEARCHING→SEMI_LOCKING→LOCKING→PRE_APPROACH→APPROACHING→SCANNING. Coarse rotation + refinement pitch. QualityMonitor. Body pose grid search (h,p) + WS_EXT fallback. Per-point body_ready. |
+| `wbc_coordinator.py` | FSM Spot+Z1: WAITING_TF→IDLE→SEARCHING→SEMI_LOCKING→LOCKING→PRE_APPROACH→APPROACHING→SCANNING. Pitch-based search (no yaw, +10°/+5°/0°), 7 arm poses, 50cm step. SEMI_LOCKING: RealSense gate + yaw restore + Orbbec 5s dwell. Pubblica `/wbc/perception_enable`. QualityMonitor. Body pose grid search (h,p) + WS_EXT fallback. Per-point body_ready. |
 | `wbc_qp_controller.py` | WBC arm-only, 3 modalità: ACTIVE_SEARCH / LOOKAT (damped pseudo-inverse) / PERCEPTUAL_SCAN. Mai muove Spot. |
 | `wbc_spot_navigator.py` | Navigator semplificato: rotate → drive → stop verso goal odom. Usato anche per WS_EXT drive. |
 | `wbc_math.py` | Matematica pura: `damped_pinv`, `null_space_projector`, manipulability (J_base/J_holistic/wbc_split deprecati) |
@@ -571,6 +572,7 @@ The keyboard node subscribes to `/wbc/tf_ready` (Bool) to know when SpotCore is 
 - **`ik_goal_topic` / `ik_enable_topic`** — defaults are `/z1/ik_goal_pose` and `/z1/ik_enable` (go through `ik_goal_mux`). YAML must NOT override these to `/ik_*` directly.
 - **`home_orientation: [-0.0062, 0.4107, 0.0021, 0.9118]`** — must be identical in `z1_fsm_params.yaml` and `wbc_params.yaml`
 - **Body control**: `/my_spot/body_pose` (Pose topic, nativo spot_driver) + `/my_spot/cmd_vel` (Twist). `body_pose` is "lazy": spot_driver saves params internally and applies them only on the next `cmd_vel`. The coordinator publishes `Twist()` zero as flush after every `_set_body_pose()`.
+- **`/wbc/perception_enable`** (Bool, transient_local QoS) — published by coordinator. `True` on SEARCHING entry (enables posture classifier and torso tracker), `False` on IDLE. Prevents perception nodes from running when not needed.
 
 ---
 
@@ -615,7 +617,7 @@ Two model families are used depending on the `perception_backend` parameter:
 - **Topic**: `/my_spot/body_pose` (type `geometry_msgs/Pose`) — native to `spot_driver`
 - **`position.z`** → body height (offset from nominal, negative = lowered)
 - **`orientation`** → quaternion for body pitch/roll
-- SEARCHING: Spot lowers (`-0.20m`) and tilts forward (up to 15° pitch) so Orbbec points toward the ground
+- SEARCHING: Spot lowers and tilts forward through 3 pitch angles (+10°/+5°/0°) so Orbbec scans the ground at different angles. No yaw rotation.
 
 ### Dry-run Mode
 
