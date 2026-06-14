@@ -929,15 +929,21 @@ class ExposurePoseTester(Node):
         # X_ee points DOWN (-Z in link00), orthogonalized to Y_ee.
         quat = compute_exposure_orientation(self._spot_p)
 
-        # IK goal uses camera position in world/odom frame.
-        # The IK solver does world→link00 transform accounting for Spot's yaw/pitch.
-        # _camera_link00 is only used by the optimizer to evaluate reachability.
-        cx = float(ep.camera_xyz[0])
-        cy = float(ep.camera_xyz[1])
-        cz = float(ep.camera_xyz[2])
+        if self._spot_enabled and self._best_h is not None and self._camera_link00 is not None:
+            cx, cy, cz = (
+                float(self._camera_link00[0]),
+                float(self._camera_link00[1]),
+                float(self._camera_link00[2]),
+            )
+            frame = 'link00'  # already in link00 coordinates from optimizer
+        else:
+            cx = float(ep.camera_xyz[0])
+            cy = float(ep.camera_xyz[1])
+            cz = float(ep.camera_xyz[2])
+            frame = 'world'
 
         goal = PoseStamped()
-        goal.header.frame_id = 'world'
+        goal.header.frame_id = frame
         goal.header.stamp = self.get_clock().now().to_msg()
         goal.pose.position.x = cx
         goal.pose.position.y = cy
