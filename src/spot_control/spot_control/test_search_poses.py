@@ -20,19 +20,19 @@ import numpy as np
 # Final FWD-C returns arm to center before Spot changes yaw.
 # ============================================================
 SEARCH_POSES = [
-    # FORWARD (15° camera tilt)
-    ("FWD-C",   [0.144, -0.005, 0.52], [0.0152, 0.2797, -0.0239, 0.9597]),
-    ("FWD-L",   [0.067, -0.070, 0.52], [0.0379, 0.3040, -0.4061, 0.8610]),
-    # BEHIND LEFT (via forward)
-    ("BWD-L",   [-0.052, -0.042, 0.52], [-0.0874, -0.2144, 0.9294, -0.2875]),
-    # BEHIND CENTER
-    ("BWD-C",   [-0.075, -0.013, 0.52], [-0.0225, -0.1081, 0.9938, 0.0142]),
-    # TRANSIT to center
-    ("FWD-C⤓", [0.144, -0.005, 0.52], [0.0152, 0.2797, -0.0239, 0.9597]),
-    # BEHIND RIGHT
-    ("BWD-R",   [-0.077, 0.071, 0.52], [0.0076, 0.0539, 0.9386, 0.3407]),
-    # RETURN to center (before Spot changes yaw)
-    ("FWD-C",   [0.144, -0.005, 0.52], [0.0152, 0.2797, -0.0239, 0.9597]),
+    # FORWARD (10° camera tilt down)
+    ("FWD-C",   [0.144, -0.005, 0.52], [0.0162, 0.2376, -0.0232, 0.9709]),
+    ("FWD-L",   [0.067, -0.070, 0.52], [0.0556, 0.2662, -0.4040, 0.8734]),
+    # BEHIND LEFT — original (no tilt)
+    ("BWD-L",   [-0.052, -0.042, 0.52], [-0.208, -0.175, 0.910, -0.313]),
+    # BEHIND CENTER — original (no tilt)
+    ("BWD-C",   [-0.075, -0.013, 0.52], [-0.152, -0.109, 0.982, 0.000]),
+    # TRANSIT to center (10° tilt)
+    ("FWD-C⤓", [0.144, -0.005, 0.52], [0.0162, 0.2376, -0.0232, 0.9709]),
+    # BEHIND RIGHT — original (no tilt)
+    ("BWD-R",   [-0.077, 0.071, 0.52], [-0.115, 0.009, 0.932, 0.345]),
+    # RETURN to center (10° tilt)
+    ("FWD-C",   [0.144, -0.005, 0.52], [0.0162, 0.2376, -0.0232, 0.9709]),
 ]
 
 
@@ -82,10 +82,10 @@ class SearchPoseTester(Node):
         msg.pose.position.x = 0.144
         msg.pose.position.y = -0.005
         msg.pose.position.z = 0.52
-        msg.pose.orientation.x = 0.0152
-        msg.pose.orientation.y = 0.2797
-        msg.pose.orientation.z = -0.0239
-        msg.pose.orientation.w = 0.9597
+        msg.pose.orientation.x = 0.0162
+        msg.pose.orientation.y = 0.2376
+        msg.pose.orientation.z = -0.0232
+        msg.pose.orientation.w = 0.9709
         self._pub_enable.publish(Bool(data=True))
         self._pub_goal.publish(msg)
         self._ik_done = False
