@@ -610,6 +610,9 @@ class ExposurePoseTester(Node):
         self._camera_link00: np.ndarray | None = None
         self._spot_h = 0.0  # current Spot height (tracked after each IK goal)
         self._spot_p = 0.0  # current Spot pitch (tracked after each IK goal)
+        self._ik_retry_deadline: rclpy.time.Time | None = None  # when to retry IK with look-at
+        self._ik_retry_count = 0  # 0=vertical, 1=look-at
+        self._ik_retry_idx = 0  # point index being retried
         self._resetting = False
         self._reset_done_idx: int | None = None
         self._homing = False
@@ -927,6 +930,16 @@ class ExposurePoseTester(Node):
         # X_ee points DOWN (-Z in link00), orthogonalized to Y_ee.
         quat = compute_exposure_orientation(self._spot_p)
 
+        # IK retry: reset count for new point, use look-at orientation for retry
+        if self._ik_retry_deadline is None:
+            self._ik_retry_count = 0
+        if self._ik_retry_count >= 1:
+            x_ee = ep.look_dir  # point toward surface
+            home_ori = [-0.0062, 0.4107, 0.0021, 0.9118]
+            quat = compute_ee_orientation(x_ee, home_ori)
+            self.get_logger().info(
+                f'  🔄 IK retry with look-at orientation (attempt {self._ik_retry_count + 1})')
+
         if self._spot_enabled and self._best_h is not None and self._camera_link00 is not None:
             cx, cy, cz = (
                 float(self._camera_link00[0]),
@@ -955,6 +968,10 @@ class ExposurePoseTester(Node):
         self._pub_goal.publish(goal)
         self._ik_done = False
         self._ik_done_logged = False
+        self._ik_retry_deadline = (
+            self.get_clock().now()
+            + rclpy.duration.Duration(seconds=3.0))  # retry with look-at after 3s
+        self._ik_retry_idx = idx
 
         self.get_logger().info(
             f'▶ [{idx + 1}/{len(self._points)}] '
@@ -1185,6 +1202,20 @@ class ExposurePoseTester(Node):
                         self.get_logger().info(
                             '  ✅ ik_done received — press ENTER for next pose')
                         self._ik_done_logged = True
+                        self._ik_retry_deadline = None
+                        self._ik_retry_count = 0
+
+                    # IK retry: if not converged after 3s, retry with look-at orientation
+                    if (not self._ik_done and self._ik_retry_deadline is not None
+                            and self.get_clock().now() >= self._ik_retry_deadline):
+                        self._ik_retry_count += 1
+                        if self._ik_retry_count <= 2:
+                            self._send_ik_goal(self._ik_retry_idx)
+                        else:
+                            self.get_logger().warn(
+                                '  ⚠️ IK failed after 2 retries — press ENTER to skip')
+                            self._ik_retry_deadline = None
+                            self._ik_retry_count = 0
 
                 # Check keyboard
                 try:
