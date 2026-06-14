@@ -46,10 +46,6 @@ import tf2_geometry_msgs  # noqa: F401
 from teresa_utils.orientation import quat_to_rot, normalize_angle
 from spot_perception.sml_pose_indices import SPINE1, SPINE2, SPINE3, PELVIS
 
-# ── Arm HOME pose (link00 frame) ──────────────────────────────────
-SEARCH_HOME_POS = [-0.09, 0.0, 0.44]                               # [m]
-SEARCH_HOME_ORI = [-0.0062, 0.4107, 0.0021, 0.9118]                # quaternion
-
 
 class _QualityMonitor:
     """Tracks approach point with best-confidence target and quality from posture_confidence.
@@ -540,7 +536,6 @@ class WBCCoordinatorNode(Node):
         s = String(); s.data = self._state
         self._pub_state.publish(s)
 
-        self._pub_debug_marker()
         self._tick_fast_settle()
         self._tick_smooth_body_pose()
 
@@ -1379,10 +1374,6 @@ class WBCCoordinatorNode(Node):
                 f'Body settle complete ({elapsed:.1f}s ≥ {self._body_settle_time:.1f}s)')
             self._body_settle_start = None
             self._pub_body_ready.publish(Bool(data=True))
-
-    def _pub_debug_marker(self) -> None:
-        """Publish debug marker for current state visualization."""
-        pass
 
     def _set_state(self, new_state: str, force: bool = False) -> None:
         if new_state == self._state:
