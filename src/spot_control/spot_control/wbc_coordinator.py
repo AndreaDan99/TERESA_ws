@@ -1557,8 +1557,9 @@ class WBCCoordinatorNode(Node):
 
     def _build_search_sequence(self) -> list:
         """Build pitch-based search sequence. Each step: set body pitch, then arm does 7 poses.
-        Pitch values: 0°, -5°, -10° (downward) in radians."""
-        pitch_angles = [0.0, math.radians(-5.0), math.radians(-10.0)]
+        Pitch values: +10°, +5°, 0° (nose-down first, then neutral) in radians.
+        After all 3 pitches + 7 arm poses each: HOME → step forward 50cm."""
+        pitch_angles = [math.radians(10.0), math.radians(5.0), 0.0]
         return [{'yaw': 0.0, 'pitch': p} for p in pitch_angles]
 
     def _set_wbc_enabled(self, enabled: bool) -> None:
