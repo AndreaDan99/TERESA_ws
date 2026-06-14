@@ -20,19 +20,19 @@ import numpy as np
 # Final FWD-C returns arm to center before Spot changes yaw.
 # ============================================================
 SEARCH_POSES = [
-    # FORWARD (10° camera tilt)
-    ("FWD-C",   [0.144, -0.005, 0.52], [0.0162, 0.2376, -0.0232, 0.9709]),
-    ("FWD-L",   [0.067, -0.070, 0.52], [0.0556, 0.2662, -0.4040, 0.8734]),
+    # FORWARD (25° camera tilt)
+    ("FWD-C",   [0.144, -0.005, 0.52], [0.0131, 0.3623, -0.0251, 0.9316]),
+    ("FWD-L",   [0.067, -0.070, 0.52], [0.0024, 0.3779, -0.4078, 0.8312]),
     # BEHIND LEFT (via forward)
-    ("BWD-L",   [-0.052, -0.042, 0.52], [-0.1279, -0.2016, 0.9247, -0.2966]),
+    ("BWD-L",   [-0.052, -0.042, 0.52], [-0.0061, -0.2386, 0.9335, -0.2677]),
     # BEHIND CENTER
-    ("BWD-C",   [-0.075, -0.013, 0.52], [-0.0659, -0.1086, 0.9919, 0.0095]),
+    ("BWD-C",   [-0.075, -0.013, 0.52], [0.0642, -0.1065, 0.9920, 0.0236]),
     # TRANSIT to center
-    ("FWD-C⤓", [0.144, -0.005, 0.52], [0.0162, 0.2376, -0.0232, 0.9709]),
+    ("FWD-C⤓", [0.144, -0.005, 0.52], [0.0131, 0.3623, -0.0251, 0.9316]),
     # BEHIND RIGHT
-    ("BWD-R",   [-0.077, 0.071, 0.52], [-0.0333, 0.0390, 0.9380, 0.3427]),
+    ("BWD-R",   [-0.077, 0.071, 0.52], [0.0894, 0.0834, 0.9344, 0.3347]),
     # RETURN to center (before Spot changes yaw)
-    ("FWD-C",   [0.144, -0.005, 0.52], [0.0162, 0.2376, -0.0232, 0.9709]),
+    ("FWD-C",   [0.144, -0.005, 0.52], [0.0131, 0.3623, -0.0251, 0.9316]),
 ]
 
 
@@ -82,10 +82,10 @@ class SearchPoseTester(Node):
         msg.pose.position.x = 0.144
         msg.pose.position.y = -0.005
         msg.pose.position.z = 0.52
-        msg.pose.orientation.x = 0.0162
-        msg.pose.orientation.y = 0.2376
-        msg.pose.orientation.z = -0.0232
-        msg.pose.orientation.w = 0.9709
+        msg.pose.orientation.x = 0.0131
+        msg.pose.orientation.y = 0.3623
+        msg.pose.orientation.z = -0.0251
+        msg.pose.orientation.w = 0.9316
         self._pub_enable.publish(Bool(data=True))
         self._pub_goal.publish(msg)
         self._ik_done = False
