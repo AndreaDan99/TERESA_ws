@@ -37,7 +37,7 @@ from rclpy.duration import Duration
 from rclpy.qos import QoSProfile, DurabilityPolicy
 import rclpy.time
 
-from geometry_msgs.msg import PoseStamped, TransformStamped, Twist, Vector3Stamped, Pose, Point, PoseArray
+from geometry_msgs.msg import PoseStamped, TransformStamped, Twist, Vector3Stamped, Pose, Point, PointStamped, PoseArray
 from std_msgs.msg import Bool, String, Float32, Int32
 from visualization_msgs.msg import Marker
 from tf2_ros import Buffer, TransformListener, TransformException
@@ -863,14 +863,25 @@ class WBCCoordinatorNode(Node):
                         throttle_duration_sec=3.0)
                 elif not self._ik_done:
                     self._lock_ik_ticks += 1
-                    self.get_logger().info(
-                        '🔒 LOCKING: waiting for arm home (ik_done) ...',
-                        throttle_duration_sec=2.0)
+                    if self._lock_ik_ticks >= 100:
+                        self.get_logger().warn(
+                            'arm HOME timeout (100 ticks) → proceeding without confirmation')
+                        self._ik_done = True
+                    else:
+                        self.get_logger().info(
+                            '🔒 LOCKING: waiting for arm home (ik_done) ...',
+                            throttle_duration_sec=2.0)
                 elif not self._nlf_prior_valid() and self._nlf_prior != 'timeout':
                     self._lock_nlf_ticks += 1
-                    self.get_logger().info(
-                        '🔒 LOCKING: waiting for NLF prior ...',
-                        throttle_duration_sec=3.0)
+                    if self._lock_nlf_ticks >= 100:
+                        self.get_logger().warn(
+                            'NLF prior validity timeout (100 ticks) → proceeding without prior')
+                        self._nlf_prior = 'timeout'
+                        self._nlf_trigger_pending = False
+                    else:
+                        self.get_logger().info(
+                            '🔒 LOCKING: waiting for NLF prior ...',
+                            throttle_duration_sec=3.0)
             return
 
         # Orbbec persa — tolleranza prima di arrendersi
@@ -929,7 +940,8 @@ class WBCCoordinatorNode(Node):
         self._semi_lock_settle_done = False
         self._semi_lock_dwell_start = None
         self._semi_lock_entry_time = self.get_clock().now().nanoseconds * 1e-9
-        self._set_body_pose(self._search_body_height, target_pitch)
+        self._set_body_pose(self._search_body_height, target_pitch,
+                            yaw=self._semi_lock_start_yaw)
         self._set_state(CoordState.SEMI_LOCKING)
         return True
 
@@ -1139,6 +1151,10 @@ class WBCCoordinatorNode(Node):
                     torso_yolo = np.array([self._torso_pos.pose.position.x,
                                            self._torso_pos.pose.position.y,
                                            self._torso_pos.pose.position.z])
+                    # Transform YOLO from world → odom so blending with NLF is frame-consistent
+                    torso_yolo_odom = self._world_to_odom(torso_yolo)
+                    if torso_yolo_odom is not None:
+                        torso_yolo = torso_yolo_odom
                     quality_label, delta = self._check_nlf_delta(torso_yolo)
                     if quality_label == 'HIGH':
                         target = 0.7 * nlf_center + 0.3 * torso_yolo
@@ -1148,7 +1164,7 @@ class WBCCoordinatorNode(Node):
                         target = torso_yolo
                     self.get_logger().info(
                         f'PRE_APPROACH (NLF+YOLO): quality={quality_label} '
-                        f'δ={delta:.2f}m → goal published, waiting 1s safety gate')
+                        f'δ={delta:.2f}m (world→odom) → goal published, waiting 1s safety gate')
                 else:
                     self.get_logger().info(
                         'PRE_APPROACH (NLF): no RealSense — goal published, waiting 1s safety gate')
@@ -1174,6 +1190,10 @@ class WBCCoordinatorNode(Node):
                 torso_yolo = np.array([self._torso_pos.pose.position.x,
                                        self._torso_pos.pose.position.y,
                                        self._torso_pos.pose.position.z])
+                # Transform YOLO from world → odom for frame-consistent coherence check
+                torso_yolo_odom = self._world_to_odom(torso_yolo)
+                if torso_yolo_odom is not None:
+                    torso_yolo = torso_yolo_odom
                 quality_label, delta = self._check_nlf_delta(torso_yolo)
                 if quality_label == 'HIGH':
                     self.get_logger().info(
@@ -1286,6 +1306,13 @@ class WBCCoordinatorNode(Node):
         if not self._nlf_prior_valid():
             return ('HIGH', None)
 
+        # Transform YOLO from world → odom so comparison with NLF is frame-consistent
+        torso_yolo_odom = self._world_to_odom(torso_yolo[:3])
+        if torso_yolo_odom is not None:
+            torso_yolo = torso_yolo_odom
+        else:
+            return ('LOW', 999.0)
+
         nlf_center = self._torso_center_from_prior()
         delta = float(np.linalg.norm(torso_yolo[:3] - nlf_center[:3]))
 
@@ -1300,6 +1327,33 @@ class WBCCoordinatorNode(Node):
             return ('LOW', delta)
 
     # ── Helpers ───────────────────────────────────────────────────────
+
+    def _world_to_odom(self, point_world: np.ndarray) -> np.ndarray | None:
+        """Transform a 3D point from 'world' frame to 'my_spot/odom' frame.
+
+        YOLO torso detections arrive in 'world' frame (which moves with Spot),
+        but NLF prior is in 'my_spot/odom' (world-fixed). This helper bridges
+        the mismatch so blending/comparison is frame-consistent.
+
+        Returns the transformed point as (x, y, z) ndarray, or None on failure.
+        """
+        try:
+            ps = PointStamped()
+            ps.header.frame_id = 'world'
+            ps.header.stamp = rclpy.time.Time().to_msg()
+            ps.point.x = float(point_world[0])
+            ps.point.y = float(point_world[1])
+            ps.point.z = float(point_world[2])
+            transformed = self._tf.transform(
+                ps, 'my_spot/odom', timeout=Duration(seconds=0.5))
+            return np.array([transformed.point.x,
+                             transformed.point.y,
+                             transformed.point.z])
+        except TransformException:
+            self.get_logger().warn(
+                'world → my_spot/odom transform failed — using original value',
+                throttle_duration_sec=5.0)
+            return None
 
     def _tf_lookup(self, source: str, target: str,
                    timeout_sec: float = 10.0) -> TransformStamped | None:
