@@ -1650,22 +1650,15 @@ class WBCCoordinatorNode(Node):
             self._publish_body_pose_raw(h, p)
 
     def _publish_body_pose_raw(self, height: float, pitch: float):
-        """Publish body_pose. Always reads yaw from live TF to avoid commanding
-        rotation corrections when Spot's heading has drifted from cached value."""
-        from tf_transformations import quaternion_from_euler, euler_from_quaternion
-        body_tf = self._tf_lookup(self._odom_frame, self._body_frame, timeout_sec=0.2)
-        if body_tf is not None:
-            qc = body_tf.transform.rotation
-            _, _, cur_yaw = euler_from_quaternion([qc.x, qc.y, qc.z, qc.w])
-        else:
-            return
-        q = quaternion_from_euler(0.0, pitch, float(cur_yaw))
+        """Publish body_pose with pitch-only quaternion.
+        No yaw — Spot keeps its current heading, only height and pitch change."""
+        half = pitch / 2.0
         pose = Pose()
         pose.position.z = height
-        pose.orientation.x = q[0]
-        pose.orientation.y = q[1]
-        pose.orientation.z = q[2]
-        pose.orientation.w = q[3]
+        pose.orientation.x = 0.0
+        pose.orientation.y = math.sin(half)
+        pose.orientation.z = 0.0
+        pose.orientation.w = math.cos(half)
         self._pub_body_pose.publish(pose)
         self._body_pose_ever_published = True
         # Workaround spot_ros2 bug: body_pose is accepted but not applied
