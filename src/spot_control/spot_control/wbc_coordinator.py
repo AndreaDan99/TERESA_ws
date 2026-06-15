@@ -987,9 +987,18 @@ class WBCCoordinatorNode(Node):
                 self.get_logger().info(
                     f'Step done ({elapsed:.1f}s, dist={dist:.2f}m) → new search cycle')
             else:
-                # Re-publish continuously — navigator sends zero Twist at 10Hz when disabled
+                # Re-publish continuously with smooth speed profile
+                remaining = max(0.0, self._search_step_forward - dist)
+                # Ramp-down: decelerate over last 10cm
+                if remaining < 0.10:
+                    speed = max(0.05, self._search_step_speed * (remaining / 0.10))
+                # Ramp-up: accelerate over first 0.3s
+                elif elapsed < 0.3:
+                    speed = self._search_step_speed * (elapsed / 0.3)
+                else:
+                    speed = self._search_step_speed
                 t = Twist()
-                t.linear.x = float(self._search_step_speed)
+                t.linear.x = float(speed)
                 self._pub_cmd_vel.publish(t)
             return
 
