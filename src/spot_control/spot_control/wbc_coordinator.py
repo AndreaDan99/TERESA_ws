@@ -869,6 +869,7 @@ class WBCCoordinatorNode(Node):
                             f'NLF prior validity timeout ({nlf_timeout} ticks) → proceeding without prior')
                         self._nlf_prior = 'timeout'
                         self._nlf_trigger_pending = False
+                        self._pub_nlf_trigger.publish(Bool(data=False))  # stop NLF inference
                     else:
                         self.get_logger().info(
                             '🔒 LOCKING: waiting for NLF prior ...',
@@ -1625,6 +1626,7 @@ class WBCCoordinatorNode(Node):
         if new_state == CoordState.PRE_APPROACH:
             self._pub_cmd_vel.publish(Twist())
             self._pub_guidance.publish(Bool(data=False))
+            self._pub_nlf_trigger.publish(Bool(data=False))  # stop NLF, no longer needed
             self._torso_detected_ticks = []
             self._pre_approach_fast_start = None
         self._state = new_state
