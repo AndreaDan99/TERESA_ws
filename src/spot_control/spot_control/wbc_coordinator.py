@@ -1040,13 +1040,20 @@ class WBCCoordinatorNode(Node):
             elapsed = (self.get_clock().now() - self._search_settle_start).nanoseconds / 1e9
             if elapsed >= 2.0:
                 self._search_settling = False
-                self._search_position_start = self.get_clock().now()
-                self._search_scan_done = False
-                self._ik_done = False
-                self._search_ik_done_count = 0
-                self.get_logger().info(
-                    f'Search pos {self._search_position_idx+1}: pitch settled '
-                    f'({elapsed:.1f}s) → arm 7 poses')
+                pos = self._search_positions[self._search_position_idx]
+                if self._search_position_idx == len(self._search_positions) - 1 \
+                        and abs(pos['pitch']) < 0.01:
+                    # Neutral pitch → skip arm poses, go straight to HOME + step
+                    self.get_logger().info('Neutral pitch settled → skip arm, HOME + step')
+                    self._search_position_idx = len(self._search_positions)
+                else:
+                    self._search_position_start = self.get_clock().now()
+                    self._search_scan_done = False
+                    self._ik_done = False
+                    self._search_ik_done_count = 0
+                    self.get_logger().info(
+                        f'Search pos {self._search_position_idx+1}: pitch settled '
+                        f'({elapsed:.1f}s) → arm 7 poses')
             return
 
     def _get_current_yaw(self) -> float | None:
@@ -1620,10 +1627,9 @@ class WBCCoordinatorNode(Node):
         return [float(val)]
 
     def _build_search_sequence(self) -> list:
-        """Build pitch-based search sequence. Each step: set body pitch, then arm does 7 poses.
-        Pitch values: +10°, +5°, 0° (nose-down first, then neutral) in radians.
-        After all 3 pitches + 7 arm poses each: HOME → step forward 50cm."""
-        pitch_angles = [math.radians(10.0), math.radians(5.0), 0.0]
+        """Build pitch-based search sequence: -10° → -5° → 0° (nose-up first, then neutral).
+        -10° and -5°: 7 arm poses each. 0°: no arm poses, straight to HOME + step 50cm."""
+        pitch_angles = [math.radians(-10.0), math.radians(-5.0), 0.0]
         return [{'yaw': 0.0, 'pitch': p} for p in pitch_angles]
 
     def _set_wbc_enabled(self, enabled: bool) -> None:
