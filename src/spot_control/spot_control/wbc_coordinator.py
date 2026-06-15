@@ -438,12 +438,6 @@ class WBCCoordinatorNode(Node):
                 self._set_state(CoordState.IDLE, force=True)
                 self._set_wbc_enabled(False)
 
-    def _cb_step_confirm(self, msg: Bool) -> None:
-        with self._lock:
-            if msg.data and self._step_pending_state is not None:
-                self._step_confirmed = True
-                self.get_logger().info(f'[STEP] Confermato passaggio a {self._step_pending_state}')
-
     def _cb_scan_done(self, msg: Bool) -> None:
         self._search_scan_done = True
         self.get_logger().info('📡 QP controller: scan completato')
