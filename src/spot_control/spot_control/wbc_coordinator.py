@@ -1614,20 +1614,8 @@ class WBCCoordinatorNode(Node):
 
     def _set_body_pose(self, height: float, pitch: float = 0.0, yaw: float | None = None, smooth: bool = True) -> None:
         """Publish body_pose with optional smooth interpolation.
-
-        When smooth=True (default), starts an async transition from current
-        (h,p) to target over 0.8s, driven by _tick_smooth_body_pose() to
-        avoid abrupt posture changes that destabilize Spot.
-        """
-        from tf_transformations import quaternion_from_euler
-        if yaw is None:
-            # During SEARCHING: keep yaw from search start — only pitch changes.
-            if self._state == CoordState.SEARCHING:
-                yaw = self._search_original_yaw if self._search_original_yaw is not None else 0.0
-            else:
-                cur_yaw = self._get_current_yaw()
-                yaw = cur_yaw if cur_yaw is not None else (
-                    self._search_original_yaw if self._search_original_yaw is not None else 0.0)
+        yaw parameter is ignored — yaw is always read live from TF to preserve
+        Spot's current orientation. Only height and pitch are changed."""
         height_clamped = float(np.clip(height, self._min_body_height, self._max_body_height))
 
         if smooth and (abs(height_clamped - self._current_body_height) > 0.02
@@ -1636,12 +1624,11 @@ class WBCCoordinatorNode(Node):
             self._smooth_start_p = getattr(self, '_smooth_pitch', 0.0)
             self._smooth_target_h = height_clamped
             self._smooth_target_p = pitch
-            self._smooth_target_yaw = yaw
             self._smooth_start_time = self.get_clock().now()
             self._smoothing_body = True
             self._smooth_duration = 0.8
         else:
-            self._publish_body_pose_raw(height_clamped, pitch, yaw)
+            self._publish_body_pose_raw(height_clamped, pitch)
             self._current_body_height = height_clamped
             self._smooth_pitch = pitch
 
@@ -1651,7 +1638,7 @@ class WBCCoordinatorNode(Node):
             return
         elapsed = (self.get_clock().now() - self._smooth_start_time).nanoseconds * 1e-9
         if elapsed >= self._smooth_duration:
-            self._publish_body_pose_raw(self._smooth_target_h, self._smooth_target_p, self._smooth_target_yaw)
+            self._publish_body_pose_raw(self._smooth_target_h, self._smooth_target_p)
             self._current_body_height = self._smooth_target_h
             self._smooth_pitch = self._smooth_target_p
             self._smoothing_body = False
@@ -1659,11 +1646,21 @@ class WBCCoordinatorNode(Node):
             t = elapsed / self._smooth_duration
             h = self._smooth_start_h + (self._smooth_target_h - self._smooth_start_h) * t
             p = self._smooth_start_p + (self._smooth_target_p - self._smooth_start_p) * t
-            self._publish_body_pose_raw(h, p, self._smooth_target_yaw)
+            self._publish_body_pose_raw(h, p)
 
-    def _publish_body_pose_raw(self, height: float, pitch: float, yaw: float):
-        from tf_transformations import quaternion_from_euler
-        q = quaternion_from_euler(0.0, pitch, yaw)
+    def _publish_body_pose_raw(self, height: float, pitch: float):
+        """Publish body_pose using ONLY current TF orientation for yaw.
+        Never sets absolute yaw — Spot keeps whatever orientation it has."""
+        from tf_transformations import quaternion_from_euler, euler_from_quaternion
+        # Read current yaw from TF to preserve it — never cache, never fallback to 0
+        body_tf = self._tf_lookup(self._odom_frame, self._body_frame, timeout_sec=0.2)
+        if body_tf is not None:
+            qc = body_tf.transform.rotation
+            _, _, cur_yaw = euler_from_quaternion([qc.x, qc.y, qc.z, qc.w])
+        else:
+            # TF not available — skip body_pose rather than risk wrong yaw
+            return
+        q = quaternion_from_euler(0.0, pitch, float(cur_yaw))
         pose = Pose()
         pose.position.z = height
         pose.orientation.x = q[0]
