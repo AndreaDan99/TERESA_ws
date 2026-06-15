@@ -302,6 +302,7 @@ class WBCCoordinatorNode(Node):
         self._search_scan_done: bool = False     # True when QP controller completes 7-pose scan
         self._search_step_phase: bool = False    # True while stepping Spot forward
         self._search_step_start: rclpy.time.Time | None = None  # forward step start time
+        self._search_step_start_x: float | None = None  # starting X in odom for TF closed-loop step
         self._torso_tracker_state: str = ''           # LOCKED / TRACKING / IDLE
         self._torso_detected_ticks: list[bool] = []      # sliding window of recent (5) LOCKED/ESTIMATING ticks
         self._torso_pos: PoseStamped | None = None    # ultima posa torso da RealSense
@@ -926,19 +927,34 @@ class WBCCoordinatorNode(Node):
                 self._search_home_phase = False
                 self._search_step_phase = True
                 self._search_step_start = self.get_clock().now()
+                # Save starting X position for TF closed-loop feedback
+                body_tf = self._tf_lookup(self._odom_frame, self._body_frame)
+                self._search_step_start_x = body_tf.transform.translation.x if body_tf is not None else None
                 t = Twist()
                 t.linear.x = float(self._search_step_speed)
                 self._pub_cmd_vel.publish(t)
             return
 
-        # ── STEP phase: Spot moving forward timed ─────────────────────
+        # ── STEP phase: Spot moving forward with TF closed-loop feedback ─
         if self._search_step_phase:
             elapsed = (self.get_clock().now() - self._search_step_start).nanoseconds / 1e9
+            arrived = False
+            dist = 0.0
+
+            # Try TF-based distance check first (closed-loop)
+            if self._search_step_start_x is not None:
+                body_tf = self._tf_lookup(self._odom_frame, self._body_frame)
+                if body_tf is not None:
+                    dist = body_tf.transform.translation.x - self._search_step_start_x
+                    arrived = dist >= self._search_step_forward
+
+            # Fallback: timed open-loop if TF unavailable (with 1.5x margin safety)
             step_duration = self._search_step_forward / self._search_step_speed
-            if elapsed >= step_duration:
+            if arrived or elapsed >= step_duration * 1.5:
                 self._pub_cmd_vel.publish(Twist())
                 self._search_step_phase = False
                 self._search_step_start = None
+                self._search_step_start_x = None
                 # Reset cycle: back to pitch position 0
                 self._search_position_idx = 0
                 self._search_position_start = None
@@ -946,7 +962,7 @@ class WBCCoordinatorNode(Node):
                 self._search_settling = False
                 self._set_wbc_enabled(True)
                 self.get_logger().info(
-                    f'Step done ({elapsed:.1f}s) → new search cycle')
+                    f'Step done ({elapsed:.1f}s, dist={dist:.2f}m) → new search cycle')
             return
 
         # ── All pitches complete → send arm HOME (keep WBC enabled) ──
