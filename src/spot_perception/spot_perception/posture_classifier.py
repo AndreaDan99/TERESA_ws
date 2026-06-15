@@ -82,7 +82,7 @@ class HumanPostureAnalyzerSpot(Node):
         self._posture_history = deque(maxlen=5)
 
         # Perception enable flag (disabled by default)
-        self._perception_enabled = True   # default enabled — web UI controls
+        self._perception_enabled = False
         self._last_enabled_state = False
 
         # Subscriber — human pose points
