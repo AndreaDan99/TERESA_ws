@@ -24,9 +24,9 @@ from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Bool
 
-# FWD-C home pose (from wbc_qp_controller SEARCH_POSES)
+# FWD-C home pose (from wbc_qp_controller._send_home)
 HOME_POS = np.array([0.144, -0.005, 0.52])
-HOME_QUAT = np.array([0.0162, 0.2376, -0.0232, 0.9709])
+HOME_QUAT = np.array([0.0182, 0.1521, -0.0217, 0.9880])
 
 
 class PerceptualScanTester(Node):
