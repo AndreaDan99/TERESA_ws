@@ -1601,7 +1601,6 @@ class WBCCoordinatorNode(Node):
         if new_state == CoordState.PRE_APPROACH:
             self._pub_cmd_vel.publish(Twist())
             self._pub_guidance.publish(Bool(data=False))
-            self._set_body_pose(0.0, 0.0)
             self._torso_detected_ticks = []
             self._pre_approach_fast_start = None
         self._state = new_state
