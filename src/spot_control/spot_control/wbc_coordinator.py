@@ -275,6 +275,7 @@ class WBCCoordinatorNode(Node):
         self._confidence             = 0.0
         self._last_lying_time        = None
         self._current_body_height: float = 0.0   # last applied body_pose height
+        self._body_pose_ever_published = False       # guard: skip first body_pose if zero
         self._search_start: rclpy.time.Time | None = None     # SEARCHING entry time
         self._pre_approach_start: rclpy.time.Time | None = None  # PRE_APPROACH entry time
         self._pre_approach_fast_start: rclpy.time.Time | None = None  # NLF fast-path safety gate timer
@@ -1617,9 +1618,16 @@ class WBCCoordinatorNode(Node):
         yaw parameter is ignored — yaw is always read live from TF to preserve
         Spot's current orientation. Only height and pitch are changed."""
         height_clamped = float(np.clip(height, self._min_body_height, self._max_body_height))
+        last_pitch = self._smooth_pitch if hasattr(self, '_smooth_pitch') else 0.0
+        changed = (abs(height_clamped - self._current_body_height) > 0.02
+                   or abs(pitch - last_pitch) > 0.01)
 
-        if smooth and (abs(height_clamped - self._current_body_height) > 0.02
-                       or abs(pitch - (self._smooth_pitch if hasattr(self, '_smooth_pitch') else 0.0)) > 0.01):
+        if not changed and not self._body_pose_ever_published:
+            # Never published and nothing changed — skip entirely to avoid
+            # sending a body_pose that might rotate Spot due to TF yaw offset
+            return
+
+        if smooth and changed:
             self._smooth_start_h = self._current_body_height
             self._smooth_start_p = getattr(self, '_smooth_pitch', 0.0)
             self._smooth_target_h = height_clamped
@@ -1627,7 +1635,7 @@ class WBCCoordinatorNode(Node):
             self._smooth_start_time = self.get_clock().now()
             self._smoothing_body = True
             self._smooth_duration = 0.8
-        else:
+        elif changed:
             self._publish_body_pose_raw(height_clamped, pitch)
             self._current_body_height = height_clamped
             self._smooth_pitch = pitch
@@ -1668,6 +1676,7 @@ class WBCCoordinatorNode(Node):
         pose.orientation.z = q[2]
         pose.orientation.w = q[3]
         self._pub_body_pose.publish(pose)
+        self._body_pose_ever_published = True
         # Workaround spot_ros2 bug: body_pose is accepted but not applied
         # until a cmd_vel (even zero) triggers the driver to actuate
         self._pub_cmd_vel.publish(Twist())
