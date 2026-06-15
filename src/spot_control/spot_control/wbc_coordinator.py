@@ -548,6 +548,7 @@ class WBCCoordinatorNode(Node):
         if self._state in (CoordState.WAITING_TF,
                             CoordState.IDLE,
                             CoordState.SEARCHING,
+                            CoordState.SEMI_LOCKING,
                             CoordState.PRE_APPROACH,
                             CoordState.APPROACHING,
                             CoordState.SCANNING):
