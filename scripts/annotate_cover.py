@@ -18,11 +18,7 @@ OUTPUT = Path(__file__).parent.parent / "TERESA_RAL/figures/system_overview_anno
 CONFIG = Path(__file__).parent.parent / "TERESA_RAL/figures/annotations.json"
 
 LABELS = [
-    ("Spot",                "#ffdc00"),
-    ("Patient",             "#4488ff"),
-    ("Z1 Arm",              "#50c878"),
     ("RealSense\nD415",     "#ff8844"),
-    ("Jetson\nOrin AGX",    "#44ddff"),
     ("Orbbec\nFemto",       "#ff66aa"),
     ("Burn\nScar",          "#ffffff"),
 ]
@@ -67,6 +63,9 @@ def generate_annotated():
         sys.exit(1)
 
     clicks = json.loads(CONFIG.read_text())
+    # Only draw labels present in current LABELS list
+    label_names = {l[0] for l in LABELS}
+    clicks = [c for c in clicks if c["label"] in label_names]
     img = imread(str(INPUT))
     h, w = img.shape[:2]
     dpi = 200
@@ -83,8 +82,8 @@ def generate_annotated():
         color = c["color"]
         cx, cy = c["x"], c["y"]
 
-        # Skip dashed box for Spot, Patient, Z1 Arm (label + arrow only)
-        skip_box = any(w in c["label"] for w in ["Spot", "Patient", "Z1"])
+        # Skip dashed box for remaining labels (just label + arrow)
+        skip_box = True
         bw, bh = 90, 60
 
         if "Scar" in c["label"]:
@@ -98,11 +97,6 @@ def generate_annotated():
             ax.add_patch(rect)
 
         lx = cx + bw/2 + 40
-        # Push labels further right to avoid overlap
-        if "Patient" in c["label"]:
-            lx += 120
-        if "Jetson" in c["label"]:
-            lx += 105
         if "Orbbec" in c["label"]:
             lx += 210
         ax.annotate("", xy=(cx+bw/2, cy), xytext=(lx, cy),
