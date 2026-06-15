@@ -1098,8 +1098,18 @@ class WBCCoordinatorNode(Node):
             return None
 
     def _tick_pre_approach_legacy(self) -> None:
-        goal = self._filtered_goal()
-        goal.pose.position.z += 0.40  # supine torso ~40cm above ground
+        # Use patient_body TF directly for arm LOOKAT (body center, not approach point)
+        approach = self._get_approach_odom()
+        if approach is not None:
+            goal = PoseStamped()
+            goal.header.frame_id = self._odom_frame
+            goal.header.stamp = self.get_clock().now().to_msg()
+            goal.pose.position.x = approach[0]
+            goal.pose.position.y = approach[1]
+            goal.pose.position.z = approach[2]
+            goal.pose.orientation.w = 1.0
+        else:
+            goal = self._filtered_goal()
         self._pub_goal.publish(goal)
 
         # If RealSense tracker is not running, skip straight to APPROACHING
