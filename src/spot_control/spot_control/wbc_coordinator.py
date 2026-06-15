@@ -303,6 +303,7 @@ class WBCCoordinatorNode(Node):
         self._search_step_phase: bool = False    # True while stepping Spot forward
         self._search_step_start: rclpy.time.Time | None = None  # forward step start time
         self._search_step_start_x: float | None = None  # starting X in odom for TF closed-loop step
+        self._search_step_start_y: float = 0.0          # starting Y in odom
         self._torso_tracker_state: str = ''           # LOCKED / TRACKING / IDLE
         self._torso_detected_ticks: list[bool] = []      # sliding window of recent (5) LOCKED/ESTIMATING ticks
         self._torso_pos: PoseStamped | None = None    # ultima posa torso da RealSense
@@ -941,9 +942,14 @@ class WBCCoordinatorNode(Node):
                 self._search_home_phase = False
                 self._search_step_phase = True
                 self._search_step_start = self.get_clock().now()
-                # Save starting X position for TF closed-loop feedback
+                # Save starting position for TF closed-loop feedback
                 body_tf = self._tf_lookup(self._odom_frame, self._body_frame)
-                self._search_step_start_x = body_tf.transform.translation.x if body_tf is not None else None
+                if body_tf is not None:
+                    self._search_step_start_x = body_tf.transform.translation.x
+                    self._search_step_start_y = body_tf.transform.translation.y
+                else:
+                    self._search_step_start_x = None
+                    self._search_step_start_y = 0.0
                 t = Twist()
                 t.linear.x = float(self._search_step_speed)
                 self._pub_cmd_vel.publish(t)
@@ -959,7 +965,9 @@ class WBCCoordinatorNode(Node):
             if self._search_step_start_x is not None:
                 body_tf = self._tf_lookup(self._odom_frame, self._body_frame)
                 if body_tf is not None:
-                    dist = body_tf.transform.translation.x - self._search_step_start_x
+                    dx = body_tf.transform.translation.x - self._search_step_start_x
+                    dy = body_tf.transform.translation.y - getattr(self, '_search_step_start_y', 0.0)
+                    dist = math.hypot(dx, dy)
                     arrived = dist >= self._search_step_forward
 
             # Fallback: timed open-loop if TF unavailable (with 1.5x margin safety)
@@ -969,6 +977,7 @@ class WBCCoordinatorNode(Node):
                 self._search_step_phase = False
                 self._search_step_start = None
                 self._search_step_start_x = None
+                self._search_step_start_y = 0.0
                 # Reset cycle: back to pitch position 0
                 self._search_position_idx = 0
                 self._search_position_start = None
