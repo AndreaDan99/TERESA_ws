@@ -143,7 +143,7 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='link06_to_camera_link',
         arguments=[
-            '--x', '0.0', '--y', '0.0', '--z', '0.05',
+            '--x', '0.10', '--y', '0.0', '--z', '-0.02',
             '--qx', '0', '--qy', '0', '--qz', '0', '--qw', '1',
             '--frame-id', 'link06', '--child-frame-id', 'camera_link',
         ]

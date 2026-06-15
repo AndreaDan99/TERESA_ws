@@ -630,9 +630,6 @@ class WBCCoordinatorNode(Node):
                     self._set_state(CoordState.SCANNING)
 
     def _tick_approaching(self) -> None:
-        if self._get_approach_odom() is None:
-            return
-
         # Timeout check: abort to IDLE if Spot can't reach goal
         if self._approach_start is not None:
             elapsed = (self.get_clock().now() - self._approach_start).nanoseconds * 1e-9
@@ -646,12 +643,23 @@ class WBCCoordinatorNode(Node):
                 return
 
         # Publish arm look-at goal + Spot navigation goal
+        # Uses quality target from LOCKING phase — works even without patient_body TF
         goal = self._filtered_goal()
         self._pub_goal.publish(goal)
         self._pub_spot_goal.publish(goal)
 
         dist = self._distance_to_patient()
+        # Fallback: compute distance from body→odom TF + quality target
+        if dist is None and self._quality.initialized:
+            body_in_odom = self._tf_lookup(self._odom_frame, self._body_frame)
+            if body_in_odom is not None:
+                p = self._quality.get_position()
+                dx = body_in_odom.transform.translation.x - p[0]
+                dy = body_in_odom.transform.translation.y - p[1]
+                dist = math.hypot(dx, dy)
         if dist is None:
+            # No distance info — enable navigator anyway (goal is published)
+            self._pub_spot_ctrl.publish(Bool(data=True))
             return
 
         # ── Soft handoff (20cm): pause Spot if scanner not done ─────
@@ -969,6 +977,11 @@ class WBCCoordinatorNode(Node):
                 self._set_wbc_enabled(True)
                 self.get_logger().info(
                     f'Step done ({elapsed:.1f}s, dist={dist:.2f}m) → new search cycle')
+            else:
+                # Re-publish continuously — navigator sends zero Twist at 10Hz when disabled
+                t = Twist()
+                t.linear.x = float(self._search_step_speed)
+                self._pub_cmd_vel.publish(t)
             return
 
         # ── All pitches complete → send arm HOME (keep WBC enabled) ──
@@ -1172,23 +1185,23 @@ class WBCCoordinatorNode(Node):
                 f'NLF prior: expected 24 joints, got {len(msg.poses)} → ignoring')
             return
 
-        # Lookup TF: orbbec_color_optical_frame → odom
+        # Lookup TF: orbbec_color_optical_frame → my_spot/odom
         from geometry_msgs.msg import TransformStamped
         transform: TransformStamped | None = None
         try:
             transform = self._tf.lookup_transform(
-                'odom', 'orbbec_color_optical_frame', msg.header.stamp,
+                'my_spot/odom', 'orbbec_color_optical_frame', msg.header.stamp,
                 timeout=Duration(seconds=0.5))
         except TransformException:
             self.get_logger().warn(
                 'NLF prior: TF at msg stamp failed, trying latest')
             try:
                 transform = self._tf.lookup_transform(
-                    'odom', 'orbbec_color_optical_frame', rclpy.time.Time(),
+                    'my_spot/odom', 'orbbec_color_optical_frame', rclpy.time.Time(),
                     timeout=Duration(seconds=0.5))
             except TransformException:
                 self.get_logger().warn(
-                    'NLF prior: TF odom←orbbec unavailable → cannot transform')
+                    'NLF prior: TF my_spot/odom←orbbec unavailable → cannot transform')
 
         if transform is None:
             return
@@ -1440,13 +1453,13 @@ class WBCCoordinatorNode(Node):
             self._pub_cmd_vel.publish(Twist())
             self._pub_spot_ctrl.publish(Bool(data=False))  # stop navigator
             self._pub_guidance.publish(Bool(data=False))
-            self._set_body_pose(0.0, 0.0, yaw=0.0)
+            self._set_body_pose(0.0, 0.0)
         if new_state == CoordState.IDLE:
             self._quality.reset()
             self._pub_cmd_vel.publish(Twist())
             self._pub_spot_ctrl.publish(Bool(data=True))
             self._pub_guidance.publish(Bool(data=False))
-            self._set_body_pose(0.0, 0.0, yaw=0.0)   # reset to nominal, yaw 0 baseline
+            self._set_body_pose(0.0, 0.0)   # reset to nominal height/pitch, keep current yaw
             self._pub_nav_mode.publish(String(data='approaching'))
             self._pub_perception_enable.publish(Bool(data=False))
         if new_state == CoordState.SEARCHING:

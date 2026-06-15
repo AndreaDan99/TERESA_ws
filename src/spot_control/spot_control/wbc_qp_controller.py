@@ -601,7 +601,7 @@ class WBCQPControllerNode(Node):
         for wy in range(2):
             for wz in range(2):
                 pose = PoseStamped()
-                pose.header.frame_id = 'odom'
+                pose.header.frame_id = 'my_spot/odom'
                 pose.pose.position.x = float(center[0])
                 pose.pose.position.y = float(center[1]) + (wy - 0.5) * wrist_step
                 pose.pose.position.z = float(center[2]) + (wz - 0.5) * wrist_step
@@ -611,7 +611,7 @@ class WBCQPControllerNode(Node):
         # Phase 2 — lateral parallax (±Y, 2 poses)
         for sign in [-1.0, 1.0]:
             pose = PoseStamped()
-            pose.header.frame_id = 'odom'
+            pose.header.frame_id = 'my_spot/odom'
             pose.pose.position.x = float(center[0])
             pose.pose.position.y = float(center[1]) + sign * lateral_step
             pose.pose.position.z = float(center[2])
