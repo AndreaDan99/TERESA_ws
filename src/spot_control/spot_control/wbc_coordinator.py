@@ -1440,13 +1440,13 @@ class WBCCoordinatorNode(Node):
             self._pub_cmd_vel.publish(Twist())
             self._pub_spot_ctrl.publish(Bool(data=False))  # stop navigator
             self._pub_guidance.publish(Bool(data=False))
-            self._set_body_pose(0.0)
+            self._set_body_pose(0.0, 0.0, yaw=0.0)
         if new_state == CoordState.IDLE:
             self._quality.reset()
             self._pub_cmd_vel.publish(Twist())
-            self._pub_spot_ctrl.publish(Bool(data=True))   # re-enable navigator after TF recovery
+            self._pub_spot_ctrl.publish(Bool(data=True))
             self._pub_guidance.publish(Bool(data=False))
-            self._set_body_pose(0.0)   # ripristina altezza nominale
+            self._set_body_pose(0.0, 0.0, yaw=0.0)   # reset to nominal, yaw 0 baseline
             self._pub_nav_mode.publish(String(data='approaching'))
             self._pub_perception_enable.publish(Bool(data=False))
         if new_state == CoordState.SEARCHING:
@@ -1535,11 +1535,11 @@ class WBCCoordinatorNode(Node):
         """
         from tf_transformations import quaternion_from_euler
         if yaw is None:
-            # During SEARCHING pitch cycling: use cached yaw to avoid micro-rotations
-            # from TF noise. On fresh entry (IDLE→SEARCHING), _search_original_yaw was
-            # already saved. Only re-read TF for explicit yaw changes (semi-lock return).
-            if self._state == CoordState.SEARCHING and self._search_original_yaw is not None:
-                yaw = self._search_original_yaw
+            # During SEARCHING: never read TF yaw — use 0.0 as baseline.
+            # Spot keeps whatever yaw it had before the first body_pose;
+            # we only change pitch and height, no rotation.
+            if self._state == CoordState.SEARCHING:
+                yaw = 0.0
             else:
                 cur_yaw = self._get_current_yaw()
                 yaw = cur_yaw if cur_yaw is not None else (
