@@ -82,8 +82,8 @@ def generate_annotated():
         color = c["color"]
         cx, cy = c["x"], c["y"]
 
-        # Skip dashed box for remaining labels (just label + arrow)
-        skip_box = True
+        # Show dashed box for all remaining labels
+        skip_box = False
         bw, bh = 90, 60
 
         if "Scar" in c["label"]:
