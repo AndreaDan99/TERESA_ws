@@ -34,9 +34,9 @@ class PerceptualScanTester(Node):
     def __init__(self):
         super().__init__('test_perceptual_scan')
 
-        self._target_x = float(self.declare_parameter('target_x', 0.50).value)
-        self._target_y = float(self.declare_parameter('target_y', 0.00).value)
-        self._target_z = float(self.declare_parameter('target_z', 0.60).value)
+        self._target_x = float(self.declare_parameter('target_x', 0.35).value)
+        self._target_y = float(self.declare_parameter('target_y', 0.10).value)
+        self._target_z = float(self.declare_parameter('target_z', 0.25).value)
         self._ik_timeout = float(self.declare_parameter('ik_timeout', 3.0).value)
         self._step_mode = bool(self.declare_parameter('step_mode', True).value)
         self._nlf_active = bool(self.declare_parameter('nlf_active', False).value)
