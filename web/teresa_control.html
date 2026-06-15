@@ -672,6 +672,9 @@ class TeresaController{
       this.renderPerceptionToggle();
     });
     this.perceptionEnabled = false; // default OFF
+    // Explicitly publish false to overwrite any latched state from previous session
+    this.perceptionPub.publish({data: false});
+    this.renderPerceptionToggle();
     this.tfReadySub=new ROSLIB.Topic({ros:this.ros,name:'/wbc/tf_ready',messageType:'std_msgs/Bool'});
     this.tfReadySub.subscribe(msg=>{
       this.tfSystemReady=msg.data;
