@@ -41,10 +41,10 @@ class PerceptualScanTester(Node):
         self._step_mode = bool(self.declare_parameter('step_mode', True).value)
         self._nlf_active = bool(self.declare_parameter('nlf_active', False).value)
 
-        self._pub_ik = self.create_publisher(PoseStamped, '/wbc/ik_goal_pose', 10)
-        self._pub_en = self.create_publisher(Bool, '/wbc/ik_enable', 10)
+        self._pub_ik = self.create_publisher(PoseStamped, '/ik_goal_pose', 10)
+        self._pub_en = self.create_publisher(Bool, '/ik_enable', 10)
         self._ik_done = False
-        self._sub_ik = self.create_subscription(Bool, '/wbc/ik_done', self._cb_ik_done, 10)
+        self._sub_ik = self.create_subscription(Bool, '/ik_done', self._cb_ik_done, 10)
 
     def _cb_ik_done(self, msg: Bool):
         self._ik_done = msg.data
