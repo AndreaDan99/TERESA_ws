@@ -209,7 +209,7 @@ class Z1YoloTorsoTracker(Node):
             PoseArray, '/exposure/body_keypoints', 10)
 
         # ── Percezione abilitabile/disabilitabile ──────────────────
-        self._perception_enabled = False
+        self._perception_enabled = True   # default enabled — web UI controls
 
         # ── Stato interno normale ──────────────────────────────────
         self.state            = 'IDLE'
