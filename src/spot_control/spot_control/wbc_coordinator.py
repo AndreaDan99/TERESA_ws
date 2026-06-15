@@ -1621,11 +1621,9 @@ class WBCCoordinatorNode(Node):
         """
         from tf_transformations import quaternion_from_euler
         if yaw is None:
-            # During SEARCHING: never read TF yaw — use 0.0 as baseline.
-            # Spot keeps whatever yaw it had before the first body_pose;
-            # we only change pitch and height, no rotation.
+            # During SEARCHING: keep yaw from search start — only pitch changes.
             if self._state == CoordState.SEARCHING:
-                yaw = 0.0
+                yaw = self._search_original_yaw if self._search_original_yaw is not None else 0.0
             else:
                 cur_yaw = self._get_current_yaw()
                 yaw = cur_yaw if cur_yaw is not None else (
