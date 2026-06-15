@@ -175,6 +175,7 @@ class WBCQPControllerNode(Node):
 
         # ── Subscriptions ─────────────────────────────────────────────────
         self.create_subscription(Bool,        '/wbc/enable',          self._cb_enable,      10)
+        self.create_subscription(Bool,        '/wbc/handoff_reached',  self._cb_handoff,      10)
         self.create_subscription(PoseStamped, '/wbc/arm_goal',         self._cb_goal,        10)
         self.create_subscription(JointState,  p('joint_states_topic'), self._cb_joints,      50)
         self.create_subscription(String,      '/wbc/state',           self._cb_wbc_state,   10)
@@ -245,13 +246,16 @@ class WBCQPControllerNode(Node):
         elif msg.data == 'LOCKING' and prev != 'LOCKING':
             self._end_search()
             self._send_home()
-        elif msg.data == 'APPROACHING' and prev != 'APPROACHING':
-            self._start_perceptual_scan()
+        # PERCEPTUAL_SCAN now triggered by /wbc/handoff_reached (Spot arrived)
         elif msg.data not in ('SEARCHING', 'SEMI_LOCKING', 'LOCKING', 'APPROACHING'):
             if self._mode == 'ACTIVE_SEARCH':
                 self._end_search()
             if self._mode == 'PERCEPTUAL_SCAN':
                 self._end_scan()
+
+    def _cb_handoff(self, msg: Bool) -> None:
+        if msg.data and self._mode != 'PERCEPTUAL_SCAN':
+            self._start_perceptual_scan()
 
     def _cb_ik_done(self, msg: Bool) -> None:
         self._scan_ik_done = msg.data
