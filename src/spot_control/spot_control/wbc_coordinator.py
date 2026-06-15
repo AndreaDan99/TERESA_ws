@@ -1536,7 +1536,9 @@ class WBCCoordinatorNode(Node):
         from tf_transformations import quaternion_from_euler
         if yaw is None:
             cur_yaw = self._get_current_yaw()
-            yaw = cur_yaw if cur_yaw is not None else 0.0
+            # Fallback chain: current TF yaw → original search yaw → 0.0
+            yaw = cur_yaw if cur_yaw is not None else (
+                self._search_original_yaw if self._search_original_yaw is not None else 0.0)
         height_clamped = float(np.clip(height, self._min_body_height, self._max_body_height))
 
         if smooth and (abs(height_clamped - self._current_body_height) > 0.02
