@@ -34,7 +34,6 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
-from rclpy.qos import QoSProfile, DurabilityPolicy
 import rclpy.time
 
 from geometry_msgs.msg import PoseStamped, TransformStamped, Twist, Vector3Stamped, Pose, Point, PointStamped, PoseArray
@@ -253,10 +252,6 @@ class WBCCoordinatorNode(Node):
         # ── Body pose publisher (height + pitch via /my_spot/body_pose) ──
         self._pub_body_pose = self.create_publisher(Pose, '/my_spot/body_pose', 10)
         self._pub_cmd_vel = self.create_publisher(Twist, '/my_spot/cmd_vel', 10)
-
-        # Perception enable publisher (transient_local — enables posture classifier + torso tracker)
-        qos_transient_local = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        self._pub_perception_enable = self.create_publisher(Bool, '/wbc/perception_enable', qos_transient_local)
 
         # ── Approach point quality monitor ────────────────────────────
         self._quality = _QualityMonitor(
@@ -1540,11 +1535,9 @@ class WBCCoordinatorNode(Node):
             self._pub_guidance.publish(Bool(data=False))
             self._set_body_pose(0.0, 0.0)   # reset to nominal height/pitch, keep current yaw
             self._pub_nav_mode.publish(String(data='approaching'))
-            self._pub_perception_enable.publish(Bool(data=False))
         if new_state == CoordState.SEARCHING:
             self._pub_spot_ctrl.publish(Bool(data=False))  # navigator off during search
             self._pub_guidance.publish(Bool(data=True))
-            self._pub_perception_enable.publish(Bool(data=True))
             old = self._state
             self._search_lock_buffer = None
             self._set_wbc_enabled(True)
