@@ -1,0 +1,146 @@
+# ============================================================================
+# TERESA_ws — Dockerfile for NVIDIA Jetson Orin AGX (L4T R35.x / JetPack 5.x)
+#
+# BUILD:
+#   docker build -f docker/Dockerfile.l4t35 -t teresa_jetson:l4t-r35.4.1 .
+#
+# RUN:
+#   sudo docker run -it --rm --runtime=nvidia --net=host --privileged \
+#       -e ROS_DOMAIN_ID=0 -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY \
+#       teresa_jetson:l4t-r35.4.1
+#
+# HOST REQUIREMENTS:
+#   - Jetson Orin AGX with JetPack 5.1.2+ (L4T R35.4.1)
+#   - Docker with nvidia-container-runtime (see jetson-containers setup guide)
+#   - udev rules installed for Orbbec/RealSense USB cameras
+# ============================================================================
+
+# ── Base: ROS2 Humble + PyTorch CUDA for Jetson L4T R35.4.1 ────────────
+# This image includes: Ubuntu 20.04, ROS2 Humble Desktop, PyTorch 2.0,
+# torchvision, CUDA 11.4, cuDNN, all pre-compiled for ARM64/Jetson.
+FROM dustynv/ros:humble-pytorch-l4t-r35.4.1
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV ROS_DISTRO=humble
+ENV ROS2_WS=/root/TERESA_ws
+
+# ── Additional system dependencies ─────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake git wget curl \
+    python3-pip python3-colcon-common-extensions \
+    python3-rosdep python3-vcstool \
+    libeigen3-dev libgflags-dev nlohmann-json3-dev \
+    libgoogle-glog-dev libssl-dev libdw-dev \
+    mesa-utils libgl1 libopencv-dev \
+    ros-humble-cv-bridge \
+    ros-humble-image-transport \
+    ros-humble-image-transport-plugins \
+    ros-humble-compressed-image-transport \
+    ros-humble-image-publisher \
+    ros-humble-camera-info-manager \
+    ros-humble-diagnostic-updater \
+    ros-humble-diagnostic-msgs \
+    ros-humble-statistics-msgs \
+    ros-humble-backward-ros \
+    ros-humble-xacro \
+    ros-humble-robot-state-publisher \
+    ros-humble-message-filters \
+    ros-humble-rosbridge-suite \
+    ros-humble-ros2-control \
+    ros-humble-ros2-controllers \
+    ros-humble-controller-manager \
+    ros-humble-joint-state-broadcaster \
+    ros-humble-joint-trajectory-controller \
+    ros-humble-effort-controllers \
+    ros-humble-position-controllers \
+    ros-humble-hardware-interface \
+    ros-humble-pluginlib \
+    ros-humble-ament-index-cpp \
+    ros-humble-ament-index-python \
+    ros-humble-librealsense2 \
+    ros-humble-librealsense2-dev \
+    ros-humble-tf2-ros \
+    ros-humble-tf2-geometry-msgs \
+    ros-humble-tf2-sensor-msgs \
+    ros-humble-visualization-msgs \
+    ros-humble-moveit \
+    ros-humble-moveit-ros-move-group \
+    ros-humble-moveit-kinematics \
+    ros-humble-moveit-planners \
+    ros-humble-moveit-simple-controller-manager \
+    ros-humble-moveit-configs-utils \
+    ros-humble-ros-gz-sim \
+    ros-humble-nav-msgs \
+    ros-humble-control-msgs \
+    ros-humble-trajectory-msgs \
+    ros-humble-lifecycle-msgs \
+    ros-humble-std-srvs \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# ── Python packages (PyTorch is ALREADY included in base image) ────────
+# DO NOT reinstall torch/torchvision — base image has the Jetson build!
+RUN pip3 install --no-cache-dir \
+    ultralytics \
+    pinocchio \
+    scipy \
+    matplotlib \
+    numpy \
+    opencv-python-headless
+
+# ── Verify GPU access ──────────────────────────────────────────────────
+RUN python3 -c "import torch; assert torch.cuda.is_available(), 'CUDA NOT AVAILABLE!'; print(f'GPU OK: {torch.cuda.get_device_name(0)}'); print(f'CUDA version: {torch.version.cuda}')"
+
+# ── Copy TERESA workspace ──────────────────────────────────────────────
+WORKDIR /root/TERESA_ws
+COPY src/ src/
+COPY web/ web/
+COPY scripts/ scripts/
+COPY rviz/ rviz/
+
+# ── Pre-download model files ───────────────────────────────────────────
+
+# NLF model (Neural Localization Fields, ~240 MB)
+RUN wget -q https://github.com/isarandi/nlf/releases/download/v0.2.0/nlf_s_multi.torchscript \
+    -O /root/TERESA_ws/nlf_s_multi.torchscript || \
+    echo "WARNING: NLF model download failed — will retry at runtime"
+
+# YOLO11n-pose (~5.4 MB) — auto-downloaded by ultralytics on first use
+RUN python3 -c "from ultralytics import YOLO; m = YOLO('yolo11n-pose.pt'); print('YOLO model cached')" && \
+    cp yolo11n-pose.pt /root/TERESA_ws/ || true
+
+# ── Install ROS2 workspace dependencies ────────────────────────────────
+RUN . /opt/ros/humble/setup.sh && \
+    rosdep update && \
+    rosdep install --from-paths src --ignore-src -r -y || true
+
+# ── Build TERESA workspace ─────────────────────────────────────────────
+# --parallel-workers 4: conservativo per memoria Jetson (32/64 GB)
+# Alcuni pacchetti possono fallire la prima volta (dipendenze cross-package)
+# → proviamo senza --packages-select prima, poi con select se necessario
+RUN . /opt/ros/humble/setup.sh && \
+    colcon build --symlink-install \
+        --cmake-args -DCMAKE_BUILD_TYPE=Release \
+        --parallel-workers 4 \
+        --packages-up-to z1_vision spot_control spot_perception teresa_demo teresa_utils z1_ros2 || \
+    echo "WARNING: Some packages may have failed to build (check above). Camera drivers may need USB devices at runtime."
+
+# ── Shell environment ──────────────────────────────────────────────────
+RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc && \
+    echo "source /root/TERESA_ws/install/setup.bash" >> /root/.bashrc && \
+    echo "export ROS_DOMAIN_ID=0" >> /root/.bashrc && \
+    echo "export RCUTILS_COLORIZED_OUTPUT=1" >> /root/.bashrc
+
+# ── Labels ─────────────────────────────────────────────────────────────
+LABEL maintainer="andrea.dantona@unife.it"
+LABEL description="TERESA Whole Body Control — Spot + Z1 arm perception on Jetson Orin AGX"
+LABEL version="l4t-r35.4.1"
+LABEL ros_distro="humble"
+LABEL cuda_version="11.4"
+
+# ── Entrypoint ─────────────────────────────────────────────────────────
+COPY docker/docker_entrypoint.sh /root/docker_entrypoint.sh
+RUN chmod +x /root/docker_entrypoint.sh
+ENTRYPOINT ["/root/docker_entrypoint.sh"]
+CMD ["bash"]

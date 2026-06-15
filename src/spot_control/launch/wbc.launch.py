@@ -27,6 +27,9 @@ def generate_launch_description():
     step_mode_arg = DeclareLaunchArgument('step_mode', default_value='false',
         description='Step mode: gate automatic FSM transitions, press "n" to advance')
 
+    skip_scan_arg = DeclareLaunchArgument('skip_perceptual_scan', default_value='false',
+        description='Skip 6-pose Cartesian perceptual scan during APPROACHING (use when no RealSense)')
+
     params_file = PathJoinSubstitution([
         FindPackageShare('spot_control'), 'config', 'wbc_params.yaml'
     ])
@@ -37,7 +40,8 @@ def generate_launch_description():
         name='wbc_qp_controller',
         output='screen',
         parameters=[params_file,
-                    {'dry_run': LaunchConfiguration('dry_run')}],
+                    {'dry_run': LaunchConfiguration('dry_run')},
+                    {'skip_perceptual_scan': LaunchConfiguration('skip_perceptual_scan')}],
     )
 
     coord_node = Node(
@@ -91,6 +95,7 @@ def generate_launch_description():
     return LaunchDescription([
         dry_run_arg,
         step_mode_arg,
+        skip_scan_arg,
         LogInfo(msg=['WBC — arm-only QP + coordinator + spot navigator + body optimizer + exposure scanner + snapshot + ik_goal_mux']),
         qp_node,
         coord_node,

@@ -92,6 +92,7 @@ class WBCQPControllerNode(Node):
         self.declare_parameter('kp_confidence_ok',         0.4)
         self.declare_parameter('cartesian_x_advance',    0.10)
         self.declare_parameter('pre_scan_conf_thr',      0.6)
+        self.declare_parameter('skip_perceptual_scan', False)
         self.declare_parameter('update_period', 0.1)
         self.declare_parameter('workspace_safety_margin', 0.05)
         self.declare_parameter('body_scan_reduced_ny', 2)
@@ -122,6 +123,7 @@ class WBCQPControllerNode(Node):
         self._kp_confidence_ok     = float(p('kp_confidence_ok'))
         self._cartesian_x_advance  = float(p('cartesian_x_advance'))
         self._pre_scan_conf_thr    = float(p('pre_scan_conf_thr'))
+        self._skip_perceptual_scan = bool(p('skip_perceptual_scan'))
         self._pre_scan_kp_conf     = [0.0, 0.0, 0.0, 0.0]
         self._update_period        = float(p('update_period'))
         self._home_orientation = np.array([float(x) for x in p('home_orientation')])
@@ -624,6 +626,12 @@ class WBCQPControllerNode(Node):
         if self._q_meas is None:
             self.get_logger().warn('_start_perceptual_scan: no joint state')
             self._publish_fast_points()
+            return
+
+        if self._skip_perceptual_scan:
+            self.get_logger().info('PERCEPTUAL_SCAN: skipped (parameter) → publishing FAST points')
+            self._publish_fast_points()
+            self._mode = 'LOOKAT'
             return
 
         n_arm = self._q_meas.shape[0]

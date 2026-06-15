@@ -31,6 +31,7 @@ wbc_qp_controller:
     kp_confidence_ok: 0.4         # [0-1] soglia keypoint per considerarlo "sufficiente"
     cartesian_x_advance: 0.10    # [m] forward advance for PERCEPTUAL_SCAN grid
     pre_scan_conf_thr: 0.6       # [0-1] conf threshold for reduced grid (all 4 kp ok)
+    skip_perceptual_scan: false  # skip 6-pose Cartesian scan when no RealSense tracker
 
     # Goal update period — controls how often WBC recomputes IK goals.
     # IK solver processes goals sequentially (one trajectory at a time), so higher
