@@ -81,9 +81,12 @@ class ExperimentLogger(Node):
                     'scan_overlap_pct', 'lock_time_s',
                     'probe_error_mean_mm', 'probe_error_max_mm',
                     'scan_grid_type', 'dual_sensor_lock',
-                    'exposure_duration_s',
-                    'completion', 'patient_distance_m', 'patient_angle_deg'
-                ])
+            'exposure_duration_s',
+            'completion', 'patient_distance_m', 'patient_angle_deg',
+            'fast_reachability_pct', 'exposure_reachability_pct',
+            'fast_points_total', 'fast_points_skipped',
+            'exposure_points_total', 'exposure_points_skipped'
+        ])
 
     def _start_trial(self):
         self._trial_active = True
@@ -111,6 +114,13 @@ class ExperimentLogger(Node):
             'patient_angle_deg': None,
             'idle_segments': [],
             'idle_segment_start': None,
+            # Reachability tracking
+            'fast_points_total': 0,
+            'fast_points_skipped': 0,
+            'exposure_points_total': 0,
+            'exposure_points_skipped': 0,
+            'in_exposure': False,   # tracks whether we're in EXPOSURE_SCANNING
+            'in_fast': False,        # tracks whether we're in SCANNING (FAST)
         }
         self._record_state('SEARCHING')
 
@@ -154,6 +164,12 @@ class ExperimentLogger(Node):
         probe_mean = sum(errors) / len(errors) if errors else None
         probe_max = max(errors) if errors else None
 
+        # Reachability: % of points successfully reached (not skipped)
+        fast_total = t['fast_points_total'] + t['fast_points_skipped']
+        fast_reach = round(100.0 * t['fast_points_total'] / fast_total, 1) if fast_total > 0 else None
+        exp_total = t['exposure_points_total'] + t['exposure_points_skipped']
+        exp_reach = round(100.0 * t['exposure_points_total'] / exp_total, 1) if exp_total > 0 else None
+
         record = {
             'trial_id': t['trial_id'],
             'mode': t['mode'],
@@ -181,6 +197,12 @@ class ExperimentLogger(Node):
                 'exposure_duration_s': (
                     round(exposure_time, 1) if exposure_time else None
                 ),
+                'fast_reachability_pct': fast_reach,
+                'exposure_reachability_pct': exp_reach,
+                'fast_points_total': t['fast_points_total'],
+                'fast_points_skipped': t['fast_points_skipped'],
+                'exposure_points_total': t['exposure_points_total'],
+                'exposure_points_skipped': t['exposure_points_skipped'],
             },
             'state_timeline': t['state_timeline'],
         }
@@ -204,6 +226,12 @@ class ExperimentLogger(Node):
                 completed,
                 t['patient_distance_m'] or '',
                 t['patient_angle_deg'] or '',
+                fast_reach if fast_reach is not None else '',
+                exp_reach if exp_reach is not None else '',
+                t['fast_points_total'],
+                t['fast_points_skipped'],
+                t['exposure_points_total'],
+                t['exposure_points_skipped'],
             ])
 
     # ── helpers ──────────────────────────────────────────────
@@ -244,9 +272,11 @@ class ExperimentLogger(Node):
                 elif state == 'APPROACHING':
                     self._trial['t_scan_begin'] = time.time()
                 elif state == 'SCANNING':
+                    self._trial['in_fast'] = True
                     self._end_idle()
                     self._start_idle('scan_settle')
                 elif state == 'EXPOSURE_SCANNING':
+                    self._trial['in_exposure'] = True
                     self._trial['t_exposure_start'] = time.time()
                 elif state == 'EXPOSURE_REVIEW':
                     self._trial['t_review_start'] = time.time()
@@ -276,8 +306,18 @@ class ExperimentLogger(Node):
         if not self._trial_active:
             return
         if msg.data == -1:
+            # Point skipped — unreachable
+            if self._trial['in_fast']:
+                self._trial['fast_points_skipped'] += 1
+            elif self._trial['in_exposure']:
+                self._trial['exposure_points_skipped'] += 1
             self._end_idle()
-        else:
+        elif msg.data >= 0:
+            # Point being visited
+            if self._trial['in_fast']:
+                self._trial['fast_points_total'] += 1
+            elif self._trial['in_exposure']:
+                self._trial['exposure_points_total'] += 1
             self._end_idle()
             self._start_idle('fast_settle')
 
