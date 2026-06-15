@@ -863,9 +863,10 @@ class WBCCoordinatorNode(Node):
                             throttle_duration_sec=2.0)
                 elif not self._nlf_prior_valid() and self._nlf_prior != 'timeout':
                     self._lock_nlf_ticks += 1
-                    if self._lock_nlf_ticks >= 100:
+                    nlf_timeout = 30 if self._torso_tracker_state == '' else 100
+                    if self._lock_nlf_ticks >= nlf_timeout:
                         self.get_logger().warn(
-                            'NLF prior validity timeout (100 ticks) → proceeding without prior')
+                            f'NLF prior validity timeout ({nlf_timeout} ticks) → proceeding without prior')
                         self._nlf_prior = 'timeout'
                         self._nlf_trigger_pending = False
                     else:
@@ -1100,6 +1101,13 @@ class WBCCoordinatorNode(Node):
         goal = self._filtered_goal()
         goal.pose.position.z += 0.40  # supine torso ~40cm above ground
         self._pub_goal.publish(goal)
+
+        # If RealSense tracker is not running, skip straight to APPROACHING
+        if self._torso_tracker_state == '':
+            self.get_logger().info('PRE_APPROACH: no RealSense tracker → APPROACHING')
+            self._pub_spot_ctrl.publish(Bool(data=False))
+            self._set_state(CoordState.APPROACHING)
+            return
 
         # Wait for at least 1 RealSense ESTIMATING or LOCKED tick in last 5
         detected_now = self._torso_tracker_state in ('ESTIMATING', 'LOCKED')
