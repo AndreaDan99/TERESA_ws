@@ -306,6 +306,7 @@ class WBCCoordinatorNode(Node):
         self._torso_tracker_state: str = ''           # LOCKED / TRACKING / IDLE
         self._torso_detected_ticks: list[bool] = []      # sliding window of recent (5) LOCKED/ESTIMATING ticks
         self._torso_pos: PoseStamped | None = None    # ultima posa torso da RealSense
+        self._torso_best_dist: float = float('inf')    # distance of best torso detection
 
         # SEMI_LOCKING settle tracking
         self._semi_lock_start_yaw: float = 0.0
@@ -462,7 +463,18 @@ class WBCCoordinatorNode(Node):
 
     def _cb_torso_pos(self, msg: PoseStamped) -> None:
         with self._lock:
-            self._torso_pos = msg
+            # Keep the CLOSEST torso detection instead of the last one.
+            # Closer = more reliable, avoids overwriting a good detection
+            # with a distant/noisy one during the same scan cycle.
+            new_dist = math.hypot(msg.pose.position.x,
+                                  msg.pose.position.y,
+                                  msg.pose.position.z)
+            if self._torso_pos is None:
+                self._torso_pos = msg
+                self._torso_best_dist = new_dist
+            elif new_dist < self._torso_best_dist - 0.10:  # 10cm hysteresis
+                self._torso_pos = msg
+                self._torso_best_dist = new_dist
 
     def _cb_tf_ready(self, msg: Bool) -> None:
         with self._lock:
@@ -1448,6 +1460,7 @@ class WBCCoordinatorNode(Node):
             self._search_semi_cooldown = 3  # 3 ticks (0.3s at 10Hz) before FASE 3 can fire
             if old == CoordState.IDLE:
                 # Fresh start: full reset, save original yaw for return after semi-lock
+                self._torso_best_dist = float('inf')
                 self._search_original_yaw = self._get_current_yaw()
                 self._search_start = self.get_clock().now()
                 self._search_positions = self._build_search_sequence()
