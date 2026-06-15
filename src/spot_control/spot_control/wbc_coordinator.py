@@ -1657,17 +1657,19 @@ class WBCCoordinatorNode(Node):
             self._publish_body_pose_raw(h, p)
 
     def _publish_body_pose_raw(self, height: float, pitch: float):
-        """Publish body_pose using ONLY current TF orientation for yaw.
-        Never sets absolute yaw — Spot keeps whatever orientation it has."""
+        """Publish body_pose. During SEARCHING, uses cached yaw from search
+        start for consistency — avoids drift as Spot's body moves with pitch."""
         from tf_transformations import quaternion_from_euler, euler_from_quaternion
-        # Read current yaw from TF to preserve it — never cache, never fallback to 0
-        body_tf = self._tf_lookup(self._odom_frame, self._body_frame, timeout_sec=0.2)
-        if body_tf is not None:
-            qc = body_tf.transform.rotation
-            _, _, cur_yaw = euler_from_quaternion([qc.x, qc.y, qc.z, qc.w])
+        # During SEARCHING: use cached yaw for consistency across pitch changes
+        if self._state == CoordState.SEARCHING and self._search_original_yaw is not None:
+            cur_yaw = self._search_original_yaw
         else:
-            # TF not available — skip body_pose rather than risk wrong yaw
-            return
+            body_tf = self._tf_lookup(self._odom_frame, self._body_frame, timeout_sec=0.2)
+            if body_tf is not None:
+                qc = body_tf.transform.rotation
+                _, _, cur_yaw = euler_from_quaternion([qc.x, qc.y, qc.z, qc.w])
+            else:
+                return
         q = quaternion_from_euler(0.0, pitch, float(cur_yaw))
         pose = Pose()
         pose.position.z = height
