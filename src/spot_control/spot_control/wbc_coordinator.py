@@ -749,26 +749,19 @@ class WBCCoordinatorNode(Node):
                 dy = cur_yaw - self._semi_lock_start_yaw
                 dp = cur_pitch - self._semi_lock_start_pitch
 
-                yaw_ok = abs(dy - self._semi_lock_target_yaw) < self._search_semi_lock_yaw_tol
                 pitch_ok = abs(dp - self._semi_lock_target_pitch) < self._search_semi_lock_pitch_tol
 
-                if yaw_ok and pitch_ok:
+                if pitch_ok:
                     self._pub_cmd_vel.publish(Twist())
                     self._semi_lock_settle_done = True
                     self._semi_lock_dwell_start = self.get_clock().now()
                     self.get_logger().info(
-                        f'Semi-lock: Spot settled (Δyaw={math.degrees(dy):.1f}° '
-                        f'Δpitch={math.degrees(dp):.1f}°) → Orbbec dwell {self._search_semi_lock_dwell:.1f}s')
+                        f'Semi-lock: Spot settled (Δpitch={math.degrees(dp):.1f}°) '
+                        f'→ Orbbec dwell {self._search_semi_lock_dwell:.1f}s')
                     return
                 else:
                     t = Twist()
-                    if not yaw_ok:
-                        error = normalize_angle(
-                            (self._semi_lock_start_yaw + self._semi_lock_target_yaw)
-                            - cur_yaw)
-                        t.angular.z = float(np.clip(
-                            self._search_yaw_kp * error,
-                            -self._search_max_angular_vel, self._search_max_angular_vel))
+                    t.angular.z = 0.0
                     self._pub_cmd_vel.publish(t)
 
             # Safety timeout: if Spot cannot rotate (TF down or physically stuck), abort
@@ -806,11 +799,11 @@ class WBCCoordinatorNode(Node):
 
     def _return_from_semi_lock(self) -> None:
         """Reset orientation to original yaw and go back to SEARCHING."""
+        self._set_state(CoordState.SEARCHING)
         if self._search_original_yaw is not None:
             self._set_body_pose(self._search_body_height, 0.0, yaw=self._search_original_yaw)
         self._search_position_idx = self._search_saved_idx + 1  # skip to next pitch to avoid re-triggering same semi-lock
         self._search_position_start = None
-        self._set_state(CoordState.SEARCHING)
 
     def _tick_locking(self) -> None:
         """Braccio va in home (QP), coordinator raccoglie campioni in parallelo.
