@@ -1098,7 +1098,7 @@ class WBCCoordinatorNode(Node):
             return None
 
     def _tick_pre_approach_legacy(self) -> None:
-        # Use patient_body TF directly for arm LOOKAT (body center, not approach point)
+        # Use patient_body TF for arm LOOKAT — raise Z to torso level for lying patient
         approach = self._get_approach_odom()
         if approach is not None:
             goal = PoseStamped()
@@ -1106,7 +1106,7 @@ class WBCCoordinatorNode(Node):
             goal.header.stamp = self.get_clock().now().to_msg()
             goal.pose.position.x = approach[0]
             goal.pose.position.y = approach[1]
-            goal.pose.position.z = approach[2]
+            goal.pose.position.z = approach[2] + 0.25
             goal.pose.orientation.w = 1.0
         else:
             goal = self._filtered_goal()
@@ -1415,8 +1415,8 @@ class WBCCoordinatorNode(Node):
         msg.pose.orientation.w = 1.0  # identity — WBC QP recomputes orientation
         if self._quality.initialized:
             p = self._quality.get_position()
-            # ── NLF prior blending ──────────────────────────────
-            if self._nlf_prior_valid():
+            # ── NLF prior blending (PRE_APPROACH only — freeze during APPROACHING) ──
+            if self._nlf_prior_valid() and self._state != CoordState.APPROACHING:
                 # EXCELLENT tier: NLF confidence ≥ threshold → 100% NLF, skip delta blending
                 if self._nlf_confidence >= self._nlf_excellent_conf:
                     nlf_center = self._torso_center_from_prior()
