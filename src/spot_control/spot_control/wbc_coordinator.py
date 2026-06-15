@@ -1535,10 +1535,15 @@ class WBCCoordinatorNode(Node):
         """
         from tf_transformations import quaternion_from_euler
         if yaw is None:
-            cur_yaw = self._get_current_yaw()
-            # Fallback chain: current TF yaw → original search yaw → 0.0
-            yaw = cur_yaw if cur_yaw is not None else (
-                self._search_original_yaw if self._search_original_yaw is not None else 0.0)
+            # During SEARCHING pitch cycling: use cached yaw to avoid micro-rotations
+            # from TF noise. On fresh entry (IDLE→SEARCHING), _search_original_yaw was
+            # already saved. Only re-read TF for explicit yaw changes (semi-lock return).
+            if self._state == CoordState.SEARCHING and self._search_original_yaw is not None:
+                yaw = self._search_original_yaw
+            else:
+                cur_yaw = self._get_current_yaw()
+                yaw = cur_yaw if cur_yaw is not None else (
+                    self._search_original_yaw if self._search_original_yaw is not None else 0.0)
         height_clamped = float(np.clip(height, self._min_body_height, self._max_body_height))
 
         if smooth and (abs(height_clamped - self._current_body_height) > 0.02
