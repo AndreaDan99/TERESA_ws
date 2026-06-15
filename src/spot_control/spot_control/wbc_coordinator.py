@@ -1373,14 +1373,20 @@ class WBCCoordinatorNode(Node):
             return None
 
     def _distance_to_patient(self) -> float | None:
-        approach = self._get_approach_odom()
-        if approach is None:
-            return None
+        # Use quality target (cached from LOCKING) when available —
+        # consistent with the navigator goal, immune to detection noise during approach.
+        if self._quality.initialized:
+            p = self._quality.get_position()
+        else:
+            approach = self._get_approach_odom()
+            if approach is None:
+                return None
+            p = approach
         body_in_odom = self._tf_lookup(self._odom_frame, self._body_frame)
         if body_in_odom is None:
             return None
-        dx = body_in_odom.transform.translation.x - approach[0]
-        dy = body_in_odom.transform.translation.y - approach[1]
+        dx = body_in_odom.transform.translation.x - p[0]
+        dy = body_in_odom.transform.translation.y - p[1]
         return math.hypot(dx, dy)
 
     def _filtered_goal(self) -> PoseStamped:
