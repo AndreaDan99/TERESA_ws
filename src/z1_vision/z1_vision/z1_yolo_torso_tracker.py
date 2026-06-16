@@ -61,7 +61,7 @@ class Z1YoloTorsoTracker(Node):
         self.declare_parameter('model_path',         'yolo11n-pose.pt')
         self.declare_parameter('conf_thr',           0.3)
         self.declare_parameter('max_depth',          2.5)
-        self.declare_parameter('device',             'cpu')
+        self.declare_parameter('device',             'cuda')
         self.declare_parameter('imgsz',              416)
 
         # ── Parametri Kalman ───────────────────────────────────────
