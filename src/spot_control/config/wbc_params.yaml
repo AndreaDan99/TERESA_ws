@@ -132,6 +132,15 @@ wbc_coordinator:
     # When true, each mission-state transition must be confirmed via /wbc/step_confirm.
     step_mode: false
 
+    # ── Laying Human Detector parameters (declared in laying_human_detector.py) ──
+    # These are ROS2 parameters of the laying_human_detector node, NOT wbc_coordinator.
+    # They control approach distance computation:
+    #   dist = bbox_half + approach_margin + spot_front_offset
+    #   approach_margin:   0.00  [m] extra beyond bbox edge (was 0.05)
+    #   spot_front_offset: 0.15  [m] body edge → Spot nose (was 0.50)
+    #   Combined effect: Spot body ~0.45m from torso center (was ~1.0m)
+    # To override, set in the laying_human_detector node's parameter namespace at launch.
+
     # Topics
     posture_confidence_topic: '/human_pose/posture_confidence'
     approach_point_topic:     '/laying_human/approach_point'

@@ -27,8 +27,8 @@ class LayingHumanDetector(Node):
         # ============================================================
         # PARAMETRI
         # ============================================================
-        self.declare_parameter('approach_margin',          0.05)   # extra oltre bbox edge [m]
-        self.declare_parameter('spot_front_offset',        0.50)   # body center → muso Spot [m]
+        self.declare_parameter('approach_margin',          0.00)   # extra oltre bbox edge [m]
+        self.declare_parameter('spot_front_offset',        0.15)   # body center → muso Spot [m]
         self.declare_parameter('preferred_side',           'auto') # 'auto'|'left'|'right'
         self.declare_parameter('min_detection_confidence', 0.5)
         self.declare_parameter('min_valid_keypoints',      4)

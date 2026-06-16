@@ -1499,6 +1499,8 @@ class WBCCoordinatorNode(Node):
                 self._set_body_pose(h, p)
                 self._body_settle_start = self.get_clock().now().nanoseconds * 1e-9
             else:
+                # Optimizer results not ready yet — publish body_ready anyway so the
+                # exposure scanner doesn't deadlock. First point uses default handoff height.
                 self._pub_body_ready.publish(Bool(data=True))
 
     def _max_workspace_reach(self) -> float:
@@ -1589,6 +1591,7 @@ class WBCCoordinatorNode(Node):
             self._set_body_pose(self._handoff_body_height)
             self._scan_start = self.get_clock().now()
         if new_state == CoordState.EXPOSURE_SCANNING:
+            self._set_wbc_enabled(False)
             self._set_body_pose(self._handoff_body_height)
             self._exposure_scan_start = self.get_clock().now()
             self._pub_nav_mode.publish(String(data='exposure'))
