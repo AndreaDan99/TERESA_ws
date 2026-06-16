@@ -8,7 +8,7 @@ z1_yolo_torso_tracker:
     model_path:   'yolo11n-pose.pt'
     conf_thr:     0.25          # alzato da 0.15: riduce keypoint rumorosi
     max_depth:    4.0
-    device:       'cpu'
+    device:       'cuda'
     imgsz:        416
 
     # ── Sync RGB+Depth ─────────────────────────────────────────────
