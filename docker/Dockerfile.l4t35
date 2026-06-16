@@ -219,6 +219,12 @@ LABEL ros_distro="humble"
 LABEL cuda_version="11.4"
 LABEL hardware="realsense-d435, orbbec-femto-bolt, unitree-z1"
 
+# ── Stage 9: Fix missing deps ──────────────────────────────────────────
+# xacro is needed by Z1 bringup (z1.launch.py processes .xacro URDF files)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ros-humble-xacro \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 # ── Entrypoint ──────────────────────────────────────────────────────────
 COPY docker/docker_entrypoint.sh /root/docker_entrypoint.sh
 RUN chmod +x /root/docker_entrypoint.sh
