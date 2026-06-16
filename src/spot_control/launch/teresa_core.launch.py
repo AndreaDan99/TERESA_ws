@@ -17,7 +17,7 @@ Uso:
   ros2 launch spot_control teresa_core.launch.py
 """
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, LogInfo, DeclareLaunchArgument
+from launch.actions import IncludeLaunchDescription, LogInfo, DeclareLaunchArgument, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
@@ -109,8 +109,10 @@ def generate_launch_description():
         name='camera',
         parameters=[{
             'enable_color': True,
+            'rgb_camera.color_profile': '640x480x30',
+            'depth_module.depth_profile': '640x480x30',
             'enable_depth': True,
-            'pointcloud.enable': True,
+            'pointcloud.enable': False,
             'colorizer.enable': False,
             'align_depth.enable': True,
             'enable_infra': False,
@@ -176,7 +178,8 @@ def generate_launch_description():
         static_tf_link06_camera,
 
         z1_bringup_launch,
-        realsense_node,
+        # RealSense avviata con 4s di delay per evitare conflitto USB con Orbbec
+        TimerAction(period=8.0, actions=[realsense_node]),
 
         tf_monitor_node,
 
