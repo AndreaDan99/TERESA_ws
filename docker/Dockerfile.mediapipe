@@ -1,0 +1,30 @@
+# =============================================================================
+# andrea_mp — isolated MediaPipe BlazePose image for the Jetson Orin
+#   JetPack 5.1.2 / L4T R35.4.1 / aarch64
+#
+# Kept SEPARATE from andrea_deploy because MediaPipe 0.10.9 needs protobuf<4,
+# which can collide with the transformers stack. MediaPipe runs the pose on CPU
+# (no torch needed for inference) but the base provides cv2 4.5.0 + numpy.
+#
+# BUILD (on the Orin, from this docker/ dir):
+#   docker build -t andrea_mp:latest -f Dockerfile.mediapipe .
+#
+# RUN:
+#   docker run --rm -v /ssd/andrea_deploy:/work andrea_mp:latest \
+#       python3 /work/scripts/bench_pose.py --backend mediapipe \
+#       --model /work/models/pose_landmarker_heavy.task --frames /work/frames_wound/frames --out /work/pose/bob_mediapipe
+# =============================================================================
+FROM dustynv/l4t-pytorch:r35.4.1
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PIP_NO_CACHE_DIR=1
+
+# --no-deps so MediaPipe's opencv-contrib-python dep does NOT clobber the Jetson cv2.
+# matplotlib is required by mediapipe's legacy `solutions` __init__; protobuf<4 is required.
+RUN pip3 install --no-deps mediapipe \
+ && pip3 install absl-py "attrs>=19.1.0" "flatbuffers>=2.0" "protobuf>=3.20,<4" matplotlib "numpy==1.24.4" \
+ && python3 -c "import cv2, numpy; import mediapipe as mp; from mediapipe.tasks.python import vision; \
+    print('OK cv2', cv2.__version__, '| mediapipe', mp.__version__)"
+
+WORKDIR /work
+CMD ["bash"]

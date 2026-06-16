@@ -1,0 +1,48 @@
+# =============================================================================
+# andrea_deploy — perception stack for the Spot Jetson AGX Orin
+#   JetPack 5.1.2 / L4T R35.4.1 / CUDA 11.4 / aarch64
+#
+# Provides: NLF (3D SMPL pose), YOLO11-pose (2D skeleton), and open-vocab wound
+# detection (OWLv2 / Grounding DINO / CLIPSeg). GPU works out of the box
+# (Docker default-runtime = nvidia on this host).
+#
+# BUILD (run ON the Orin, from this docker/ dir so the context stays tiny):
+#   docker build -t andrea_deploy:latest -f Dockerfile .
+#
+# RUN (mount the working dir on the 1 TB SSD; never write to the full eMMC):
+#   docker run --rm -v /ssd/andrea_deploy:/work andrea_deploy:latest \
+#       python3 /work/scripts/bench_nlf.py --model /work/models/nlf_s_multi_v020.torchscript ...
+# =============================================================================
+
+# Base: dusty-nv L4T PyTorch — torch 2.0.0+nv23.05, torchvision 0.15.1, CUDA 11.4,
+# cv2 4.5.0, numpy 1.24.4. (NOT the teresa_ws image, whose torch is cu130/CPU-only here.)
+FROM dustynv/l4t-pytorch:r35.4.1
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PIP_NO_CACHE_DIR=1
+# Keep HF + pip caches on the mounted SSD, off the 5 GB eMMC, at runtime.
+ENV HF_HOME=/work/hf_cache
+
+# --- HuggingFace stack for wound detection (OWLv2 / Grounding DINO / CLIPSeg) ---
+# transformers 4.44.2 is the last release that supports this image's Python 3.8.
+# (ViTPose needs >=4.48 / py>=3.9 → not available here.)
+# scipy is required by Owlv2ImageProcessor's resize.
+RUN pip3 install transformers==4.44.2 pillow safetensors scipy
+
+# --- Ultralytics YOLO11-pose (2D skeleton) ---
+# CRITICAL: --no-deps. A plain `pip install ultralytics` pulls a generic
+# opencv-python wheel that shadows the Jetson-native cv2 4.5.0 and is built
+# against a different numpy ABI -> "cv2 has no attribute _registerMatType" crash.
+# So install ultralytics with no deps and add only the pure-python ones it needs,
+# pinning numpy to the image's version so nothing upgrades it.
+RUN pip3 install --no-deps ultralytics ultralytics-thop \
+ && pip3 install matplotlib psutil py-cpuinfo pandas seaborn pyyaml requests tqdm "numpy==1.24.4"
+
+# --- Build-time sanity: GPU + every lib still imports ---
+RUN python3 -c "import torch, cv2, numpy, transformers, ultralytics; \
+    assert torch.cuda.is_available(), 'CUDA not available'; \
+    print('OK torch', torch.__version__, '| cv2', cv2.__version__, '| np', numpy.__version__, \
+          '| transformers', transformers.__version__, '| ultralytics', ultralytics.__version__)"
+
+WORKDIR /work
+CMD ["bash"]

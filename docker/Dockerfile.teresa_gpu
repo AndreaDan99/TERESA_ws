@@ -1,0 +1,68 @@
+# =============================================================================
+# teresa_gpu — ROS2 Humble + Jetson GPU torch + our validated perception deps
+#   Jetson AGX Orin / JetPack 5.1.2 / L4T R35.4.1 / aarch64 / py3.8
+#
+# WHY: the legacy teresa_ws:latest ships a generic torch 2.12.0+cu130 wheel that
+# CANNOT use the Jetson GPU (cuda.is_available()==False). This image instead grafts
+# the CORRECT Jetson torch (2.0.0+nv23.05, CUDA 11.4) onto a ROS Humble base, so the
+# perception nodes (NLF / YOLO-pose / posture / wound) run on the GPU as ROS nodes.
+#
+# Base: dustynv/ros:humble-ros-base-l4t-r35.4.1  -> rclpy + cv_bridge + cv2 4.5.0 + numpy 1.24.4
+# Torch: copied (NOT pip-installed) from dustynv/l4t-pytorch:r35.4.1 so nothing clobbers it.
+# Our deps installed the andrea_deploy way (ultralytics --no-deps; never bump torch/cv2/numpy).
+#
+# BUILD (on the Orin):  docker build -f Dockerfile.teresa_gpu -t teresa_gpu:latest .
+# RUN (two-container DDS split, isolated domain):
+#   docker run -d --name teresa_gpu --runtime=nvidia --net=host \
+#     -e ROS_DOMAIN_ID=42 -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
+#     -v /ssd/andrea_deploy:/work -v /home/spot_orin/AndreaDantonaTeresa/TERESA_ws:/ros2_ws \
+#     teresa_gpu:latest sleep infinity
+# =============================================================================
+
+# ── builder stage: just to lift the Jetson torch wheels out of the image ──────
+FROM dustynv/l4t-pytorch:r35.4.1 AS torchsrc
+RUN cd /usr/local/lib/python3.8/dist-packages && \
+    tar czf /torch_bundle.tgz \
+        torch torchvision torchgen functorch \
+        torch-*.dist-info torchvision-*.dist-info 2>/dev/null || \
+    tar czf /torch_bundle.tgz torch torchvision
+
+# ── runtime stage: ROS Humble + grafted Jetson torch + our deps ───────────────
+FROM dustynv/ros:humble-ros-base-l4t-r35.4.1
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PIP_NO_CACHE_DIR=1
+ENV HF_HOME=/work/hf_cache
+
+# native libs torch / torchvision link against (not all present in ros-base).
+# Drop the stale ROS apt source first — its GPG key is expired and would abort
+# apt-get update; we only need the three libs from the Ubuntu ports repos.
+RUN rm -f /etc/apt/sources.list.d/*ros* 2>/dev/null; \
+    apt-get update && apt-get install -y --no-install-recommends \
+      libopenblas0 libjpeg-turbo8 libpng16-16 \
+ && rm -rf /var/lib/apt/lists/*
+
+# graft the Jetson torch + torchvision (GPU build) — same py3.8 / L4T R35.4.1
+COPY --from=torchsrc /torch_bundle.tgz /tmp/
+RUN tar xzf /tmp/torch_bundle.tgz -C /usr/local/lib/python3.8/dist-packages/ \
+ && rm /tmp/torch_bundle.tgz
+
+# torch / torchvision PYTHON deps only (do NOT pip-install torch — it's grafted)
+RUN pip3 install "typing-extensions>=4.5" sympy networkx jinja2 filelock mpmath pillow
+
+# our validated perception deps — never clobber torch/cv2/numpy
+RUN pip3 install transformers==4.44.2 safetensors scipy matplotlib
+RUN pip3 install --no-deps ultralytics ultralytics-thop \
+ && pip3 install psutil py-cpuinfo pandas tqdm requests pyyaml
+
+# auto-source ROS in interactive/login shells (rclpy lives on the ROS PYTHONPATH)
+RUN echo 'source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash' >> /root/.bashrc
+
+# verify the whole stack imports + GPU is visible (default docker runtime is nvidia here)
+RUN bash -lc "source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash; \
+python3 -c \"import torch, torchvision, cv2, numpy, scipy, transformers, ultralytics; \
+import rclpy, cv_bridge; from sensor_msgs.msg import Image; from visualization_msgs.msg import MarkerArray; \
+print('OK torch', torch.__version__, '| tv', torchvision.__version__, '| cuda', torch.cuda.is_available(), \
+'| cv2', cv2.__version__, '| np', numpy.__version__, '| tf', transformers.__version__)\""
+
+WORKDIR /work
+CMD ["bash"]
