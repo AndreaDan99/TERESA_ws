@@ -9,15 +9,17 @@
 #       -e ROS_DOMAIN_ID=0 -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY \
 #       teresa_jetson:l4t-r35.4.1
 #
-# HOST REQUIREMENTS:
+# HOST REQUIREMENTS (must be done BEFORE building/running):
 #   - Jetson Orin AGX with JetPack 5.1.2+ (L4T R35.4.1)
-#   - Docker with nvidia-container-runtime (see jetson-containers setup guide)
-#   - udev rules installed for Orbbec/RealSense USB cameras
+#   - Docker with nvidia-container-runtime
+#   - udev rules for Orbbec Femto Bolt + Intel RealSense D435
+#   - Z1 arm network: host IP = 192.168.123.235 (--net=host needed)
+#   - Orbbec powered via 12V DC (NOT USB-C alone — camera freezes otherwise)
 # ============================================================================
 
-# ── Base: ROS2 Humble + PyTorch CUDA for Jetson L4T R35.4.1 ────────────
-# This image includes: Ubuntu 20.04, ROS2 Humble Desktop, PyTorch 2.0,
-# torchvision, CUDA 11.4, cuDNN, all pre-compiled for ARM64/Jetson.
+# ── Stage 0: Base Image ─────────────────────────────────────────────────
+# ROS2 Humble Desktop + PyTorch 2.0 + CUDA 11.4 — pre-built for ARM64/Jetson
+# Includes: torch, torchvision, torchaudio, cuDNN, TensorRT
 FROM dustynv/ros:humble-pytorch-l4t-r35.4.1
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -26,14 +28,39 @@ ENV LC_ALL=C.UTF-8
 ENV ROS_DISTRO=humble
 ENV ROS2_WS=/root/TERESA_ws
 
-# ── Additional system dependencies ─────────────────────────────────────
+# ── Stage 1: System Dependencies (apt) ──────────────────────────────────
+# Organized by hardware component
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    \
+    # === BUILD TOOLS ===
     build-essential cmake git wget curl \
     python3-pip python3-colcon-common-extensions \
     python3-rosdep python3-vcstool \
-    libeigen3-dev libgflags-dev nlohmann-json3-dev \
-    libgoogle-glog-dev libssl-dev libdw-dev \
-    mesa-utils libgl1 libopencv-dev \
+    \
+    # === INTEL REALSENSE D435 (librealsense2) ===
+    # Driver for the wrist-mounted RealSense D435 camera
+    # Source: src/realsense-ros/ (built from source)
+    # Topic prefix: /camera/camera/color/image_raw, /camera/camera/depth/...
+    ros-humble-librealsense2 \
+    ros-humble-librealsense2-dev \
+    libeigen3-dev \
+    \
+    # === ORBBEC FEMTO BOLT (OrbbecSDK v2) ===
+    # Driver for the Spot-mounted Orbbec Femto Bolt camera
+    # Source: src/orbbec_camera/ (built from source)
+    # Topic prefix: /orbbec/color/image_raw, /orbbec/depth/...
+    # Config: RGB 1280×720@15fps + Depth 1024×1024@15fps, no pointcloud
+    libgflags-dev \
+    nlohmann-json3-dev \
+    libgoogle-glog-dev \
+    libssl-dev \
+    libdw-dev \
+    mesa-utils \
+    libgl1 \
+    libopencv-dev \
+    \
+    # === CAMERA MIDDLEWARE (shared by both cameras) ===
     ros-humble-cv-bridge \
     ros-humble-image-transport \
     ros-humble-image-transport-plugins \
@@ -44,10 +71,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-diagnostic-msgs \
     ros-humble-statistics-msgs \
     ros-humble-backward-ros \
-    ros-humble-xacro \
-    ros-humble-robot-state-publisher \
-    ros-humble-message-filters \
-    ros-humble-rosbridge-suite \
+    \
+    # === Z1 ARM (Unitree Z1 6-DOF manipulator) ===
+    # Source: src/z1_ros2/ (built from source)
+    # Sub-packages: z1_description, z1_bringup, z1_hardware_interface, z1_moveit
+    # Network: Z1 IP = 192.168.123.110, Host IP = 192.168.123.235
+    # Controllers: joint_trajectory_controller (default/position), torque_controller (impedance)
     ros-humble-ros2-control \
     ros-humble-ros2-controllers \
     ros-humble-controller-manager \
@@ -59,87 +88,138 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-pluginlib \
     ros-humble-ament-index-cpp \
     ros-humble-ament-index-python \
-    ros-humble-librealsense2 \
-    ros-humble-librealsense2-dev \
-    ros-humble-tf2-ros \
-    ros-humble-tf2-geometry-msgs \
-    ros-humble-tf2-sensor-msgs \
-    ros-humble-visualization-msgs \
     ros-humble-moveit \
     ros-humble-moveit-ros-move-group \
     ros-humble-moveit-kinematics \
     ros-humble-moveit-planners \
     ros-humble-moveit-simple-controller-manager \
     ros-humble-moveit-configs-utils \
+    \
+    # === TF2 & TRANSFORMS ===
+    ros-humble-tf2-ros \
+    ros-humble-tf2-geometry-msgs \
+    ros-humble-tf2-sensor-msgs \
+    ros-humble-xacro \
+    ros-humble-robot-state-publisher \
+    \
+    # === VISUALIZATION & DEBUG ===
+    ros-humble-visualization-msgs \
+    ros-humble-message-filters \
+    ros-humble-rosbridge-suite \
     ros-humble-ros-gz-sim \
+    \
+    # === STANDARD ROS2 TYPES ===
     ros-humble-nav-msgs \
     ros-humble-control-msgs \
     ros-humble-trajectory-msgs \
     ros-humble-lifecycle-msgs \
     ros-humble-std-srvs \
+    ros-humble-geometry-msgs \
+    ros-humble-sensor-msgs \
+    ros-humble-std-msgs \
+    \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# ── Python packages (PyTorch is ALREADY included in base image) ────────
-# DO NOT reinstall torch/torchvision — base image has the Jetson build!
+# ── Stage 2: Python Packages (pip) ──────────────────────────────────────
+# ⚠️  DO NOT reinstall torch/torchvision — base image has the Jetson build!
+#     Standard pip torch breaks with "no kernel image for execution on device"
+
 RUN pip3 install --no-cache-dir \
+    \
+    # === VISION / AI ===
     ultralytics \
+    \
+    # === IK SOLVER (Z1 arm inverse kinematics) ===
+    # Used by: z1_ik_to_jtc.py, wbc_qp_controller.py, wbc_math.py
     pinocchio \
+    \
+    # === MATH & UTILITIES ===
     scipy \
     matplotlib \
     numpy \
-    opencv-python-headless
+    opencv-python-headless \
+    \
+    # === Z1 ARM: Python TF transformations ===
+    # Used by z1_ik_to_jtc.py for quaternion_matrix
+    transforms3d
 
-# ── Verify GPU access ──────────────────────────────────────────────────
-RUN python3 -c "import torch; assert torch.cuda.is_available(), 'CUDA NOT AVAILABLE!'; print(f'GPU OK: {torch.cuda.get_device_name(0)}'); print(f'CUDA version: {torch.version.cuda}')"
+# ── Stage 3: Verify GPU ─────────────────────────────────────────────────
+RUN python3 -c "import torch; assert torch.cuda.is_available(), 'CUDA NOT AVAILABLE!'; print(f'GPU OK: {torch.cuda.get_device_name(0)}'); print(f'CUDA: {torch.version.cuda}')"
 
-# ── Copy TERESA workspace ──────────────────────────────────────────────
+# ── Stage 4: Copy TERESA Workspace ──────────────────────────────────────
 WORKDIR /root/TERESA_ws
+
+# Source packages:
+#   teresa_utils/        — shared orientation & transform utilities
+#   z1_vision/           — Z1 arm: FSM, IK, impedance, YOLO/NLF torso tracker
+#   spot_control/        — Spot: WBC coordinator, QP controller, navigator
+#   spot_perception/     — Orbbec: YOLO/NLF skeleton, posture classifier
+#   teresa_demo/         — visitor demo (no cameras/WBC)
+#   z1_ros2/             — Unitree Z1 hardware interface, URDF, MoveIt2
+#   realsense-ros/       — Intel RealSense D435 ROS2 driver
+#   orbbec_camera/       — Orbbec Femto Bolt camera driver
 COPY src/ src/
 COPY web/ web/
 COPY scripts/ scripts/
 COPY rviz/ rviz/
 
-# ── Pre-download model files ───────────────────────────────────────────
+# ── Stage 5: Model Files ────────────────────────────────────────────────
 
-# NLF model (Neural Localization Fields, ~240 MB)
+# NLF — Neural Localization Fields (~240 MB)
+# Model: nlf_s_multi.torchscript (SMPL 24-joint, RGB-only, no depth needed)
+# Source: https://github.com/isarandi/nlf
+# Used by: nlf_skeleton.py (Orbbec), nlf_torso_tracker.py (RealSense)
 RUN wget -q https://github.com/isarandi/nlf/releases/download/v0.2.0/nlf_s_multi.torchscript \
     -O /root/TERESA_ws/nlf_s_multi.torchscript || \
-    echo "WARNING: NLF model download failed — will retry at runtime"
+    echo "WARNING: NLF model download failed — retry with scripts/download_nlf_models.sh"
 
-# YOLO11n-pose (~5.4 MB) — auto-downloaded by ultralytics on first use
-RUN python3 -c "from ultralytics import YOLO; m = YOLO('yolo11n-pose.pt'); print('YOLO model cached')" && \
+# YOLO11n-pose (~5.4 MB) — auto-downloaded by ultralytics
+# Model: yolo11n-pose.pt (17 COCO keypoints → padded to 24 SMPL)
+# Used by: yolo_skeleton_spot.py (Orbbec), z1_yolo_torso_tracker.py (RealSense)
+# At runtime, runs on GPU via device="cuda" in YAML config
+RUN python3 -c "from ultralytics import YOLO; m = YOLO('yolo11n-pose.pt'); print('YOLO11n-pose cached')" && \
     cp yolo11n-pose.pt /root/TERESA_ws/ || true
 
-# ── Install ROS2 workspace dependencies ────────────────────────────────
+# ── Stage 6: rosdep — Install remaining ROS2 deps ───────────────────────
 RUN . /opt/ros/humble/setup.sh && \
     rosdep update && \
     rosdep install --from-paths src --ignore-src -r -y || true
 
-# ── Build TERESA workspace ─────────────────────────────────────────────
-# --parallel-workers 4: conservativo per memoria Jetson (32/64 GB)
-# Alcuni pacchetti possono fallire la prima volta (dipendenze cross-package)
-# → proviamo senza --packages-select prima, poi con select se necessario
+# ── Stage 7: Build TERESA Workspace (ARM64) ─────────────────────────────
+# Build order matters: teresa_utils first, then perception packages,
+# then control packages, then camera drivers (heaviest).
+# --parallel-workers 4: safe for Orin AGX 32/64 GB RAM
+
 RUN . /opt/ros/humble/setup.sh && \
     colcon build --symlink-install \
         --cmake-args -DCMAKE_BUILD_TYPE=Release \
         --parallel-workers 4 \
-        --packages-up-to z1_vision spot_control spot_perception teresa_demo teresa_utils z1_ros2 || \
-    echo "WARNING: Some packages may have failed to build (check above). Camera drivers may need USB devices at runtime."
+        --packages-up-to \
+            teresa_utils \
+            z1_vision \
+            spot_perception \
+            spot_control \
+            teresa_demo \
+            z1_ros2 \
+            realsense2_camera \
+            orbbec_camera \
+    || echo "WARNING: Some packages failed. Camera drivers may need USB at runtime."
 
-# ── Shell environment ──────────────────────────────────────────────────
+# ── Stage 8: Shell Environment ──────────────────────────────────────────
 RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc && \
     echo "source /root/TERESA_ws/install/setup.bash" >> /root/.bashrc && \
     echo "export ROS_DOMAIN_ID=0" >> /root/.bashrc && \
     echo "export RCUTILS_COLORIZED_OUTPUT=1" >> /root/.bashrc
 
-# ── Labels ─────────────────────────────────────────────────────────────
+# ── Labels ──────────────────────────────────────────────────────────────
 LABEL maintainer="andrea.dantona@unife.it"
-LABEL description="TERESA Whole Body Control — Spot + Z1 arm perception on Jetson Orin AGX"
+LABEL description="TERESA Whole Body Control — Spot + Z1 arm on Jetson Orin AGX"
 LABEL version="l4t-r35.4.1"
 LABEL ros_distro="humble"
 LABEL cuda_version="11.4"
+LABEL hardware="realsense-d435, orbbec-femto-bolt, unitree-z1"
 
-# ── Entrypoint ─────────────────────────────────────────────────────────
+# ── Entrypoint ──────────────────────────────────────────────────────────
 COPY docker/docker_entrypoint.sh /root/docker_entrypoint.sh
 RUN chmod +x /root/docker_entrypoint.sh
 ENTRYPOINT ["/root/docker_entrypoint.sh"]
