@@ -8,9 +8,15 @@
 
 Experiments ran on the physical Spot+Z1 platform with an Orbbec Femto Bolt on
 Spot's body and a RealSense D435 at the \ac{EE}, computing across SpotCore
-and an external PC over \ac{ROS}~2 Jazzy.  Ten supine patient
+and an onboard NVIDIA Jetson Orin AGX (\ac{ROS}~2 Humble, CUDA 11.4,
+PyTorch 2.0).  Ten supine patient
 positions were defined (\SI{2}{\metre}--\SI{4}{\metre}, $\pm\SI{45}{\degree}$
 angular offset); each ran in both modes below, yielding twenty paired trials.
+
+Neural network inference runs entirely on the Jetson GPU.
+YOLO11n-pose skeleton detection operates at 8--14\,fps, NLF 3D body pose
+estimation at 3--4\,fps (end-to-end), and Grounding DINO zero-shot wound
+detection at $\sim$1\,fps.
 
 \begin{itemize}
   \item \textbf{Baseline}: sequential stop-and-manipulate. Fixed three-pose scan

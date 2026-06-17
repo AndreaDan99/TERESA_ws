@@ -30,7 +30,7 @@ configuration that maximises detection confidence.
 The robot sweeps through a sequence of body yaw orientations using
 differential velocity commands, pausing at each to allow two cameras to
 observe the environment. A wide-field Orbbec \ac{RGBD} camera mounted on Spot's
-body runs \ac{YOLO}11-pose~\cite{maji2022} and a posture classifier that
+body runs YOLO11-pose and a posture classifier that
 outputs a confidence score $c \in [0, 1]$. An \ac{EE}-mounted RealSense
 \ac{RGBD} camera runs a torso tracker in a lenient guidance mode. At each
 orientation, two conditions are evaluated:
@@ -205,11 +205,12 @@ NLF prior is available, all 24 joints are populated, enabling a denser grid.
 
 \subsubsection{Injury detection}
 
-At each grid point, two pre-trained models run on the RealSense RGB stream: a
-YOLOv8-based forensic wound detector and a YOLOv7-based burn classifier at
-\SI{5}{\hertz} in alternating frames. Detections are projected to 3D world
-coordinates via the registered depth channel and associated with their grid
-point index.
+At each grid point, Grounding DINO---a zero-shot
+open-vocabulary object detector---runs on the RealSense RGB stream at
+approximately 1\,fps on the Jetson Orin GPU, prompted with a vocabulary
+of wound-related terms (wound, laceration, bleeding, burn, etc.). Detections
+are projected to 3D world coordinates via the registered depth channel and
+associated with their grid point index.
 
 \subsubsection{Web-based interactive review}
 

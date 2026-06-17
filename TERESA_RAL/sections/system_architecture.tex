@@ -6,16 +6,17 @@
 
 The \ac{TERESA} system is organised into four layers---hardware, perception,
 mission management, and control---communicating over \ac{ROS}~2 with
-\ac{DDS}. Computation is distributed across three units: the Spot onboard
-computer SpotCore (base control and odometry) and an external PC (perception,
-arm control, mission coordination, and \ac{WBC}). An NVIDIA Jetson Orin AGX is
-mounted on the platform for future on-board computation but is currently unused.
+\ac{DDS}. Computation is distributed across two units: the Spot onboard
+computer SpotCore (base control and odometry), and an NVIDIA Jetson Orin AGX
+mounted on the platform, which runs perception, arm control, mission
+coordination, and \ac{WBC}. GPU-accelerated inference is performed via Docker
+containers with CUDA 11.4.
 
 \subsection{Hardware Platform}
 
 \begin{figure}[t]
   \centering
-  \includegraphics[width=\columnwidth]{figures/system_overview_annotated}
+  \includegraphics[scale=0.60]{figures/system_overview_annotated}
   \caption{The \ac{TERESA} system during the exposure scanning phase. The Spot
            quadruped base (left) carries the Z1 manipulator with a wrist-mounted
            Intel RealSense D415 for close-range torso tracking and a body-mounted
@@ -37,7 +38,7 @@ RealSense D435 is mounted at the Z1 \ac{EE}; the arm's \ac{WBC} look-at
 controller positions it as an active pan-tilt unit for close-range torso
 tracking and surface estimation. Spot's five built-in stereo cameras are
 positioned low on the body for ground-plane obstacle avoidance and are not
-suitable for \ac{YOLO} skeleton detection.
+suitable for YOLO skeleton detection.
 
 %\subsection{Frame Tree}
 %
@@ -110,7 +111,7 @@ halts the base and returns the arm to a safe configuration.
   \centering
   \resizebox{\columnwidth}{!}{\input{figures/system_block}}
   \caption{System block diagram. The Perception layer processes dual-sensor
-           \ac{RGBD} streams via \ac{YOLO}-pose, Kalman filtering, \ac{NLF}
+           \ac{RGBD} streams via YOLO-pose, Kalman filtering, NLF
            skeleton detection, surface estimation, and injury detection. The
            13-state Mission \ac{FSM} orchestrates four Planning modules:
            Exposure Scanner, \ac{FAST} Ultrasound, Body Pose Optimizer, and
