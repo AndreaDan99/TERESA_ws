@@ -20,6 +20,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import PoseArray, Pose, Point
 from visualization_msgs.msg import Marker, MarkerArray
+from std_msgs.msg import Bool
 from cv_bridge import CvBridge
 
 import numpy as np
@@ -70,6 +71,9 @@ class YoloSkeletonNode(Node):
             Image, "/orbbec/depth/image_raw", self.cb_depth, 10)
         self.sub_info  = self.create_subscription(
             CameraInfo, "/orbbec/color/camera_info", self.cb_info, 10)
+        # ── Perception enable/disable (from WBC coordinator) ──
+        self.sub_perception_enable = self.create_subscription(
+            Bool, '/wbc/perception_enable', self._cb_perception_enable, 10)
 
         # ── Publishers ───────────────────────────────────────────
         self.pub_poses   = self.create_publisher(
@@ -80,6 +84,7 @@ class YoloSkeletonNode(Node):
         # ── Sensor state ─────────────────────────────────────────
         self.depth_img = None
         self.cam_info  = None
+        self._perception_enabled = True  # default: enabled
 
         # ── Tracking state ───────────────────────────────────────
         self.target_id           = None          # current target (ByteTrack ID)
@@ -111,6 +116,10 @@ class YoloSkeletonNode(Node):
 
     def cb_depth(self, msg):
         self.depth_img = self.bridge.imgmsg_to_cv2(msg, "passthrough")
+
+    def _cb_perception_enable(self, msg):
+        """Callback for /wbc/perception_enable — pause/resume YOLO inference."""
+        self._perception_enabled = msg.data
 
     # ================================================================
     #  Depth utilities
@@ -202,6 +211,8 @@ class YoloSkeletonNode(Node):
     # ================================================================
 
     def cb_color(self, msg):
+        if not self._perception_enabled:
+            return
         if self.depth_img is None or self.cam_info is None:
             return
 

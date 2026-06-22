@@ -26,8 +26,10 @@ Transitions:
   APPROACHING   → SCANNING       Spot within handoff_distance of approach_point
   any           → IDLE           TF loss or emergency
 """
+import json
 import math
 import threading
+from datetime import datetime
 
 import numpy as np
 
@@ -38,7 +40,7 @@ import rclpy.time
 
 from geometry_msgs.msg import PoseStamped, TransformStamped, Twist, Vector3Stamped, Pose, Point, PointStamped, PoseArray
 from std_msgs.msg import Bool, String, Float32, Int32
-from visualization_msgs.msg import Marker
+from visualization_msgs.msg import Marker, MarkerArray
 from tf2_ros import Buffer, TransformListener, TransformException
 import tf2_geometry_msgs  # noqa: F401
 
@@ -329,6 +331,10 @@ class WBCCoordinatorNode(Node):
         # Exposure grid points (for body pose optimization)
         self._exposure_grid_points: list | None = None  # list of np.ndarray in world frame
 
+        # ── NMS detection state (from exposure_scanner) ───────────────
+        self._nms_detections = None          # parsed JSON from scanner
+        self._detections_received = False
+
         # ── Sub / Pub ─────────────────────────────────────────────────
         self.create_subscription(String,       '/human_pose/posture',        self._cb_posture,    10)
         self.create_subscription(Float32,      p('posture_confidence_topic'), self._cb_conf,       10)
@@ -367,6 +373,24 @@ class WBCCoordinatorNode(Node):
         self._pub_guidance = self.create_publisher(Bool, '/tracker_guidance_mode', 10)
         self._pub_handoff  = self.create_publisher(Bool, '/wbc/handoff_reached', 10)
         self._pub_manual_gate = self.create_publisher(Bool, '/wbc/manual_scan_gate', 10)
+
+        # ── GPU management ───────────────────────────────
+        self._pub_perception_enable = self.create_publisher(
+            Bool, '/wbc/perception_enable', 10)
+
+        # ── Injury detection → UI ────────────────────────
+        self._pub_injury_markers = self.create_publisher(
+            MarkerArray, '/exposure/detections', 10)
+        self._pub_injury_legend = self.create_publisher(
+            String, '/exposure/detection_legend', 10)
+        self._pub_exposure_report = self.create_publisher(
+            String, '/exposure/report', 10)
+        self._pub_exposure_ready = self.create_publisher(
+            Bool, '/exposure/ready', 10)
+
+        self._sub_detections_nms = self.create_subscription(
+            String, '/exposure/detections_nms', self._cb_detections_nms, 10)
+
         self.create_subscription(Bool, '/wbc/step_confirm', self._cb_step_confirm, 10)
         self.create_subscription(Bool, '/wbc/scan_done',    self._cb_scan_done,    10)
 
@@ -534,9 +558,10 @@ class WBCCoordinatorNode(Node):
         elif self._state == CoordState.EXPOSURE_SCANNING:
             self._tick_exposure()
         elif self._state in (CoordState.WAITING_EXPOSURE,
-                             CoordState.WAITING_FAST,
-                             CoordState.EXPOSURE_REVIEW):
+                             CoordState.WAITING_FAST):
             pass  # passive wait for step_confirm or click
+        elif self._state == CoordState.EXPOSURE_REVIEW:
+            self._tick_exposure_review()
 
         s = String(); s.data = self._state
         self._pub_state.publish(s)
@@ -1632,6 +1657,15 @@ class WBCCoordinatorNode(Node):
             self._pub_nlf_trigger.publish(Bool(data=False))  # stop NLF, no longer needed
             self._torso_detected_ticks = []
             self._pre_approach_fast_start = None
+
+        # ── GPU management for exposure ────────────────────
+        if new_state == CoordState.EXPOSURE_SCANNING:
+            self._pub_perception_enable.publish(Bool(data=False))
+            self.get_logger().info('Perception DISABLED (YOLO/NLF off for GDINO)')
+        elif new_state in (CoordState.SCANNING, CoordState.WAITING_FAST):
+            self._pub_perception_enable.publish(Bool(data=True))
+            self.get_logger().info('Perception ENABLED')
+
         self._state = new_state
 
     def _set_body_pose(self, height: float, pitch: float = 0.0, yaw: float | None = None, smooth: bool = True) -> None:
@@ -1704,6 +1738,83 @@ class WBCCoordinatorNode(Node):
         +10° and +5°: 7 arm poses each. 0°: no arm poses, straight to HOME + step 50cm."""
         pitch_angles = [math.radians(10.0), math.radians(5.0), 0.0]
         return [{'yaw': 0.0, 'pitch': p} for p in pitch_angles]
+
+    # ── NMS detection callbacks & publishing ─────────────────────────
+
+    def _cb_detections_nms(self, msg):
+        try:
+            data = json.loads(msg.data)
+            self._nms_detections = data.get('detections', [])
+            self._detections_received = True
+            self.get_logger().info(
+                f'Received {len(self._nms_detections)} NMS detections from scanner')
+        except Exception as e:
+            self.get_logger().error(f'Failed to parse NMS detections: {e}')
+
+    def _tick_exposure_review(self) -> None:
+        if self._detections_received and self._nms_detections is not None:
+            self._publish_detection_markers()
+            self._publish_detection_legend()
+            self._publish_exposure_report()
+            self._pub_exposure_ready.publish(Bool(data=True))
+            self._detections_received = False
+
+    def _publish_detection_markers(self):
+        ma = MarkerArray()
+        for det in self._nms_detections:
+            m = Marker()
+            m.header.frame_id = 'world'
+            m.header.stamp = self.get_clock().now().to_msg()
+            m.ns = 'injury'
+            m.id = det.get('id', 0)
+            m.type = Marker.TEXT_VIEW_FACING
+            m.action = Marker.ADD
+            m.pose.position.x = float(det['position_world'][0])
+            m.pose.position.y = float(det['position_world'][1])
+            m.pose.position.z = float(det['position_world'][2])
+            m.pose.orientation.w = 1.0
+            m.scale.z = 0.25
+            m.color.r = 1.0
+            m.color.g = 0.1
+            m.color.b = 0.1
+            m.color.a = 1.0
+            m.text = str(det.get('id', 0) + 1)
+            ma.markers.append(m)
+        self._pub_injury_markers.publish(ma)
+
+    def _publish_detection_legend(self):
+        legend = []
+        for det in self._nms_detections:
+            legend.append({
+                'id': det.get('id', 0),
+                'class': det.get('class', 'unknown'),
+                'confidence': round(det.get('confidence', 0.0), 2),
+            })
+        msg = String()
+        msg.data = json.dumps({'detections': legend})
+        self._pub_injury_legend.publish(msg)
+
+    def _publish_exposure_report(self):
+        now = datetime.now().isoformat()
+        classes = {}
+        for det in self._nms_detections:
+            cls = det.get('class', 'other')
+            classes[cls] = classes.get(cls, 0) + 1
+
+        report = {
+            'timestamp': now,
+            'patient_posture': getattr(self, '_posture', 'UNKNOWN'),
+            'detections': self._nms_detections,
+            'summary': {
+                'total_detections': len(self._nms_detections),
+                'by_class': classes,
+            },
+        }
+        msg = String()
+        msg.data = json.dumps(report)
+        self._pub_exposure_report.publish(msg)
+        self.get_logger().info(
+            f'Exposure report published: {len(self._nms_detections)} detections')
 
     def _set_wbc_enabled(self, enabled: bool) -> None:
         msg = Bool(); msg.data = enabled

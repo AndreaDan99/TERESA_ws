@@ -44,7 +44,10 @@ def generate_launch_description():
 
     # Config files
     nlf_params_file = PathJoinSubstitution([
-        FindPackageShare('spot_perception'), 'config', 'nlf_params.yaml']) 
+        FindPackageShare('spot_perception'), 'config', 'nlf_params.yaml'])
+
+    injury_detector_params_file = PathJoinSubstitution([
+        FindPackageShare('spot_perception'), 'config', 'injury_detector_params.yaml'])
 
     # ============================================================
     # 1) ORBBEC CAMERA (Femto Bolt)
@@ -142,6 +145,17 @@ def generate_launch_description():
     )
 
     # ============================================================
+    # 3c) INJURY DETECTOR (GroundingDINO — always launched, processes on request)
+    # ============================================================
+    injury_detector_node = Node(
+        package='spot_perception',
+        executable='injury_detector_gdino',
+        name='injury_detector',
+        output='screen',
+        parameters=[injury_detector_params_file],
+    )
+
+    # ============================================================
     # 4) HUMAN POSTURE ANALYZER
     # ============================================================
     posture_analyzer_node = Node(
@@ -234,6 +248,8 @@ def generate_launch_description():
             LogInfo(msg=['Perception backend: ', perception_backend]),
             # NLF backend (default)
             nlf_skeleton_node,
+            # Injury detector (GroundingDINO — always launched)
+            injury_detector_node,
             # YOLO backend (perception_backend:=yolo)
             yolo_skeleton_node,
             posture_analyzer_node,

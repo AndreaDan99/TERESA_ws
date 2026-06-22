@@ -29,6 +29,7 @@ setup(
             'human_bounding_box_visualizer = spot_perception.human_bounding_box_visualizer:main',
             'laying_human_detector = spot_perception.laying_human_detector:main',
             'nlf_skeleton = spot_perception.nlf_skeleton:main',
+            'injury_detector_gdino = spot_perception.injury_detector_gdino:main',
         ],
     },
 )

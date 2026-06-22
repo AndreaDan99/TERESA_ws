@@ -424,6 +424,7 @@ body{
         <span class="ov-label">Overlays:</span>
         <button id="bm-skel-btn" onclick="ctrl.toggleBodyMapSkel()" class="active">Skeleton</button>
         <button id="bm-grid-btn" onclick="ctrl.toggleBodyMapGrid()" class="active">Grid</button>
+        <button id="bm-injury-btn" onclick="ctrl.toggleBodyMapInjury()" class="active">Injury</button>
       </div>
     </div>
   </div>
@@ -494,6 +495,8 @@ class TeresaController{
     // body map state
     this.bodyMapOpen=false;
     this.bodyMapSkeleton=null;this.bodyMapSkelVisible=true;this.bodyMapGridVisible=true;
+    // injury detection state
+    this.injuryMarkers=[];this.injuryLegend=[];this.showInjuryOverlay=true;
     // fps
     this.orbbecFrames=0;this.rsFrames=0;this.orbbecFpsTs=0;this.rsFpsTs=0;
     // pings
@@ -823,6 +826,42 @@ class TeresaController{
         this.drawBodyMap();
       });
     }
+    if(!this._injurySub){
+      this._injurySub=new ROSLIB.Topic({ros:this.ros,name:'/exposure/detections',messageType:'visualization_msgs/MarkerArray'});
+      this._injurySub.subscribe(msg=>{
+        this.injuryMarkers=(msg.markers||[]).filter(m=>m.ns==='injury');
+        if(this.injuryMarkers.length>0){this.log('🩹 Injury markers: '+this.injuryMarkers.length,'info');}
+        this.drawBodyMap();
+      });
+    }
+    if(!this._injuryLegendSub){
+      this._injuryLegendSub=new ROSLIB.Topic({ros:this.ros,name:'/exposure/detection_legend',messageType:'std_msgs/String'});
+      this._injuryLegendSub.subscribe(msg=>{
+        try{const data=JSON.parse(msg.data);this.injuryLegend=data.detections||[];}catch(e){this.injuryLegend=[];}
+        this.drawBodyMap();
+      });
+    }
+    // Click handler for injury point revisit
+    if(!this._bmClickBound){
+      this._bmClickBound=e=>{
+        if(!this.showInjuryOverlay||!this.injuryMarkers.length)return;
+        const canvas=$('body-map-canvas');
+        const rect=canvas.getBoundingClientRect();
+        const cx=e.clientX-rect.left,cy=e.clientY-rect.top;
+        let bestId=-1,bestDist=15;
+        for(const m of this.injuryMarkers){
+          const p=this._bmProj(m.pose.position.x,m.pose.position.y);
+          if(!p)continue;
+          const d=Math.hypot(p.x-cx,p.y-cy);
+          if(d<bestDist){bestDist=d;bestId=m.id;}
+        }
+        if(bestId>=0&&this.gotoPointPub){
+          this.gotoPointPub.publish({data:bestId});
+          this.log('🩹 Goto injury point '+(bestId+1),'info');
+        }
+      };
+      $('body-map-canvas').addEventListener('click',this._bmClickBound);
+    }
     this._resizeBodyMap();
     window.addEventListener('resize',this._resizeBodyMap);
     this.log('Body Map opened','info');
@@ -830,9 +869,14 @@ class TeresaController{
 
   _closeBodyMap(){
     this.bodyMapSkelVisible=false;this.bodyMapGridVisible=false;
+    this.showInjuryOverlay=false;
     $('bm-placeholder').style.display='flex';
      $('bm-kp-count').textContent='0/24';
     const c=$('body-map-canvas');c.getContext('2d').clearRect(0,0,c.width,c.height);
+    if(this._injurySub){try{this._injurySub.unsubscribe()}catch(e){}this._injurySub=null;}
+    if(this._injuryLegendSub){try{this._injuryLegendSub.unsubscribe()}catch(e){}this._injuryLegendSub=null;}
+    if(this._bmClickBound){$('body-map-canvas').removeEventListener('click',this._bmClickBound);this._bmClickBound=null;}
+    this.injuryMarkers=[];this.injuryLegend=[];
     this.log('Body Map closed');
   }
 
@@ -853,6 +897,7 @@ class TeresaController{
     const allPts=[];
     if(skel){for(const p of skel){if(p.position&&!isNaN(p.position.x))allPts.push({x:p.position.x,y:p.position.y});}}
     if(grid){for(const m of grid){allPts.push({x:m.pose.position.x,y:m.pose.position.y});}}
+    if(this.injuryMarkers.length){for(const m of this.injuryMarkers){allPts.push({x:m.pose.position.x,y:m.pose.position.y});}}
     if(this.spotMapPose){
       const hw=0.4,hh=0.225,c=Math.cos(this.spotMapPose.yaw),s=Math.sin(this.spotMapPose.yaw)
       const cx=this.spotMapPose.x,cy=this.spotMapPose.y
@@ -866,6 +911,7 @@ class TeresaController{
     const scale=Math.min((W-2*margin)/dx,(H-2*margin)/dy);
     const ox=(W-dx*scale)/2,oy=(H-dy*scale)/2;
     const proj=(wx,wy)=>({x:ox+(wx-xMin)*scale,y:oy+(wy-yMin)*scale});
+    this._bmProj=proj;
 
       const BODY_REGIONS = {
   HEAD: {name:'HEAD', color:'#ff44cc', joints:[12,15]},
@@ -905,6 +951,22 @@ class TeresaController{
       }
     }
 
+    // ── Injury detection overlay ─────────────────────
+    if(this.showInjuryOverlay&&this.injuryMarkers.length){
+      for(const m of this.injuryMarkers){
+        const p=proj(m.pose.position.x,m.pose.position.y);
+        const r=10;
+        // Red circle with white border
+        ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);
+        ctx.fillStyle='rgba(255,30,30,0.85)';ctx.fill();
+        ctx.strokeStyle='#ffffff';ctx.lineWidth=2;ctx.stroke();
+        // White number (m.id is 0-based, show 1-based)
+        ctx.fillStyle='#ffffff';ctx.font='bold 11px monospace';
+        ctx.textAlign='center';ctx.textBaseline='middle';
+        ctx.fillText(m.id+1,p.x,p.y);
+      }
+    }
+
     // Spot start position
     if(this.spotMapPose){
       const sc=proj(this.spotMapPose.x,this.spotMapPose.y)
@@ -937,6 +999,30 @@ ctx.fillText('TERESA',0,0);ctx.textAlign='start';ctx.textBaseline='alphabetic'
       ctx.fillText(`Pitch:  ${pStr}`,ix,iy+66)
     }
 
+    // ── Injury legend (top-right) ────────────────────
+    if(this.showInjuryOverlay&&this.injuryLegend.length){
+      const lgX=W-170,lgY=20;
+      const boxH=30+this.injuryLegend.length*22;
+      // Background box
+      ctx.fillStyle='rgba(10,10,20,0.85)';ctx.strokeStyle='rgba(255,50,50,0.5)';ctx.lineWidth=1.5;
+      ctx.beginPath();ctx.roundRect(lgX,lgY,162,boxH,6);ctx.fill();ctx.stroke();
+      // Title
+      ctx.fillStyle='#ff4444';ctx.font='bold 11px monospace';ctx.textAlign='left';ctx.textBaseline='top';
+      ctx.fillText('🩹 INJURIES',lgX+8,lgY+8);
+      // Entries
+      ctx.font='10px monospace';
+      for(let i=0;i<this.injuryLegend.length;i++){
+        const y=lgY+28+i*22;
+        const det=this.injuryLegend[i];
+        const pct=Math.round((det.confidence||0)*100);
+        ctx.fillStyle='#ffffff';ctx.fillText('●',lgX+10,y);
+        ctx.fillStyle='#cccccc';ctx.fillText(
+          (det.id+1)+': '+(det['class']||'unknown')+' '+pct+'%',
+          lgX+24,y
+        );
+      }
+    }
+
     // legend — bottom-right
     const lgX=W-160,lgY=H-210;
     ctx.fillStyle='rgba(10,10,20,.8)';ctx.strokeStyle='rgba(100,100,140,.4)';ctx.lineWidth=1;
@@ -962,6 +1048,11 @@ ctx.fillText('TERESA',0,0);ctx.textAlign='start';ctx.textBaseline='alphabetic'
   toggleBodyMapGrid(){
     this.bodyMapGridVisible=!this.bodyMapGridVisible;
     $('bm-grid-btn').classList.toggle('active',this.bodyMapGridVisible);
+    this.drawBodyMap();
+  }
+  toggleBodyMapInjury(){
+    this.showInjuryOverlay=!this.showInjuryOverlay;
+    $('bm-injury-btn').classList.toggle('active',this.showInjuryOverlay);
     this.drawBodyMap();
   }
 

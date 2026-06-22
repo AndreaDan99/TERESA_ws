@@ -1,0 +1,46 @@
+# ── GroundingDINO zero-shot injury detector ─────────────────────────────
+injury_detector_gdino:
+  ros__parameters:
+
+    # ── Model ─────────────────────────────────────────────────────────
+    method: "gdino"                                    # gdino | owlv2
+    model_id: "IDEA-Research/grounding-dino-base"
+    box_threshold: 0.18
+    text_threshold: 0.12
+    device: "cuda"                                     # cuda | cpu
+
+    # ── Timing ────────────────────────────────────────────────────────
+    inference_timeout_s: 5.0
+    process_every_n_frames: 1                          # process every Nth frame (1 = every)
+
+    # ── Vocab — zero-shot text prompt ─────────────────────────────────
+    vocab: [
+      "open wound", "laceration", "cut", "bleeding wound",
+      "puncture wound", "abrasion", "avulsion",
+      "burn", "skin burn", "second degree burn", "third degree burn",
+      "blister", "charred skin",
+      "scar", "surgical scar", "keloid scar", "healed wound",
+      "bruise", "hematoma", "contusion", "ecchymosis",
+      "skin lesion", "rash", "ulcer", "pressure sore",
+      "bandage", "dressing", "medical tape", "gauze"
+    ]
+
+    # ── Filtering ─────────────────────────────────────────────────────
+    distance_filter_threshold_m: 0.15                  # max dist detection→SMPL joint (m)
+    body_bbox_margin_pct: 0.15                         # crop margin around body bbox
+    max_depth_m: 3.0                                   # max valid depth (m)
+    depth_patch_radius: 6                              # px radius for robust depth median
+
+    # ── Input topics (overridable) ────────────────────────────────────
+    color_topic: "/exposure/frame_to_process"
+    depth_topic: "/exposure/depth_frame"
+    info_topic: "/exposure/camera_info"
+    body_bbox_topic: "/exposure/body_bbox"
+    skeleton_topic: "/exposure/skeleton_3d"
+
+    # ── Output topic ──────────────────────────────────────────────────
+    detection_raw_topic: "/exposure/detection_raw"
+
+    # ── TF ────────────────────────────────────────────────────────────
+    camera_frame: "camera_color_optical_frame"
+    world_frame: "world"

@@ -36,9 +36,15 @@ from pathlib import Path
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Bool, String, Int32, Float32MultiArray
+from std_msgs.msg import Bool, String, Int32, Float32MultiArray, Int32MultiArray
 from geometry_msgs.msg import PoseStamped, PoseArray, Pose, PointStamped
 from visualization_msgs.msg import Marker, MarkerArray
+
+import threading
+import cv2
+from sensor_msgs.msg import Image as ImageMsg, CameraInfo
+from cv_bridge import CvBridge
+from PIL import Image as PILImage
 
 from tf2_ros import Buffer, TransformListener, TransformException
 from tf2_geometry_msgs import do_transform_point
@@ -177,6 +183,30 @@ class ExposureScanner(Node):
             PoseArray, '/exposure/body_keypoints', self._cb_body_keypoints, 10
         )
 
+        # ── Camera subscribers for GDINO ──────────────────────────
+        self._sub_rs_color = self.create_subscription(
+            ImageMsg, '/camera/camera/color/image_raw', self._cb_rs_color, 10)
+        self._sub_rs_depth = self.create_subscription(
+            ImageMsg, '/camera/camera/aligned_depth_to_color/image_raw', self._cb_rs_depth, 10)
+        self._sub_rs_info = self.create_subscription(
+            CameraInfo, '/camera/camera/color/camera_info', self._cb_rs_info, 10)
+        self._sub_ob_color = self.create_subscription(
+            ImageMsg, '/orbbec/color/image_raw', self._cb_ob_color, 10)
+        self._sub_ob_depth = self.create_subscription(
+            ImageMsg, '/orbbec/depth/image_raw', self._cb_ob_depth, 10)
+        self._sub_ob_info = self.create_subscription(
+            CameraInfo, '/orbbec/color/camera_info', self._cb_ob_info, 10)
+        # ── GDINO detection result subscriber ─────────────────────
+        self._sub_gdino = self.create_subscription(
+            String, '/exposure/detection_raw', self._cb_gdino_raw, 10)
+
+        # ── Camera state + bridge ─────────────────────────────────
+        self.bridge = CvBridge()
+        self._rs_frame = None; self._rs_depth = None; self._rs_info = None
+        self._ob_frame = None; self._ob_depth = None; self._ob_info = None
+        self._gdino_result = None
+        self._gdino_done = threading.Event()
+
         self._pub_goal = self.create_publisher(
             PoseStamped, '/z1/ik_goal_pose', 10
         )
@@ -195,9 +225,28 @@ class ExposureScanner(Node):
         self._pub_grid_points = self.create_publisher(
             PoseArray, '/exposure/grid_points', 10
         )
+        # ── GDINO frame publishers ────────────────────────────────
+        self._pub_gdino_frame = self.create_publisher(
+            ImageMsg, '/exposure/frame_to_process', 10)
+        self._pub_gdino_depth = self.create_publisher(
+            ImageMsg, '/exposure/depth_frame', 10)
+        self._pub_gdino_info = self.create_publisher(
+            CameraInfo, '/exposure/camera_info', 10)
+        self._pub_gdino_bbox = self.create_publisher(
+            Int32MultiArray, '/exposure/body_bbox', 10)
+        self._pub_gdino_skeleton = self.create_publisher(
+            PoseArray, '/exposure/skeleton_3d', 10)
+        # ── NMS publisher ─────────────────────────────────────────
+        self._pub_detections_nms = self.create_publisher(
+            String, '/exposure/detections_nms', 10)
 
         self._timer = self.create_timer(0.1, self._tick)
         self._grid_timer = self.create_timer(0.2, self._publish_grid_markers)
+
+        # ── Detection state ───────────────────────────────────────
+        self._detections = []  # list of dicts: {id, class, confidence, segment, position_world, confirmed_by, photo_paths}
+        self._body_bbox = None  # [x1, y1, x2, y2] for Orbbec crop
+        self._wide_candidates = []  # from wide shot
 
         self.get_logger().info('Exposure scanner ready')
 
@@ -304,6 +353,19 @@ class ExposureScanner(Node):
                 self._kp_buffer[i] = []
             self._kp_buffer[i].append(np.array([p.x, p.y, p.z]))
 
+    # ── camera callbacks ──────────────────────────────────────────
+
+    def _cb_rs_color(self, msg): self._rs_frame = msg
+    def _cb_rs_depth(self, msg): self._rs_depth = msg
+    def _cb_ob_color(self, msg): self._ob_frame = msg
+    def _cb_ob_depth(self, msg): self._ob_depth = msg
+    def _cb_rs_info(self, msg): self._rs_info = msg
+    def _cb_ob_info(self, msg): self._ob_info = msg
+
+    def _cb_gdino_raw(self, msg):
+        self._gdino_result = msg.data
+        self._gdino_done.set()
+
     # ── lifecycle ────────────────────────────────────────────────
 
     def _start(self):
@@ -329,6 +391,7 @@ class ExposureScanner(Node):
             f'{len(set(ep.region for ep in self._points))} regions'
         )
         self._publish_grid_points()
+        self._init_exposure()
         self._pub_next.publish(Int32(data=0))
 
     # ── grid generation ──────────────────────────────────────────
@@ -536,6 +599,7 @@ class ExposureScanner(Node):
                     self._scan_buffer = []
                 self._update_refined_kp()
                 self._publish_refined_skeleton()
+                self._process_point()
                 self._idx += 1
                 if self._idx >= len(self._points):
                     self._finish()
@@ -665,6 +729,7 @@ class ExposureScanner(Node):
 
     def _finish(self):
         self._active = False
+        self._publish_nms_results()
         self._pub_ready.publish(Bool(data=True))
         self._pub_next.publish(Int32(data=-1))
 
@@ -700,6 +765,190 @@ class ExposureScanner(Node):
             f'Exposure scan complete: {len(self._points)} points visited. '
             f'Data saved to {out_path}'
         )
+
+    # ── GDINO integration ─────────────────────────────────────────
+
+    def _init_exposure(self):
+        if self._body_bbox is not None:
+            return
+        kp = self._nlf_keypoints if self._nlf_keypoints else self._keypoints
+        if not kp:
+            self.get_logger().warn('No skeleton for body_bbox — skipping wide shot')
+            return
+        self._body_bbox = self._compute_body_bbox(kp, self._ob_info)
+        self.get_logger().info(f'Body bbox: {self._body_bbox}')
+        if self._ob_frame and self._ob_depth and self._ob_info:
+            self._run_gdino(self._ob_frame, self._ob_depth, self._ob_info,
+                            self._body_bbox, kp, is_wide=True)
+
+    def _process_point(self):
+        if not self._rs_frame or not self._rs_depth or not self._rs_info:
+            self.get_logger().warn('No RealSense frame for GDINO')
+            return False
+        kp = self._nlf_keypoints if self._nlf_keypoints else self._keypoints
+        if not kp:
+            return False
+        result = self._run_gdino(self._rs_frame, self._rs_depth, self._rs_info,
+                                 body_bbox=None, skeleton=kp, is_wide=False)
+        if result is None:
+            return False
+        dets = json.loads(result).get('detections', [])
+        point = self._points[self._idx]
+        for det in dets:
+            det['position_world'] = self._camera_to_world_numpy(
+                np.array(det['position_camera']),
+                self._rs_frame.header.stamp,
+                'camera_color_optical_frame')
+            if det['position_world'] is None:
+                continue
+            if self._distance_to_nearest_joint(det['position_world'], kp) > 0.15:
+                continue
+            self._nms_incremental(det, point)
+        return True
+
+    def _publish_nms_results(self):
+        msg = String()
+        msg.data = json.dumps({'detections': self._detections})
+        self._pub_detections_nms.publish(msg)
+        self.get_logger().info(
+            f'Published {len(self._detections)} NMS detections to /exposure/detections_nms')
+
+    # ── GDINO helpers ─────────────────────────────────────────────
+
+    def _compute_body_bbox(self, skeleton, cam_info):
+        if not cam_info:
+            return None
+        k = np.array(cam_info.k).reshape(3, 3)
+        fx, fy, cx, cy = k[0, 0], k[1, 1], k[0, 2], k[1, 2]
+        w, h = cam_info.width, cam_info.height
+        pts = []
+        for idx in range(NUM_JOINTS):
+            j = skeleton.get(idx)
+            if j is None or np.isnan(j[0]):
+                continue
+            pt_cam = self._world_to_camera_numpy(j)
+            if pt_cam is None or pt_cam[2] <= 0.01:
+                continue
+            u = fx * pt_cam[0] / pt_cam[2] + cx
+            v = fy * pt_cam[1] / pt_cam[2] + cy
+            pts.append((u, v))
+        if len(pts) < 3:
+            return None
+        x1 = min(p[0] for p in pts)
+        y1 = min(p[1] for p in pts)
+        x2 = max(p[0] for p in pts)
+        y2 = max(p[1] for p in pts)
+        bw, bh = x2 - x1, y2 - y1
+        margin = 0.15
+        x1 = max(0, int(x1 - bw * margin))
+        y1 = max(0, int(y1 - bh * margin))
+        x2 = min(w, int(x2 + bw * margin))
+        y2 = min(h, int(y2 + bh * margin))
+        return [x1, y1, x2, y2]
+
+    def _crop_image(self, image, bbox):
+        if bbox is None or len(bbox) != 4:
+            return image
+        x1, y1, x2, y2 = bbox
+        return image[y1:y2, x1:x2]
+
+    def _distance_to_nearest_joint(self, position_world, skeleton):
+        min_dist = float('inf')
+        for idx in range(NUM_JOINTS):
+            j = skeleton.get(idx)
+            if j is None or np.isnan(j[0]):
+                continue
+            d = np.linalg.norm(position_world - j)
+            if d < min_dist:
+                min_dist = d
+        return min_dist
+
+    def _run_gdino(self, frame_msg, depth_msg, info_msg, body_bbox, skeleton, is_wide):
+        self._pub_gdino_frame.publish(frame_msg)
+        self._pub_gdino_depth.publish(depth_msg)
+        self._pub_gdino_info.publish(info_msg)
+        if body_bbox:
+            bbox_msg = Int32MultiArray()
+            bbox_msg.data = [int(v) for v in body_bbox]
+            self._pub_gdino_bbox.publish(bbox_msg)
+        skel_msg = PoseArray()
+        skel_msg.header.stamp = self.get_clock().now().to_msg()
+        skel_msg.header.frame_id = 'world'
+        for idx in range(NUM_JOINTS):
+            pose = Pose()
+            j = skeleton.get(idx)
+            if j is not None and not np.isnan(j[0]):
+                pose.position.x = float(j[0])
+                pose.position.y = float(j[1])
+                pose.position.z = float(j[2])
+            else:
+                pose.position.x = pose.position.y = pose.position.z = float('nan')
+            pose.orientation.w = 1.0
+            skel_msg.poses.append(pose)
+        self._pub_gdino_skeleton.publish(skel_msg)
+        self._gdino_done.clear()
+        self._gdino_result = None
+        if self._gdino_done.wait(timeout=5.0):
+            return self._gdino_result
+        else:
+            self.get_logger().warn(
+                f'GDINO timeout (5s) {"wide" if is_wide else "close-up"}')
+            return None
+
+    def _nms_incremental(self, det, point):
+        pos_w = np.array(det['position_world'])
+        for existing in self._detections:
+            if existing.get('segment') != point.region.value:
+                continue
+            if np.linalg.norm(pos_w - np.array(existing['position_world'])) < 0.10:
+                if det['confidence'] > existing['confidence']:
+                    existing['confidence'] = det['confidence']
+                    existing['class'] = det['class']
+                existing['confirmed_by'].append(self._idx)
+                existing['photo_paths'].append(f'frame_{self._idx:03d}.jpg')
+                return
+        self._detections.append({
+            'id': len(self._detections),
+            'class': det.get('class', 'unknown'),
+            'confidence': det.get('confidence', 0.0),
+            'segment': point.region.value,
+            'ratio_u': getattr(point, 'u', 0.0),
+            'ratio_v': getattr(point, 'v', 0.0),
+            'position_world': pos_w.tolist(),
+            'confirmed_by': [self._idx],
+            'photo_paths': [f'frame_{self._idx:03d}.jpg'],
+        })
+
+    def _camera_to_world_numpy(self, pt_cam, stamp, cam_frame):
+        pt = PointStamped()
+        pt.header.frame_id = cam_frame
+        pt.header.stamp = stamp
+        pt.point.x = float(pt_cam[0])
+        pt.point.y = float(pt_cam[1])
+        pt.point.z = float(pt_cam[2])
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                'world', cam_frame, rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.5))
+            t = do_transform_point(pt, tf)
+            return np.array([t.point.x, t.point.y, t.point.z])
+        except TransformException:
+            return None
+
+    def _world_to_camera_numpy(self, pt_world):
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                'orbbec_color_optical_frame', 'world', rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.5))
+            pt = PointStamped()
+            pt.header.frame_id = 'world'
+            pt.point.x = float(pt_world[0])
+            pt.point.y = float(pt_world[1])
+            pt.point.z = float(pt_world[2])
+            t = do_transform_point(pt, tf)
+            return np.array([t.point.x, t.point.y, t.point.z])
+        except TransformException:
+            return None
 
 
 def main(args=None):
