@@ -5,6 +5,66 @@ Per la descrizione del sistema corrente vedi [`DESCRIPTION.md`](DESCRIPTION.md).
 
 ---
 
+## 22 June 2026 — GroundingDINO Exposure Injury Detection
+
+### New: `injury_detector_gdino.py` (497 lines)
+- ROS2 node wrapping GroundingDINO (`IDEA-Research/grounding-dino-base`) for zero-shot wound/scar/burn detection
+- Subscribes to `/exposure/frame_to_process`, `/exposure/camera_info`, `/exposure/depth_frame`, `/exposure/body_bbox`, `/exposure/skeleton_3d`
+- Publishes `/exposure/detection_raw` (JSON with class, confidence, bbox, 3D position)
+- Crop logic: body_bbox + 15% margin (eliminates floor/wall false positives in wide shot)
+- Distance filter: rejects detections >15cm from nearest SMPL joint in world frame
+- Back-projection: 2D bbox center → 3D via camera intrinsics + robust depth median → TF to world
+- Timeout 5s per inference (threading.Event)
+- 90% code reuse from `sensor_nodes/wound_depth_node.py`
+
+### New: `injury_detector_params.yaml` (47 lines)
+- EXPOSURE_VOCAB: 27 zero-shot classes (wound, burn, scar, bruise, bandage categories)
+- Thresholds: box=0.18, text=0.12 (proven on Jetson from wound_depth_node)
+- Distance filter threshold: 0.15m, body bbox margin: 15%
+- Model: `IDEA-Research/grounding-dino-base` from `/work/hf_cache`
+
+### Modified: `exposure_scanner.py` (+250 lines)
+- 6 new Image/CameraInfo subscribers: RealSense color+depth+info, Orbbec color+depth+info
+- `_init_exposure()`: wide shot via Orbbec, body_bbox from NLF prior, crop + GDINO
+- `_process_point()`: per-point close-up via RealSense, GDINO sync (5s timeout), distance filter, NMS incremental
+- `_nms_incremental()`: same segment + <10cm in world frame → keep highest confidence
+- Publisher: `/exposure/detections_nms` (JSON channel to coordinator)
+- 8 new helper methods, TF world↔camera transforms
+
+### Modified: `wbc_coordinator.py` (+111 lines)
+- **CREATED** publisher `/wbc/perception_enable` (Bool) — was previously only published by Web UI
+- GPU management: False on EXPOSURE_SCANNING (YOLO/NLF off), True on SCANNING/WAITING_FAST
+- Subscriber: `/exposure/detections_nms` (JSON from scanner)
+- `_tick_exposure_review()`: one-shot publish of markers, legend, report, ready
+- New publishers: `/exposure/detections` (MarkerArray), `/exposure/detection_legend` (JSON), `/exposure/report` (JSON), `/exposure/ready` (Bool)
+
+### Modified: `teresa_control.html` (+91 lines)
+- Body Map injury overlay: red circles (r=10px) with white ID numbers
+- Subscribers: `/exposure/detections` (MarkerArray), `/exposure/detection_legend` (JSON)
+- Legend box top-right with class list + confidence percentages
+- Toggle "Injury" button in Body Map overlay bar
+- Click on injury marker → `/exposure/goto_point(pointId)`
+- Reuses existing `proj()` coordinate system, `gotoPointPub`
+
+### Modified: `yolo_skeleton_spot.py` (+11 lines)
+- Subscriber to `/wbc/perception_enable` (Bool)
+- Early return in `cb_color()` when disabled → YOLO GPU freed for GDINO during EXPOSURE
+
+### Modified: `spot_perception.launch.py` (+17 lines)
+- Launches `injury_detector_gdino` node with `injury_detector_params.yaml`
+- Node always launched (lazy processing, like NLF)
+
+### Modified: `teresa_start.sh` (+1 line)
+- Mount `/ssd/andrea_deploy:/work` in teresa_gpu container → HF model cache accessible (1.8 GB)
+
+### Architecture decisions
+- **GDINO sync** (not async): NMS incremental, more controlled per-point
+- **GPU exclusive**: YOLO/NLF off during entire EXPOSURE phase
+- **LYING-only lock**: exposure scanning triggers only for LYING posture
+- **Flow**: APPROACHING → EXPOSURE_SCANNING (GDINO) → REVIEW → SCANNING (FAST)
+
+---
+
 ## 14 June 2026 — Pitch-Based Search + NLF Lazy-Load + Semi-Lock Robustness
 
 ### SEARCHING — Complete Redesign (Pitch-Based)

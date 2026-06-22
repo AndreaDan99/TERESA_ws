@@ -189,6 +189,24 @@ Il QP riceve il segnale di APPROACHING e passa in modalità PERCEPTUAL_SCAN:
 
 `WAITING_EXPOSURE → EXPOSURE_SCANNING` (conferma manuale o auto)
 
+### GroundingDINO Injury Detection (NEW — 22 June 2026)
+
+During exposure scanning, a dedicated GPU node (`injury_detector_gdino.py`) runs GroundingDINO zero-shot inference to detect wounds, scars, and burns on the patient's body. Pipeline per scan point:
+
+1. **Wide shot** (once at start): Orbbec full-body photo → crop to body bbox from NLF prior → GDINO → tentative candidates
+2. **Per-point close-up**: RealSense frame → GDINO sync (5s timeout) → 2D bbox → back-project to 3D via depth → TF to world
+3. **Distance filter**: rejection if detection >15cm from nearest SMPL joint
+4. **NMS incremental**: same injury from multiple angles → keep highest confidence
+
+**GPU management**: YOLO and NLF shut down during entire EXPOSURE phase via `/wbc/perception_enable`=False → 100% GPU available for GDINO.
+
+**New topics**:
+- `/exposure/detections` (MarkerArray) → red injury markers for Body Map UI
+- `/exposure/detection_legend` (String JSON) → class labels with confidence
+- `/exposure/report` (String JSON) → full detection report
+- `/exposure/ready` (Bool) → gate for REVIEW phase
+- `/wbc/perception_enable` (Bool) → GPU management (now published by coordinator)
+
 ### exposure_scanner node
 - Nodo dedicato (`exposure_scanner.py`, 650 righe), stesso pattern per-punto del FAST
 - **Full-body grid**: 14 punti su 7 regioni (HEAD=2, TORSO=4, ARM×2=2+2, LEG×2=2+2, FEET=2) generate dai 17 keypoint COCO Orbbec trasformati in world frame via TF
@@ -628,3 +646,17 @@ When `dry_run:=true` on WBC launch, all outputs go to debug topics:
 | `/ik_goal_pose` → `z1_ik_to_jtc` | `/wbc/ik_goal_pose_debug` |
 | `/ik_enable` → `z1_ik_to_jtc` | `/wbc/ik_enable_debug` |
 | `/my_spot/cmd_vel` → Spot | `/wbc/cmd_vel_debug` |
+
+---
+
+## Nodo: `injury_detector_gdino`
+
+- **Ruolo**: Zero-shot wound/scar/burn detection via GroundingDINO durante la fase EXPOSURE
+- **Modello**: `IDEA-Research/grounding-dino-base` da HuggingFace (1.8 GB cached in `/ssd/andrea_deploy/hf_cache`)
+- **Input**: frame RGB + depth + camera_info + body_bbox (opzionale, per crop) + skeleton SMPL 3D (per distance filter)
+- **Output**: `/exposure/detection_raw` (JSON con detections: class, confidence, bbox, position 3D camera + world)
+- **Timeout**: 5s per inferenza. Se timeout, log warning e scan continua
+- **Crop**: body_bbox + 15% margin per wide shot (Orbbec), no crop per close-up (RealSense)
+- **Distance filter**: detection 3D scartata se >15cm dal joint SMPL più vicino (world frame)
+- **Back-projection**: centro bbox → depth mediana 6px patch → camera intrinsics → 3D camera → TF → world
+- **Vocabolario**: 27 classi zero-shot (wound, burn, scar, bruise, bandage categories)

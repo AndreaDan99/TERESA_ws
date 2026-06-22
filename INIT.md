@@ -22,6 +22,7 @@ git status --short
 | [`docs/DESCRIPTION.md`](docs/DESCRIPTION.md) | Architettura sistema, frame tree, FSM, build/run |
 | [`docs/PLAN.md`](docs/PLAN.md) | Piano futuro (exposure, injury detection, refactoring) |
 | [`web/README.md`](web/README.md) | Web control panel + camera view con YOLO overlay |
+| `injury_detector_gdino.py` | GroundingDINO ROS2 node: zero-shot wound/scar/burn detection |
 
 ---
 
@@ -71,6 +72,39 @@ git status --short
 | `spot_perception.launch.py` | ~+2/−1 | NLF always launched (no condition) |
 | `wbc_approach_scanner.py` | −40 | Removed (deprecated) |
 | `test_legacy/` | −all | Removed |
+
+---
+
+## Current State (22 June 2026)
+
+### EXPOSURE — GroundingDINO Injury Detection (NEW)
+- **GroundingDINO integrated**: zero-shot wound/scar/burn detection during Exposure Body Scanning
+- **Wide shot**: Orbbec full-body photo cropped to body bounding box (eliminates floor/wall false positives)
+- **Per-point close-up**: RealSense frames processed by GDINO sync (5s timeout), distance filter (15cm from SMPL joints)
+- **NMS incremental confidence-aware**: same injury from multiple angles → keep highest confidence
+- **YOLO/NLF off during EXPOSURE**: GPU 100% dedicated to GDINO via `/wbc/perception_enable`
+- **Web UI overlay**: Body Map shows red numbered injury markers with legend, clickable to revisit
+- **Report**: `/exposure/report` JSON with detections, `/exposure/ready` gate for REVIEW phase
+- Flow: LOCKING (LYING only) → PRE_APPROACH → APPROACHING → EXPOSURE_SCANNING (GDINO) → REVIEW → SCANNING (FAST)
+
+### New node
+- `injury_detector_gdino.py` (497 lines): ROS2 node, HuggingFace GroundingDINO, crop + distance filter + back-projection
+
+### Docker fix
+- `teresa_start.sh`: added `/ssd/andrea_deploy:/work` mount to teresa_gpu container for HF model cache (1.8 GB)
+
+### Modified files
+| File | +/- | Changes |
+|------|-----|---------|
+| `injury_detector_gdino.py` | +497 | New: GroundingDINO ROS2 node |
+| `injury_detector_params.yaml` | +47 | New: config + EXPOSURE_VOCAB (27 classes) |
+| `exposure_scanner.py` | +250 | GDINO sync per-point, wide shot, crop, NMS, distance filter |
+| `wbc_coordinator.py` | +111 | GPU management (/wbc/perception_enable), detection markers/legend/report publishers |
+| `teresa_control.html` | +91 | Body Map: injury overlay (red circles + legend + click-to-revisit) |
+| `yolo_skeleton_spot.py` | +11 | Subscriber to /wbc/perception_enable (GPU off during EXPOSURE) |
+| `spot_perception.launch.py` | +17 | Launch injury_detector_gdino node |
+| `setup.py` | +1 | Entry point injury_detector_gdino |
+| `teresa_start.sh` | +1 | Mount /ssd/andrea_deploy for HF model cache |
 
 ---
 

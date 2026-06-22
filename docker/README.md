@@ -261,7 +261,8 @@ ros2 launch spot_control teresa_core.launch.py
 │                                                                   │
 │  + Models:                                                       │
 │  ├── yolo11n-pose.pt              (~5 MB, auto-download)        │
-│  └── nlf_s_multi.torchscript      (~240 MB, wget from GitHub)   │
+│  ├── nlf_s_multi.torchscript      (~240 MB, wget from GitHub)   │
+│  └── GroundingDINO                (~1.8 GB, HF cache at /work/hf_cache) │
 │                                                                   │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -321,6 +322,42 @@ The repo defaults to CPU inference. For Jetson, change to CUDA:
 | `src/z1_vision/config/z1_yolo_torso_params.yaml` | `device` | `cpu` | **`cuda`** |
 | `src/spot_perception/config/nlf_params.yaml` | `device` | `cpu` | **`cuda`** |
 | `src/z1_vision/config/nlf_torso_params.yaml` | `device` | `cpu` | **`cuda`** |
+
+---
+
+## 9. HuggingFace Model Cache (GroundingDINO)
+
+GroundingDINO (`IDEA-Research/grounding-dino-base`) is a 1.8 GB transformer model used for
+zero-shot wound/scar/burn detection during the Exposure Body Scanning phase.
+
+The model files are stored at `/ssd/andrea_deploy/hf_cache/` on the Jetson host.
+Inside the teresa_gpu container, this is mounted at `/work/hf_cache/` via:
+
+```bash
+-v /ssd/andrea_deploy:/work
+```
+
+The container environment variable `HF_HOME=/work/hf_cache` (set in Dockerfile) tells
+HuggingFace transformers to load from this directory. The YAML parameter `cache_dir`
+in `injury_detector_params.yaml` explicitly points to the same path.
+
+**Model files** (in `/ssd/andrea_deploy/hf_cache/hub/models--IDEA-Research--grounding-dino-base/`):
+- `blobs/` — 10 content-addressed files (2× ~890MB weight files + config + tokenizer + processor)
+- `snapshots/` — versioned symlinks to current model revision
+- `refs/main` — points to current version
+
+**To verify the model is accessible**:
+```bash
+docker exec teresa_gpu ls /work/hf_cache/hub/models--IDEA-Research--grounding-dino-base/blobs/
+```
+
+**To re-download if missing** (requires internet):
+```bash
+docker exec teresa_gpu python3 -c "
+from transformers import AutoModelForZeroShotObjectDetection
+AutoModelForZeroShotObjectDetection.from_pretrained('IDEA-Research/grounding-dino-base')
+"
+```
 
 ---
 
