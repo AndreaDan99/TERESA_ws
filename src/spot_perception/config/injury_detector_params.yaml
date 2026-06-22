@@ -8,6 +8,7 @@ injury_detector_gdino:
     box_threshold: 0.18
     text_threshold: 0.12
     device: "cuda"                                     # cuda | cpu
+    cache_dir: "/work/hf_cache"                          # HuggingFace model cache (mounted from /ssd/andrea_deploy)
 
     # ── Timing ────────────────────────────────────────────────────────
     inference_timeout_s: 5.0
