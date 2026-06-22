@@ -33,7 +33,7 @@ case "${1:-start}" in
 
     # T2 — GPU perception container
     echo "[TERESA] teresa_gpu (percezione)..."
-    docker run -d --name teresa_gpu --rm --runtime=nvidia --net=host       -e ROS_DOMAIN_ID=$DOMAIN       -v $WS_MOUNT       teresa_gpu:latest sleep infinity
+    docker run -d --name teresa_gpu --rm --runtime=nvidia --net=host       -e ROS_DOMAIN_ID=$DOMAIN       -v $WS_MOUNT       -v /ssd/andrea_deploy:/work       teresa_gpu:latest sleep infinity
 
     echo "[TERESA] Pronto!"
     echo ""
