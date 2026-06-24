@@ -293,6 +293,12 @@ sudo docker run -it --rm \
     teresa_jetson:l4t-r35.4.1
 ```
 
+**Additional mount for GroundingDINO** (exposure scanning):
+```bash
+-v /ssd/andrea_deploy:/work     # HF model cache for GroundingDINO
+```
+This is already included in `teresa_start.sh`.
+
 Inside the container, the TERESA startup sequence:
 ```bash
 # T1: Core hardware + TF
@@ -361,7 +367,7 @@ AutoModelForZeroShotObjectDetection.from_pretrained('IDEA-Research/grounding-din
 
 ---
 
-## 8. Troubleshooting
+## 10. Troubleshooting
 
 | Problem | Likely Cause | Fix |
 |---------|-------------|-----|

@@ -19,18 +19,13 @@ perceptual quality has no closed-form model, and in emergency scenarios the
 robot operates with only onboard sensing.
 
 Robot-assisted ultrasound has advanced over two decades on fixed-base
-platforms. Comprehensive surveys~\cite{vonhaxthausen2021,li2021overview,
-munir2025,du2024review} document the evolution from teleoperated systems to
-contemporary autonomous scanning, and Hidalgo et al.~\cite{hidalgo2023} review
-current clinical applications. Key technical advances include force/position
-decoupling~\cite{gilbertson2015}, impedance control on curved
-surfaces~\cite{dyck2022}, force-guided scanning for soft
-tissue~\cite{ning2021}, active-sensing end-effectors~\cite{ma2022}, and
-autonomous protocol execution~\cite{suligoj2021,duan2022,farsoni2025autonomous}.
-Building on assistive robotics, Gu and Demiris~\cite{gu2024vttb} proposed
-visuo-tactile learning for robot-assisted bed bathing, and Sayols et al.~\cite{sayols2024dynamic} developed a multi-layer motion planner for
-autonomous surgical robots. Despite this progress, all deployed systems share a fundamental limitation: the
-patient must be pre-positioned within the arm's reachable workspace, confining
+platforms. Comprehensive surveys~\cite{vonhaxthausen2021,li2021overview}
+document the evolution from teleoperated systems to autonomous scanning, and
+Hidalgo et al.~\cite{hidalgo2023} review current clinical applications. Key
+technical advances include active-sensing end-effectors~\cite{ma2022} and
+autonomous protocol execution~\cite{suligoj2021,farsoni2025autonomous}. Despite
+this progress, all deployed systems share a fundamental limitation: the patient
+must be pre-positioned within the arm's reachable workspace, confining
 autonomous ultrasound to controlled clinical settings.
 
 For the Exposure component of \ac{ABCDE}---the systematic visual inspection of
@@ -40,38 +35,43 @@ zero-shot detection without task-specific training data. Combined with depth
 back-projection, these models localise injuries in 3D world coordinates,
 providing the anatomical reference needed for operator review. These models
 have been deployed and benchmarked on the Jetson Orin GPU as part of
-\ac{TERESA}'s onboard perception pipeline. For 3D body pose estimation, Neural Localizer Fields (NLF)~\cite{isarandi2024nlf} regress 24-joint SMPL skeletons directly from monocular RGB, providing full anatomical coverage including spine, hands, and feet absent from the 17-keypoint COCO format. Addressing uncertainty in human-centered robotics, Casado et al.~\cite{casado2025navigating} proposed diffusion-based intention estimation for shared wheelchair control---a theme that similarly motivates \ac{TERESA}'s quality-driven perception loop.
+\ac{TERESA}'s onboard perception pipeline. For 3D body pose estimation, Neural Localizer Fields (NLF)~\cite{isarandi2024nlf} regress 24-joint \ac{SMPL} skeletons directly from monocular RGB, providing full anatomical coverage including spine, hands, and feet absent from the 17-keypoint \ac{COCO} format. Addressing uncertainty in human-centered robotics, Casado et al.~\cite{casado2025navigating} proposed diffusion-based intention estimation for shared wheelchair control---a theme that similarly motivates \ac{TERESA}'s quality-driven perception loop.
 
 Legged platforms such as the Boston Dynamics Spot remove the workspace
 constraint---they can traverse stairs, rubble, and confined spaces inaccessible
 to wheeled robots, and can therefore reach patients wherever they lie. Mounting
-a manipulator on a legged base introduces, however, a deeper challenge.
-Operational space formulation~\cite{khatib1987}, manipulability
-analysis~\cite{yoshikawa1985,bayle2003}, and optimisation-based
-control~\cite{wensing2023} underpin modern \ac{WBC}. For legged manipulators,
-hierarchical \ac{MPC}~\cite{minniti2019,sleiman2021}, holistic~\cite{haviland2022}
-and \ac{QP}-based~\cite{li2022wbc} \ac{WBC}, visual feedback
-integration~\cite{liu2024visual}, and Spot-specific grasping~\cite{zimmermann2021}
-and manipulability enhancement~\cite{xie2024manip} have been demonstrated. All
-existing legged \ac{WBC} formulations, however, assume known or static
-manipulation targets and do not account for the coupling between body posture
-and perceptual quality.
+a manipulator on a legged base introduces, however, a deeper challenge: the
+robot's body posture directly shapes perceptual quality, yet no closed-form
+model links posture to sensing accuracy, and in emergency settings the robot
+must reason about this coupling with only onboard sensing.
 
-Active perception surveys~\cite{zeng2020,bai2021} establish that moving to
-improve sensing outperforms passive observation~\cite{zaky2020}.
-Perception-aware planning~\cite{zhang2020fisher,tordesillas2022}, next-best-view
-grasping~\cite{breyer2022}, view planning for pose estimation~\cite{hu2022}, and
-active neural sensing~\cite{ren2023} couple motion with perception quality. For
-mobile manipulation, whole-body interaction~\cite{mittal2022},
-active-perceptive motion~\cite{jauhri2024}, coupled
-perception-manipulation~\cite{xie2024capm}, and one-shot multimodal
-frameworks~\cite{qin2026} optimise trajectories for information gain, yet
-operate on wheeled bases whose body posture is fixed. Posture optimisation via
-reachability~\cite{makhal2018,zhao2025}, base placement~\cite{fan2021},
-body-ground contact~\cite{wolfslag2020}, and legged manipulation
-surveys~\cite{gong2023} treat perception as input rather than an optimisation
-objective. No existing system closes the loop between
-body posture and perceptual quality on a legged platform for medical tasks.
+Modern \ac{WBC} builds on operational space formulation~\cite{khatib1987},
+manipulability analysis~\cite{yoshikawa1985}, and optimisation-based
+control~\cite{wensing2023}. These principles have been extended to legged
+manipulators through hierarchical \ac{MPC}~\cite{sleiman2021},
+\ac{QP}-based formulations~\cite{li2022wbc}, holistic~\cite{haviland2022} and Spot-specific grasping and
+manipulability enhancement~\cite{zimmermann2021,xie2024manip}. Across this body
+of work, however, the manipulation target is assumed known or static; no
+formulation accounts for the coupling between body posture and the quality of
+perceptual data used to localise that target in the first place.
+
+Active perception research has established that deliberate sensor motion
+systematically outperforms passive observation~\cite{zeng2020,bai2021,zaky2020}.
+This insight has been operationalised through perception-aware
+planning~\cite{zhang2020fisher,tordesillas2022}, next-best-view grasping~\cite{breyer2022},
+and view planning for pose estimation~\cite{hu2022}, and active neural
+sensing~\cite{ren2023}. When applied to mobile
+manipulation, whole-body interaction~\cite{mittal2022}, coupled perception-manipulation~\cite{xie2024capm} and one-shot
+multimodal frameworks~\cite{qin2026} have demonstrated trajectory optimisation
+for information gain. Critically, all of these systems operate on wheeled bases
+whose body posture is fixed: the base provides mobility but does not participate
+in shaping the perceptual field. Conversely, work on posture optimisation for
+legged systems---through reachability analysis~\cite{makhal2018,zhao2025}, base
+placement~\cite{fan2021}, body-ground contact~\cite{wolfslag2020}, and the
+broader legged manipulation literature~\cite{gong2023}---treats perception as a
+static input to the motion planner rather than as a quantity to be optimised.
+No existing system closes the perception-action loop at the whole-body level on
+a legged platform for medical tasks.
 
 We advocate a paradigm in which body posture on a legged platform is treated as
 a first-class perceptual resource: the robot actively adapts its height, pitch,
@@ -86,9 +86,9 @@ approaches, and (iii) how can body posture be pre-planned to maximise arm
 manipulability across multiple scanning targets without requiring real-time
 whole-body optimisation?
 
-This paper presents \acf{TERESA}, an integrated system for autonomous emergency
-assessment on a Boston Dynamics Spot legged robot equipped with a Unitree Z1
-manipulator arm. Building on the fixed-base ultrasound scanning competence
+This paper presents \acf{TERESA} (Fig.~\ref{fig:system_overview}), an integrated
+system for autonomous emergency assessment on a Boston Dynamics Spot legged
+robot equipped with a Unitree Z1 manipulator arm. Building on the fixed-base ultrasound scanning competence
 established in~\cite{farsoni2025autonomous}, \ac{TERESA} extends autonomous
 assessment to a fully mobile platform through a whole-body active perception
 framework. The system integrates the pre-trained wound and burn detection
@@ -103,20 +103,20 @@ The key contributions of this paper are as follows.
         posture---height, pitch, and yaw---is optimised to improve perceptual
         quality rather than solely to minimise kinematic error
         (Section~\ref{sec:active_perception}).
-  \item \textbf{Hybrid confidence-gated search strategy} that combines coarse
-        body rotation with targeted pitch refinement and dual-sensor locking,
-        ensuring robust patient localisation before the robot commits to
-        navigation.
+  \item \textbf{Hybrid confidence-gated search strategy} that combines forward
+        base search with body pitch sweep and dual-sensor locking, ensuring
+        robust patient localisation before the robot commits to navigation.
   \item \textbf{Exposure body scanning pipeline} that acquires multi-view
         anatomical data through an adaptive skeleton-keypoint grid, integrating
         zero-shot Grounding DINO wound detection with an
         interactive web-based review interface
         (Sections~\ref{sec:active_perception}
         and~\ref{sec:system_architecture}).
-  \item \textbf{Pre-planned body reconfiguration method} that optimises the
-        legged base posture for each anatomical scanning target through offline
-        grid search, maximising arm manipulability without real-time whole-body
-        optimisation.
+  \item \textbf{Pre-planned body reconfiguration method} that searches over
+        body height, pitch, and longitudinal base displacement to place each
+        anatomical target within the arm's preferred manipulation region,
+        maximising reachability without real-time whole-body optimisation
+        (Section~\ref{sec:body_reconf}).
   \item \textbf{Experimental validation} on a physical Spot+Z1 platform
         demonstrating fully autonomous emergency assessment with reduced idle
         time compared to a sequential stop-and-manipulate baseline

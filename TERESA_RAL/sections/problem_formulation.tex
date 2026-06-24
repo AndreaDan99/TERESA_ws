@@ -4,8 +4,6 @@
 \section{Problem Statement}
 \label{sec:problem_formulation}
 
-\subsection{System Model}
-
 The \ac{TERESA} platform consists of a Boston Dynamics Spot quadruped and a
 Unitree Z1 six-\ac{DOF} arm rigidly mounted on the robot's back. Four frames
 are defined: the world frame $\mathcal{F}_W$ (coincident with Spot odometry),
@@ -23,39 +21,45 @@ $\omega_z$:
 \label{eq:nonholonomic}
 \end{equation}
 
-The body posture is parametrised by height $h$ and pitch $\varphi$, commanded
-through the native posture control interface, with bounds
-$h \in [h_{\min},\, h_{\max}]$, $\varphi \in [0,\, \varphi_{\max}]$. The Z1 arm
-has $n = 6$ revolute joints $\mathbf{q} \in \mathbb{R}^6$ with geometric
-Jacobian $\mathbf{J}_{\mathrm{arm}}(\mathbf{q}) \in \mathbb{R}^{6 \times 6}$.
-The combined control input during the approach phase is
-$\mathbf{u} = [\dot{\mathbf{q}},\, v_x,\, \omega_z]^\top \in \mathbb{R}^8$.
+The body posture is parametrised by height $h \in [h_{\min},\, h_{\max}]$ and
+pitch $\varphi \in [0,\, \varphi_{\max}]$, commanded through the native posture
+control interface. The Z1 arm has $n = 6$ revolute joints
+$\mathbf{q} \in \mathbb{R}^6$ with geometric Jacobian
+$\mathbf{J}_{\mathrm{arm}}(\mathbf{q}) \in \mathbb{R}^{6 \times 6}$. The full
+control vector is
+$\mathbf{u} = [\dot{\mathbf{q}}^\top,\, v_x,\, \omega_z,\, h,\,
+\varphi]^\top \in \mathbb{R}^{10}$, where $\dot{\mathbf{q}}$ are the arm joint
+velocities, $v_x$ the forward velocity, $\omega_z$ the yaw rate, $h$ the body
+height, and $\varphi$ the body pitch.
 
-\subsection{Task Definition}
-
-An autonomous emergency assessment mission requires the \ac{EE} to reach a
-sequence of $N$ anatomical target poses
-$\mathcal{T} = \{\mathbf{T}_i^* \in SE(3)\}_{i=1}^{N}$ (e.g., \ac{FAST}
-quadrants). The targets are not known a priori---they are estimated during the
-mission from the onboard \ac{RGBD} cameras, which are the only source of
-perception.
-
-\subsection{Problem}
-
-Given the system model and the unknown patient position, find control inputs
-$\mathbf{u}(t)$ and body posture commands $(h(t), \varphi(t))$ that enable the
-robot to: (i)~discover a posture from which detection confidence exceeds a
-threshold, ensuring robust patient localisation before committing to the
-approach; (ii)~navigate to a configuration from which all targets in
-$\mathcal{T}$ are reachable; (iii)~reconfigure its body to maximise arm
-manipulability for each scanning target; and (iv)~bring the \ac{EE} to each
-target pose with bounded error $\|\mathbf{p}_{EE} - \mathbf{p}_i^*\| \leq
-\varepsilon_p$.
-
-\subsection{Assumptions}
-
-The following assumptions are adopted: the patient remains stationary during
-scanning (A1); Spot operates on flat terrain (A2); the rigid transform between
-$\mathcal{F}_B$ and $\mathcal{F}_0$ is known and constant (A3); a single
-patient is present (A4); and no external perception infrastructure is available
-(A5).
+The mission consists of four sequential phases, each defining a specific control
+subproblem.
+\begin{itemize}
+  \item \textbf{Searching (A).} The robot must locate a stationary patient whose
+        position is unknown a priori, using only onboard \ac{RGBD} cameras, by
+        walking forward while adjusting body pitch, until a vision-based
+        patient detector yields confidence above a threshold $\tau$. The
+        associated control problem is: find $(v_x, h, \varphi)$ such that
+        detection confidence exceeds $\tau$, ensuring robust localisation before
+        committing to navigation.
+  \item \textbf{Approaching (B).} Once the patient is localised, the robot
+        navigates to a pre-scanning base configuration from which all subsequent
+        anatomical targets are kinematically reachable. The control problem is:
+        given the estimated patient position, find $(v_x, \omega_z)$ to reach a
+        configuration from which every target $\mathbf{T}_i^* \in \mathcal{T}$
+        is reachable.
+  \item \textbf{Exposure (C).} The robot performs a systematic visual inspection
+        of the body surface, acquiring multi-view \ac{RGBD} data over an
+        adaptive grid of anatomical keypoints to detect wounds, burns, and
+        haemorrhages via open-vocabulary object detection. The control problem
+        is: given the patient body model and the keypoint grid, find
+        $(h, \varphi, \dot{\mathbf{q}})$ to scan all keypoints with sufficient
+        viewpoint coverage and to run injury detection at each grid point.
+  \item \textbf{\ac{FAST} (D).} The robot acquires ultrasound images at $N$
+        predefined anatomical target poses
+        $\mathcal{T} = \{\mathbf{T}_i^* \in SE(3)\}_{i=1}^{N}$. The control
+        problem is: given $\mathcal{T}$, find $(h, \varphi, \dot{\mathbf{q}})$
+        to bring the \ac{EE} to each $\mathbf{T}_i^*$ with bounded error
+        $\|\mathbf{p}_{EE} - \mathbf{p}_i^*\| \leq \varepsilon_p$, while
+        maintaining adequate body posture for arm manipulability.
+\end{itemize}

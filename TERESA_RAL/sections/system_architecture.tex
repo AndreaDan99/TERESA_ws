@@ -6,39 +6,21 @@
 
 The \ac{TERESA} system is organised into four layers---hardware, perception,
 mission management, and control---communicating over \ac{ROS}~2 with
-\ac{DDS}. Computation is distributed across two units: the Spot onboard
-computer SpotCore (base control and odometry), and an NVIDIA Jetson Orin AGX
-mounted on the platform, which runs perception, arm control, mission
-coordination, and \ac{WBC}. GPU-accelerated inference is performed via Docker
-containers with CUDA 11.4.
+\ac{DDS}.
 
 \subsection{Hardware Platform}
 
-\begin{figure}[t]
-  \centering
-  \includegraphics[scale=0.60]{figures/system_overview_annotated}
-  \caption{The \ac{TERESA} system during the exposure scanning phase. The Spot
-           quadruped base (left) carries the Z1 manipulator with a wrist-mounted
-           Intel RealSense D415 for close-range torso tracking and a body-mounted
-            Orbbec Femto Bolt for wide-field patient detection. The web-based
-           Body Map interface (background) renders the real-time skeleton, body
-           region boundaries, and exposure scan grid. The dashed orange arrow
-           marks the exposure path from the RealSense to a burn scar on the
-           patient's torso.}
-  \label{fig:system_overview}
-\end{figure}
-
-The Boston Dynamics Spot quadruped is commanded via its onboard \ac{ROS}~2
-driver through velocity commands $[v_x,\, \omega_z]$ and body posture commands.
-The Unitree Z1 is a six-\ac{DOF} manipulator mounted on Spot's back, controlled
-at the torque level through a \ac{JTC} interface. Two \ac{RGBD} cameras provide
-complementary coverage. An Orbbec Femto Bolt is mounted on Spot's body for
-wide-field patient detection at distances up to \SI{3}{\metre}. An Intel
-RealSense D435 is mounted at the Z1 \ac{EE}; the arm's \ac{WBC} look-at
-controller positions it as an active pan-tilt unit for close-range torso
-tracking and surface estimation. Spot's five built-in stereo cameras are
-positioned low on the body for ground-plane obstacle avoidance and are not
-suitable for YOLO skeleton detection.
+The hardware platform, shown in Fig.~\ref{fig:system_overview}, carries two
+\ac{RGBD} cameras with complementary roles. An Orbbec Femto Bolt is body-mounted
+for wide-field patient detection at distances up to \SI{3}{\metre}. An Intel
+RealSense D435 is mounted at the Z1 \ac{EE} and positioned by the arm's look-at
+controller as an active pan-tilt unit for close-range torso tracking and surface
+estimation. Spot's five built-in stereo cameras are positioned low on the body
+for ground-plane obstacle avoidance and are not suitable for skeleton detection.
+Computation is distributed across two units: Spot's onboard computer SpotCore
+handles base control and odometry, while an NVIDIA Jetson Orin AGX runs
+perception, arm control, mission coordination, and \ac{WBC} via Docker
+containers with CUDA 11.4.
 
 %\subsection{Frame Tree}
 %
@@ -66,59 +48,77 @@ suitable for YOLO skeleton detection.
 \subsection{Mission Management and System Integration}
 
 The mission is orchestrated by a 13-state \ac{FSM}
-(Fig.~\ref{fig:fsm}). The robot first waits for \ac{TF} readiness, then
-searches for the patient through body rotation and dual-sensor confirmation.
-Once localised, it collects approach points, straightens its posture, and
-drives toward the target while the anticipatory scanner runs concurrently.
-After approach, it executes a posture-adaptive exposure body scan with
-integrated wound and burn detection, followed by an interactive review phase
-where the operator can click any grid point for re-inspection. The mission
-concludes with \ac{FAST} ultrasound scanning under pre-planned body
-reconfiguration. Transitions are triggered by perception confidence (dashed)
-or geometric conditions (solid).
+(Fig.~\ref{fig:fsm}), organised into the four phases of
+Section~\ref{sec:problem_formulation}. After Waiting TF and Idle ensure system
+readiness, the \ac{FSM} enters Phase~A (Searching). The robot first walks the base
+forward while adjusting body pitch to bring the patient into the cameras' field
+of view---this is the SEARCHING state. When the RealSense detects a potential
+torso, the system uses that coarse guidance to walk toward the detection and
+adjust pitch, giving the Orbbec a clean observation window; we call this
+SEMI\_LOCKING. If the Orbbec then confirms a lying patient with high
+confidence, the system advances to LOCKING, where the NLF pipeline produces a
+refined 3D skeleton and the coordinator collects approach point estimates.
+Timeouts at any point revert to SEARCHING, ensuring the robot does not commit
+to a false detection.
+
+Phase~B (Approaching) begins once a stable lock is achieved. The robot first
+drives toward the target while the anticipatory body scanner builds the torso
+model---a state we call PRE\_APPROACH---then transitions to APPROACHING, where
+the \ac{WBC} \ac{QP} coordinates base velocity and arm look-at control
+concurrently, keeping the camera on the patient throughout the approach.
+
+Phase~C (Exposure) starts after the approach handoff. An optional Waiting
+Exposure gate lets the operator confirm before the scan begins. The system then
+enters EXPOSURE\_SCANNING, executing a multi-view body surface inspection with
+Grounding DINO injury detection at each grid point. Once the sweep is complete,
+the \ac{FSM} moves to EXPOSURE\_REVIEW: the operator can click any grid point
+in the web interface to trigger a full re-positioning and re-inspection,
+remaining in this state until explicitly terminated.
+
+Phase~D (\acs{FAST}) follows, with an analogous Waiting FAST gate for manual
+confirmation. The SCANNING state executes ultrasound acquisition under
+pre-planned body reconfiguration, one target at a time. When a target is
+kinematically unreachable from the current posture, the system temporarily
+enters WS\_EXTENSION, walking the base along the patient's body to extend the
+workspace, then loops back to SCANNING with the new \ac{IK} solution.
+
+Transitions are triggered by perception confidence (dashed edges in
+Fig.~\ref{fig:fsm}) or geometric conditions (solid edges); the mission
+completes by returning to Idle.
 
 Fig.~\ref{fig:system_block} shows the complete system architecture in six
 layers.  The Orbbec and RealSense \ac{RGBD} streams feed the Perception layer,
-whose outputs route to the \ac{FSM}.  The \ac{FSM} enables four Planning
-modules: the Exposure Scanner (body scan grid generation and interactive
-review), the \ac{FAST} Ultrasound planner, the Body Pose Optimizer, and the
-Web UI.  The Control layer translates plans into actuation: the \ac{WBC}
-\ac{QP} publishes base velocity $[v_x,\,\omega_z]$ to Spot and arm goals to
-the \ac{IK} Goal Multiplexer; the Impedance Controller manages compliant
-contact during \ac{FAST} scanning, publishing joint torques
-$\boldsymbol{\tau}$ directly to the Z1.  The Z1 \ac{FSM} synchronises with
-the \ac{WBC} coordinator: during the \ac{FAST} cycle posture changes are
-applied before each target arm trajectory.  An emergency stop immediately
-halts the base and returns the arm to a safe configuration.
+which runs YOLO-pose skeleton detection, Kalman-filtered 3D back-projection,
+NLF 3D body pose estimation, surface estimation, and Grounding DINO injury
+detection.  Perception outputs route to the 13-state Mission \ac{FSM}, which
+enables four Planning modules: the Exposure Scanner, the \ac{FAST} Ultrasound
+planner, the Body Pose Optimizer, and the Web UI for interactive review.  The
+Control layer translates plans into actuation: the \ac{WBC} \ac{QP} publishes
+base velocity $[v_x,\,\omega_z]$ to Spot and arm goals to the \ac{IK} Goal
+Multiplexer; the Impedance Controller manages compliant contact during
+\ac{FAST} scanning, publishing joint torques $\boldsymbol{\tau}$ directly to
+the Z1.  The Z1 \ac{FSM} manages the arm's internal state
+transitions---homing, look-at tracking, scanning trajectory execution, and
+impedance-controlled contact---and synchronises with the \ac{WBC} coordinator.
+Dashed arrows in the diagram denote operator-triggered or posture-optimisation
+paths.  An emergency stop immediately halts the base and returns the arm to a
+safe configuration.
 
 \begin{figure*}[t]
   \centering
   \resizebox{\textwidth}{!}{\input{figures/fsm}}
-  \caption{Mission \ac{FSM} with 13 states. The robot searches for
-           the patient through body rotation and dual-sensor confirmation
-           (SEARCHING~$\to$~SEMI\_LOCKING~$\to$~LOCKING), approaches while
-           running the anticipatory scanner (PRE\_APPROACH~$\to$~APPROACHING),
-           performs a posture-adaptive exposure body scan with integrated wound
-           and burn detection (EXPOSURE\_SCANNING), enters an interactive review
-           phase for operator-driven re-inspection (EXPOSURE\_REVIEW), and
-           executes \ac{FAST} ultrasound scanning with pre-planned body
-           reconfiguration (SCANNING). Transitions are triggered by perception
-           confidence (dashed) or geometric conditions (solid).}
+  \caption{Mission \ac{FSM} with 13 states. Dashed transitions are
+           perception-driven; solid transitions are geometry-driven.}
   \label{fig:fsm}
 \end{figure*}
 
 \begin{figure}[t]
   \centering
   \resizebox{\columnwidth}{!}{\input{figures/system_block}}
-  \caption{System block diagram. The Perception layer processes dual-sensor
-           \ac{RGBD} streams via YOLO-pose, Kalman filtering, NLF
-           skeleton detection, surface estimation, and injury detection. The
-           13-state Mission \ac{FSM} orchestrates four Planning modules:
-           Exposure Scanner, \ac{FAST} Ultrasound, Body Pose Optimizer, and
-           the Web UI for interactive review. The Control layer executes
-           real-time decisions through the \ac{WBC} \ac{QP}, \ac{IK} Goal
-           Multiplexer, and Impedance Controller. Dashed arrows denote
-           operator-triggered or posture-optimisation paths.}
+  \caption{System block diagram. The six-layer architecture spans sensors,
+           perception, mission \ac{FSM}, planning, control, and hardware.
+           Dashed arrows denote operator-triggered or posture-optimisation
+           paths.}
   \label{fig:system_block}
 \end{figure}
 

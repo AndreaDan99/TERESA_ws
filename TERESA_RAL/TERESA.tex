@@ -67,6 +67,21 @@ Whole-body active perception, legged manipulation, medical robotics,
 emergency assessment, mobile manipulation, body reconfiguration.
 \end{IEEEkeywords}
 
+% ── System Overview Figure ────────────────────────────────────
+\begin{figure}[t]
+  \centering
+  \includegraphics[scale=0.50]{figures/system_overview_annotated.png}
+  \caption{The \ac{TERESA} system during the exposure scanning phase. The Spot
+           quadruped base (left) carries the Z1 manipulator with a wrist-mounted
+           Intel RealSense D415 for close-range torso tracking and a body-mounted
+           Orbbec Femto Bolt for wide-field patient detection. The web-based
+           Body Map interface (background) renders the real-time skeleton, body
+           region boundaries, and exposure scan grid. The dashed orange arrow
+           marks the exposure path from the RealSense to a burn scar on the
+           patient's torso.}
+  \label{fig:system_overview}
+\end{figure}
+
 % ── Sections ────────────────────────────────────────────────
 \input{sections/introduction}
 \input{sections/problem_formulation}
