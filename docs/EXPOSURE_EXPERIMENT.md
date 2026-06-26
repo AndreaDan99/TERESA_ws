@@ -10,31 +10,32 @@
 ## Quick Reference
 
 ```bash
-# SSH into Jetson
+# === TERMINAL 1: Camera drivers (keep running) ===
 ssh orin
+cd ~/AndreaDantonaTeresa/TERESA_ws && git pull && bash teresa_start.sh
+docker exec -it teresa_core bash
+source /ros2_ws/install/setup.bash
+ros2 launch spot_control teresa_core.launch.py   # ignora errori Z1
 
-# Pull latest code
-cd ~/AndreaDantonaTeresa/TERESA_ws && git pull
+# === TERMINAL 2: Capture script ===
+ssh orin
+docker exec -it teresa_gpu bash
+mkdir -p /work/exposure/exp_01
+python /ros2_ws/scripts/capture_exposure.py --out_dir /work/exposure/exp_01
 
-# Start containers (if not running)
-bash teresa_start.sh
+# === TERMINAL 3 (optional): RealSense preview ===
+ssh orin
+docker exec -it teresa_core bash
+source /ros2_ws/install/setup.bash
+rqt_image_view /camera/camera/color/image_raw
 
-# Launch camera drivers (in teresa_core)
-docker exec -it teresa_core bash -c "source /ros2_ws/install/setup.bash && ros2 launch spot_control teresa_core.launch.py"
-
-# Preview RealSense (separate terminal, optional)
-docker exec -it teresa_core bash -c "rqt_image_view /camera/camera/color/image_raw"
-
-# Start capture (separate terminal)
-docker exec -it teresa_gpu bash -c "python /ros2_ws/scripts/capture_exposure.py --out_dir /work/exposure/exp_01"
-
-# Run NLF + GDINO
+# === After capture: NLF + GDINO ===
 docker exec teresa_gpu python3 /ros2_ws/scripts/run_exposure_offline.py \
   --exp_dir /work/exposure/exp_01 \
   --nlf_model /ros2_ws/nlf_s_multi.torchscript \
   --cache_dir /work/hf_cache
 
-# Compute metrics (after manual review of predictions.json)
+# === After manual review: metrics ===
 docker exec teresa_gpu python3 /ros2_ws/scripts/compute_exposure_metrics.py \
   --predictions /work/exposure/exp_01/predictions.json
 ```
@@ -57,32 +58,51 @@ Place the mannequin supine on a table. Apply fake wounds in known positions:
 
 Measure the 3D position of each wound relative to a fixed reference point on the mannequin (e.g., sternum or belly button). Use a ruler or the RealSense depth viewer.
 
-### 2. Launch camera drivers
+### 2. Start containers + pull latest code
 
 ```bash
 ssh orin
 cd ~/AndreaDantonaTeresa/TERESA_ws
+git pull
 bash teresa_start.sh
+```
 
-# In terminal 1 — launch cameras
+### 3. Launch camera drivers — TERMINAL 1 (keep it running)
+
+This starts the Orbbec + RealSense camera streams. We use `teresa_core.launch.py` which is the standard launch for all hardware drivers. The Z1 arm bringup will fail (arm is broken) — **ignore those errors**, the cameras will still work.
+
+```bash
+ssh orin
 docker exec -it teresa_core bash
 source /ros2_ws/install/setup.bash
 ros2 launch spot_control teresa_core.launch.py
 ```
 
-### 3. Preview the RealSense (optional)
+Wait for the RealSense to come online (~10 s, launched with 8 s delay to avoid USB conflict with Orbbec). Verify:
 
 ```bash
-# In terminal 2
-ssh orin
+# In another terminal
+docker exec teresa_gpu bash -c "source /opt/ros/humble/install/setup.bash && ros2 topic list | grep -E '/orbbec/color|/camera/camera/color'"
+```
+
+Expected output:
+```
+/camera/camera/color/image_raw
+/orbbec/color/image_raw
+```
+
+### 4. Preview the RealSense — TERMINAL 2 (optional)
+
+```bash
+ssh -X orin   # -X for X11 forwarding (needs XQuartz on Mac)
 docker exec -it teresa_core bash
+source /ros2_ws/install/setup.bash
 rqt_image_view /camera/camera/color/image_raw
 ```
 
-### 4. Capture photos
+### 5. Capture photos — TERMINAL 3
 
 ```bash
-# In terminal 3
 ssh orin
 docker exec -it teresa_gpu bash
 mkdir -p /work/exposure/exp_01
@@ -98,7 +118,7 @@ Capture sequence:
 6. **Close-up 5**: above the feet. Press ENTER (optional).
 7. Press `q` + ENTER to quit.
 
-### 5. Run NLF + GroundingDINO
+### 6. Run NLF + GroundingDINO
 
 ```bash
 docker exec teresa_gpu python3 /ros2_ws/scripts/run_exposure_offline.py \
@@ -113,7 +133,7 @@ Output files:
 - `close_up/overlays/` — each close-up with detection IDs (D0, D1, …)
 - `predictions.json` — all detections with 3D positions
 
-### 6. Manual review
+### 7. Manual review
 
 Open `close_up/overlays/` and `wide_overlay.jpg`. Edit `predictions.json`:
 
@@ -159,7 +179,7 @@ Rules:
 - `wound_id` = which real wound this detection belongs to (same ID = same wound seen in multiple photos)
 - `missed` = wound IDs placed but NOT detected by GDINO (false negatives)
 
-### 7. Compute metrics
+### 8. Compute metrics
 
 ```bash
 docker exec teresa_gpu python3 /ros2_ws/scripts/compute_exposure_metrics.py \
@@ -168,7 +188,7 @@ docker exec teresa_gpu python3 /ros2_ws/scripts/compute_exposure_metrics.py \
 
 Output: recall, FP/scan, precision, F1, 3D localisation error, LaTeX table row.
 
-### 8. Repeat for 5 experiments
+### 9. Repeat for 5 experiments
 
 Change wound positions, create new folders:
 
@@ -180,9 +200,9 @@ Change wound positions, create new folders:
 /work/exposure/exp_05/   ← mixed injuries
 ```
 
-Repeat steps 4-7 for each.
+Repeat steps 5-8 for each.
 
-### 9. Aggregate results
+### 10. Aggregate results
 
 Average the metrics across all 5 experiments to fill the paper table:
 
