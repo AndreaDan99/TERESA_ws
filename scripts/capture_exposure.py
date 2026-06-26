@@ -34,6 +34,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, CameraInfo
 from cv_bridge import CvBridge
+from rclpy.qos import qos_profile_sensor_data
 
 HAS_DISPLAY = os.environ.get('DISPLAY', '') != ''
 
@@ -56,15 +57,17 @@ class ExposureCapture(Node):
 
         # ── Subscribers ────────────────────────────────────────
         self._sub_rs_color = self.create_subscription(
-            Image, '/camera/camera/color/image_raw', self._cb_rs_color, 10)
+            Image, '/camera/camera/color/image_raw', self._cb_rs_color,
+            qos_profile_sensor_data)
         self._sub_rs_depth = self.create_subscription(
             Image, '/camera/camera/aligned_depth_to_color/image_raw',
-            self._cb_rs_depth, 10)
+            self._cb_rs_depth, qos_profile_sensor_data)
         self._sub_rs_info = self.create_subscription(
             CameraInfo, '/camera/camera/color/camera_info',
-            self._cb_rs_info, 10)
+            self._cb_rs_info, qos_profile_sensor_data)
         self._sub_orb_color = self.create_subscription(
-            Image, '/orbbec/color/image_raw', self._cb_orb_color, 10)
+            Image, '/orbbec/color/image_raw', self._cb_orb_color,
+            qos_profile_sensor_data)
 
         # Camera info auto-save after 2 s
         self.create_timer(2.0, self._try_save_camera_info)
@@ -174,30 +177,33 @@ class ExposureCapture(Node):
     def _tick_tty_status(self):
         """Periodic status print."""
         rs_ok = '✓' if self._rs_color is not None else '✗'
-        orbbec_ok = '✓' if self._orbbec_color is not None else '✗'
         depth_ok = '✓' if self._rs_depth is not None else '✗'
         self.get_logger().info(
             f'Status  |  RS color: {rs_ok}  depth: {depth_ok}  '
-            f'Orbbec: {orbbec_ok}  |  # close-ups: {self._counter - 1}'
+            f'|  # close-ups: {self._counter - 1}'
         )
 
     # ── Save ───────────────────────────────────────────────────
 
     def _save_wide(self):
-        if self._orbbec_color is None:
-            self.get_logger().warn('⚠ No Orbbec frame yet')
+        """Save wide shot from RealSense (hold it at Orbbec height, ~0.5 m)."""
+        if self._rs_color is None:
+            self.get_logger().warn('⚠ No RealSense frame yet')
             return
         color_path = self.out_dir / 'wide_color.png'
-        cv2.imwrite(str(color_path), self._orbbec_color)
+        cv2.imwrite(str(color_path), self._rs_color)
         self._last_save_time = time.time()
-        self.get_logger().info(f'✓ WIDE (Orbbec) → {color_path}')
+        self.get_logger().info(f'✓ WIDE (RealSense) → {color_path}')
 
         depth_path = self.out_dir / 'wide_depth.png'
-        if not depth_path.exists():
-            h, w = self._orbbec_color.shape[:2]
+        if self._rs_depth is not None:
+            cv2.imwrite(str(depth_path), self._rs_depth)
+            self.get_logger().info(f'  Depth → {depth_path}')
+        else:
+            h, w = self._rs_color.shape[:2]
             dummy = np.zeros((h, w), dtype=np.uint16)
             cv2.imwrite(str(depth_path), dummy)
-            self.get_logger().info(f'  Depth placeholder → {depth_path}')
+            self.get_logger().warn('  No depth — placeholder saved')
 
     def _save_close_up(self):
         if self._rs_color is None:
