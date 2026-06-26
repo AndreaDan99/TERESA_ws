@@ -7,27 +7,30 @@
 - Mannequin supino on a table
 - Fake wounds applied (silicone, makeup, bandages, etc.)
 
-## Quick Reference
+## Quick Reference — Direttamente sulla Jetson
+
+Apri 3 terminali direttamente sul desktop della Jetson.
 
 ```bash
-# === TERMINAL 1: Camera drivers (keep running) ===
-ssh orin
-cd ~/AndreaDantonaTeresa/TERESA_ws && git pull && bash teresa_start.sh
+# === TERMINAL 1: RealSense camera (tienilo aperto) ===
 docker exec -it teresa_core bash
 source /ros2_ws/install/setup.bash
-ros2 launch spot_control teresa_core.launch.py   # ignora errori Z1
+ros2 run realsense2_camera realsense2_camera_node --ros-args \
+  -r __ns:=/camera -r __node:=camera \
+  -p enable_color:=true -p rgb_camera.color_profile:=640x480x30 \
+  -p depth_module.depth_profile:=640x480x30 -p enable_depth:=true \
+  -p align_depth.enable:=true -p pointcloud.enable:=false -p enable_infra:=false
 
-# === TERMINAL 2: Capture script ===
-ssh orin
-docker exec -it teresa_gpu bash
-mkdir -p /work/exposure/exp_01
-python /ros2_ws/scripts/capture_exposure.py --out_dir /work/exposure/exp_01
-
-# === TERMINAL 3 (optional): RealSense preview ===
-ssh orin
+# === TERMINAL 2 (optional): preview ===
 docker exec -it teresa_core bash
 source /ros2_ws/install/setup.bash
 rqt_image_view /camera/camera/color/image_raw
+
+# === TERMINAL 3: Capture ===
+docker exec -it teresa_gpu bash
+mkdir -p /work/exposure/exp_01
+python /ros2_ws/scripts/capture_exposure.py --out_dir /work/exposure/exp_01
+#   w+ENTER = wide shot  |  ENTER = close-up  |  q+ENTER = quit
 
 # === After capture: NLF + GDINO ===
 docker exec teresa_gpu python3 /ros2_ws/scripts/run_exposure_offline.py \
@@ -38,6 +41,48 @@ docker exec teresa_gpu python3 /ros2_ws/scripts/run_exposure_offline.py \
 # === After manual review: metrics ===
 docker exec teresa_gpu python3 /ros2_ws/scripts/compute_exposure_metrics.py \
   --predictions /work/exposure/exp_01/predictions.json
+```
+
+## Quick Reference — Via SSH da Mac
+
+Apri 3 terminali sul Mac.
+
+```bash
+# === TERMINAL 1: RealSense camera ===
+ssh orin
+docker exec -it teresa_core bash
+source /ros2_ws/install/setup.bash
+ros2 run realsense2_camera realsense2_camera_node --ros-args \
+  -r __ns:=/camera -r __node:=camera \
+  -p enable_color:=true -p rgb_camera.color_profile:=640x480x30 \
+  -p depth_module.depth_profile:=640x480x30 -p enable_depth:=true \
+  -p align_depth.enable:=true -p pointcloud.enable:=false -p enable_infra:=false
+
+# === TERMINAL 2 (optional): preview (needs XQuartz on Mac) ===
+ssh -X orin
+docker exec -it teresa_core bash
+source /ros2_ws/install/setup.bash
+rqt_image_view /camera/camera/color/image_raw
+
+# === TERMINAL 3: Capture ===
+ssh orin
+docker exec -it teresa_gpu bash
+mkdir -p /work/exposure/exp_01
+python /ros2_ws/scripts/capture_exposure.py --out_dir /work/exposure/exp_01
+#   w+ENTER = wide shot  |  ENTER = close-up  |  q+ENTER = quit
+
+# === After capture: NLF + GDINO ===
+ssh orin "docker exec teresa_gpu python3 /ros2_ws/scripts/run_exposure_offline.py \
+  --exp_dir /work/exposure/exp_01 \
+  --nlf_model /ros2_ws/nlf_s_multi.torchscript \
+  --cache_dir /work/hf_cache"
+
+# === After manual review: metrics ===
+ssh orin "docker exec teresa_gpu python3 /ros2_ws/scripts/compute_exposure_metrics.py \
+  --predictions /work/exposure/exp_01/predictions.json"
+
+# === Copy photos to Mac for review ===
+scp -r orin:/ssd/andrea_deploy/exposure/exp_01 ~/Desktop/
 ```
 
 ---
@@ -58,43 +103,59 @@ Place the mannequin supine on a table. Apply fake wounds in known positions:
 
 Measure the 3D position of each wound relative to a fixed reference point on the mannequin (e.g., sternum or belly button). Use a ruler or the RealSense depth viewer.
 
-### 2. Start containers + pull latest code
+### 2. Pull latest code + start containers
 
+**Sulla Jetson:**
 ```bash
-ssh orin
 cd ~/AndreaDantonaTeresa/TERESA_ws
 git pull
 bash teresa_start.sh
 ```
 
-### 3. Launch camera drivers — TERMINAL 1 (keep it running)
-
-This starts the Orbbec + RealSense camera streams. We use `teresa_core.launch.py` which is the standard launch for all hardware drivers. The Z1 arm bringup will fail (arm is broken) — **ignore those errors**, the cameras will still work.
-
+**Via SSH:**
 ```bash
 ssh orin
+cd ~/AndreaDantonaTeresa/TERESA_ws && git pull && bash teresa_start.sh
+```
+
+### 3. Launch RealSense camera — TERMINAL 1 (keep it running)
+
+> **Nota:** `teresa_core.launch.py` richiede l'Orbbec connesso. Per l'esperimento offline usiamo il nodo RealSense standalone.
+
+```bash
 docker exec -it teresa_core bash
 source /ros2_ws/install/setup.bash
-ros2 launch spot_control teresa_core.launch.py
+ros2 run realsense2_camera realsense2_camera_node --ros-args \
+  -r __ns:=/camera -r __node:=camera \
+  -p enable_color:=true -p rgb_camera.color_profile:=640x480x30 \
+  -p depth_module.depth_profile:=640x480x30 -p enable_depth:=true \
+  -p align_depth.enable:=true -p pointcloud.enable:=false -p enable_infra:=false
 ```
 
-Wait for the RealSense to come online (~10 s, launched with 8 s delay to avoid USB conflict with Orbbec). Verify:
+Aspetta ~5 secondi. Per verificare che i topic siano attivi:
 
 ```bash
-# In another terminal
-docker exec teresa_gpu bash -c "source /opt/ros/humble/install/setup.bash && ros2 topic list | grep -E '/orbbec/color|/camera/camera/color'"
+# In un altro terminale
+docker exec teresa_gpu bash -c "source /opt/ros/humble/install/setup.bash && ros2 topic list | grep camera/color/image_raw"
 ```
 
-Expected output:
+Output atteso:
 ```
 /camera/camera/color/image_raw
-/orbbec/color/image_raw
 ```
 
-### 4. Preview the RealSense — TERMINAL 2 (optional)
+### 4. Preview RealSense — TERMINAL 2 (optional)
 
+**Sulla Jetson:**
 ```bash
-ssh -X orin   # -X for X11 forwarding (needs XQuartz on Mac)
+docker exec -it teresa_core bash
+source /ros2_ws/install/setup.bash
+rqt_image_view /camera/camera/color/image_raw
+```
+
+**Via SSH (serve XQuartz sul Mac):**
+```bash
+ssh -X orin
 docker exec -it teresa_core bash
 source /ros2_ws/install/setup.bash
 rqt_image_view /camera/camera/color/image_raw
@@ -102,6 +163,14 @@ rqt_image_view /camera/camera/color/image_raw
 
 ### 5. Capture photos — TERMINAL 3
 
+**Sulla Jetson:**
+```bash
+docker exec -it teresa_gpu bash
+mkdir -p /work/exposure/exp_01
+python /ros2_ws/scripts/capture_exposure.py --out_dir /work/exposure/exp_01
+```
+
+**Via SSH:**
 ```bash
 ssh orin
 docker exec -it teresa_gpu bash
