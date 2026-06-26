@@ -4,12 +4,15 @@
 \section{Problem Statement}
 \label{sec:problem_formulation}
 
-The \ac{TERESA} platform consists of a Boston Dynamics Spot quadruped and a
+The \draft{Spotzi} platform consists of a Boston Dynamics Spot quadruped and a
 Unitree Z1 six-\ac{DOF} arm rigidly mounted on the robot's back. Four frames
 are defined: the world frame $\mathcal{F}_W$ (coincident with Spot odometry),
 the body frame $\mathcal{F}_B$, the arm base frame $\mathcal{F}_0$ (fixed
 relative to $\mathcal{F}_B$), and the end-effector frame $\mathcal{F}_{EE}$ (at
-the Z1 flange). The Spot base is modelled as a non-holonomic vehicle with
+the Z1 flange). \draft{Two RGB-D cameras cover complementary perceptual
+roles: a body-mounted wide-field camera for patient detection and an
+\ac{EE}-mounted camera for high-detail torso inspection.} The Spot base is
+modelled as a non-holonomic vehicle with
 configuration $\boldsymbol{\xi} = [x,\, y,\, \theta]^\top \in \mathbb{R}^2
 \times \mathbb{S}^1$, constrained to forward velocity $v_x$ and yaw rate
 $\omega_z$:
@@ -35,27 +38,27 @@ height, and $\varphi$ the body pitch.
 The mission consists of four sequential phases, each defining a specific control
 subproblem.
 \begin{itemize}
-  \item \textbf{Searching (A).} The robot must locate a stationary patient whose
-        position is unknown a priori, using only onboard \ac{RGBD} cameras, by
+  \item \textbf{Searching.} The robot must locate a stationary patient whose
+        position is unknown a priori, using only onboard RGB-D cameras, by
         walking forward while adjusting body pitch, until a vision-based
         patient detector yields confidence above a threshold $\tau$. The
         associated control problem is: find $(v_x, h, \varphi)$ such that
         detection confidence exceeds $\tau$, ensuring robust localisation before
         committing to navigation.
-  \item \textbf{Approaching (B).} Once the patient is localised, the robot
+  \item \textbf{Approaching.} Once the patient is localised, the robot
         navigates to a pre-scanning base configuration from which all subsequent
         anatomical targets are kinematically reachable. The control problem is:
         given the estimated patient position, find $(v_x, \omega_z)$ to reach a
         configuration from which every target $\mathbf{T}_i^* \in \mathcal{T}$
         is reachable.
-  \item \textbf{Exposure (C).} The robot performs a systematic visual inspection
-        of the body surface, acquiring multi-view \ac{RGBD} data over an
+  \item \textbf{Exposure.} The robot performs a systematic visual inspection
+        of the body surface, acquiring multi-view RGB-D data over an
         adaptive grid of anatomical keypoints to detect wounds, burns, and
         haemorrhages via open-vocabulary object detection. The control problem
         is: given the patient body model and the keypoint grid, find
         $(h, \varphi, \dot{\mathbf{q}})$ to scan all keypoints with sufficient
         viewpoint coverage and to run injury detection at each grid point.
-  \item \textbf{\ac{FAST} (D).} The robot acquires ultrasound images at $N$
+  \item \textbf{\acs{FAST}.} The robot acquires ultrasound images at $N$
         predefined anatomical target poses
         $\mathcal{T} = \{\mathbf{T}_i^* \in SE(3)\}_{i=1}^{N}$. The control
         problem is: given $\mathcal{T}$, find $(h, \varphi, \dot{\mathbf{q}})$

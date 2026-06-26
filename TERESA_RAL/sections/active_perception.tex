@@ -4,34 +4,24 @@
 \section{Whole-Body Active Perception and Control}
 \label{sec:active_perception}
 
-The core contribution of \ac{TERESA} is a whole-body active perception
-framework: the robot continuously adapts its posture---body height, pitch, and
-yaw---to maximise perceptual quality. This section describes how each of the
-four mission phases defined in Section~\ref{sec:problem_formulation} is
-resolved: hybrid confidence-gated search (Phase~A), anticipatory approaching
-with concurrent scanning (Phase~B), exposure body inspection with interactive
-review (Phase~C), and \ac{FAST} ultrasound acquisition with compliant contact
-(Phase~D).
+\draft{The term \emph{whole-body} here denotes a perceptual extension
+of the classical \ac{WBC} principle. Whereas traditional \ac{WBC} coordinates
+all degrees of freedom to minimise kinematic error, \ac{TERESA} extends this
+coordination to the perceptual domain: body posture and arm motion are treated
+as explicit control resources that together shape the robot's sensory field.
+By commanding posture to improve what the robot sees, from closer range and from more informative viewpoints, \ac{TERESA} elevates the legged base from a
+passive transport platform to an active participant in the perception-action
+loop. This principle underpins every phase of the mission, from searching
+through approaching to scanning.}
 
-The term \emph{whole-body} here denotes a perceptual extension of the classical
-\ac{WBC} principle. Whereas traditional \ac{WBC} coordinates all degrees of
-freedom to minimise kinematic error, \ac{TERESA} extends this coordination to
-the perceptual domain: body posture---height, pitch, and yaw---is treated as an
-explicit control resource that shapes the robot's sensory field. By commanding
-posture to improve what the robot sees, at higher resolution and from more
-informative viewpoints, \ac{TERESA} elevates the legged base from a passive
-transport platform to an active participant in the perception-action loop. This
-principle underpins every phase of the mission, from searching through
-approaching to scanning.
-
-\subsection{Phase A --- Searching}
+\subsection{Searching}
 \label{sec:phase_searching}
 
 Before the robot can approach the patient, it must first localise them
 reliably. In an unstructured emergency scenario, the patient's position is
-unknown a priori. The \ac{EE}-mounted RealSense benefits from the Z1 arm's full
+unknown a priori. The \ac{EE}-mounted camera benefits from the Z1 arm's full
 six-\ac{DOF} mobility, which can orient the camera in any direction without
-moving the base. The body-mounted Orbbec, however, has a fixed orientation
+moving the base. The body-mounted camera, however, has a fixed orientation
 relative to Spot: its downward field of view depends entirely on body pitch,
 making pitch the only posture parameter that directly improves its detection of
 a patient lying on the ground. \ac{TERESA} therefore avoids time-consuming base
@@ -39,119 +29,128 @@ rotations and instead searches by walking forward while sweeping body pitch.
 
 \subsubsection{Forward search with pitch sweep}
 
-The robot walks forward at low speed while the body pitch is adjusted through
-a sequence of angles $\varphi \in [0, \varphi_{\max}]$. At each pitch, two
-cameras observe the environment in complementary roles. The body-mounted Orbbec
-runs YOLO11-pose and a posture classifier that outputs a confidence score
-$c \in [0, 1]$. The \ac{EE}-mounted RealSense, actively oriented by the Z1
-arm, runs a torso tracker that scans the surroundings independently of the
-base heading. Two conditions are evaluated:
+The robot walks forward at low speed while sweeping body pitch through a
+sequence of angles $\varphi \in [0, \varphi_{\max}]$. The body-mounted camera
+runs YOLO11-pose and a posture classifier, outputting a confidence score
+$c \in [0, 1]$; the \ac{EE}-mounted camera runs a torso tracker that scans the
+surroundings independently of the base heading. Algorithm~1 formalises the
+confidence-gated search loop.
+\draft{This strategy exploits the arm's native mobility for rotational
+search while using body pitch---the one viewing parameter the arm cannot
+compensate for---to optimise the body-mounted camera's fixed viewpoint. When a
+lock is confirmed (Algorithm~\ref{alg:search}), the arm returns
+home and the coordinator collects $N$ approach-point samples in
+$\mathcal{F}_W$, computing their mean as the navigation target, while the NLF
+pipeline accumulates skeleton estimates with exponential moving average
+smoothing. If the detection is temporarily lost, the system tolerates a brief
+absence before resuming the search.}
 
-\begin{itemize}
-  \item \textbf{Orbbec direct detection}: if the body-mounted camera detects a
-        lying patient with high confidence at the current pitch, the robot
-        transitions immediately to target locking.
-  \item \textbf{RealSense guidance}: if the \ac{EE} camera detects a potential
-        body while the Orbbec has not yet confirmed, the robot enters a
-        semi-locking phase. It walks toward the detected torso and adjusts
-        pitch to give the Orbbec a clean observation window.
-\end{itemize}
-
-If neither condition is met after the pitch sweep, the robot continues walking
-forward and repeats the sweep, progressively covering the search area without
-the idle time of discrete base rotations. This strategy exploits the arm's
-native mobility for rotational search while using body pitch---the one viewing
-parameter the arm cannot compensate for---to optimise the Orbbec's fixed
-viewpoint.
-
-\subsubsection{Dual-sensor confidence lock}
-
-Patient localisation is confirmed through a hybrid lock that fuses information
-from both cameras. When the Orbbec detects a lying posture with high
-confidence, the robot enters a locking state: the arm returns to an elevated
-home pose, and the coordinator collects a sequence of approach point estimates
-in the world-fixed odometry frame $\mathcal{F}_W$, computing their mean as the
-navigation target. Concurrently, the NLF pipeline produces a refined 3D
-skeleton estimate by accumulating two valid detections with exponential moving
-average smoothing, providing higher-fidelity anatomical data for the subsequent
-approach phase. The transition to the approach phase is gated by both the
-arm's home trajectory and the collection of the required number of samples. If
-the Orbbec detection is temporarily lost, the system tolerates a brief absence
-before resuming the search from the current position.
-
-\subsection{Phase B --- Approaching}
+\begin{algorithm}[h!]
+\caption{Confidence-Gated Search with Dual-Sensor Lock}
+\label{alg:search}
+\begin{algorithmic}[1]\small
+\STATE \textbf{Input:} $\varphi_{\max}$, thresholds $\tau_{\text{high}}, \tau_{\text{low}}$, $N$ samples
+\STATE \textbf{Output:} navigation target $\mathbf{p}_{\text{nav}} \in \mathbb{R}^3$, skeleton estimate
+\WHILE{not locked}
+  \FOR{$\varphi \in \{\varphi_1, \ldots, \varphi_{\max}\}$}
+    \STATE $c_b \gets \textsc{BodyDetect}(\varphi)$
+    \IF{$c_b > \tau_{\text{high}}$}
+      \STATE $\textsc{ArmHome}()$
+      \FOR{$i = 1$ \TO $N$}
+        \STATE $\mathbf{p}_i \gets \textsc{GetApproachPoint}()$
+        \STATE $\textsc{NLFAccumulate}(\mathbf{p}_i)$
+      \ENDFOR
+      \STATE $\mathbf{p}_{\text{nav}} \gets \textsc{Mean}(\{\mathbf{p}_i\})$
+      \STATE \RETURN lock
+    \ENDIF
+    \STATE $c_e \gets \textsc{EEDetect}()$
+    \IF{$c_e > \tau_{\text{low}}$}
+      \STATE $\textsc{WalkToward}(\text{detection})$
+      \STATE $\textsc{PitchRefine}(\varphi)$
+    \ENDIF
+  \ENDFOR
+  \STATE $\textsc{AdvanceForward}()$
+\ENDWHILE
+\end{algorithmic}
+\end{algorithm}
+\subsection{Approaching}
 \label{sec:phase_approaching}
 
-In traditional mobile manipulation pipelines, the robot first navigates to a
-target position, stops, and only then begins visual scanning---a sequential
-approach that introduces significant idle time. \ac{TERESA} eliminates this
-idle period by executing the body scan concurrently with the approach
-navigation.
+\draft{In traditional mobile manipulation pipelines, the robot first
+navigates to a target, stops, and only then begins torso mapping---introducing
+significant idle time. \ac{TERESA} eliminates this idle period by mapping the
+torso concurrently with the approach. Algorithm~2 formalises the parallel
+base-controller / torso-mapper execution.}
 
-\subsubsection{Whole-body coordination}
+\begin{algorithm}[h!]
+\caption{Anticipatory Approaching with Concurrent Torso Mapping}
+\label{alg:approach}
+\begin{algorithmic}[1]\small
+\STATE \textbf{Input:} $\mathbf{p}_{\text{nav}} \in \mathcal{F}_W$, torso keypoint confidences
+\STATE \textbf{Output:} fused torso model, \acs{FAST} target poses $\mathcal{T}$
+\STATE \textbf{parallel do}
+  \STATE \hspace{2mm}// Base navigation
+  \WHILE{$\|\mathbf{p}_{\text{nav}} - \boldsymbol{\xi}\| > \varepsilon$}
+    \STATE $v_x, \omega_z \gets \textsc{ProportionalCtrl}(\mathbf{p}_{\text{nav}}, \boldsymbol{\xi})$
+    \STATE $v_x \gets \textsc{QualityMonitor}(v_x, \text{confidence})$
+  \ENDWHILE
+  \STATE \hspace{2mm}// Torso mapping
+  \WHILE{not handoff}
+    \STATE $\dot{\mathbf{q}} \gets \textsc{DampedPinv}(\mathbf{J}_{\mathrm{arm}}, \mathbf{v}_{\mathrm{des}})$ \hfill $\triangleright$ Eq.~\ref{eq:damped_pinv}
+    \IF{all 4 keypoints confident}
+      \STATE $\text{grid} \gets \text{2-pose minimal pattern}$
+    \ELSE
+      \STATE $\text{grid} \gets \text{3-pose comprehensive pattern}$
+    \ENDIF
+    \FOR{each pose $\in$ grid}
+      \STATE $\textsc{FuseDepthSkeleton}(\text{pose})$
+    \ENDFOR
+  \ENDWHILE
+\STATE \textbf{end parallel}
+\STATE $\mathcal{T} \gets \textsc{FASTTargetOffsets}(\text{fused\_torso})$
+\end{algorithmic}
+\end{algorithm}
 
-During the approach, two independent controllers run in parallel. The Spot base
-is driven by a proportional controller that computes $v_x$ and $\omega_z$ from
-the distance and angle to the target in $\mathcal{F}_W$. The arm is controlled
-by a \ac{WBC} formulation that orients the \ac{EE}-mounted RealSense toward the
-patient's torso centroid. The joint velocities are computed via a damped
-pseudo-inverse of the arm Jacobian:
+\draft{The arm controller orients the \ac{EE}-mounted camera toward the
+patient's torso centroid. Joint velocities are computed via the damped
+pseudo-inverse of the arm Jacobian:}
 \begin{equation}
 \dot{\mathbf{q}} = \mathbf{J}_{\mathrm{arm}}^\top
 \bigl(\mathbf{J}_{\mathrm{arm}} \mathbf{J}_{\mathrm{arm}}^\top
 + \mu\,\mathbf{I}_6\bigr)^{-1} \mathbf{v}_{\mathrm{des}},
 \label{eq:damped_pinv}
 \end{equation}
-where $\mu > 0$ is a damping factor that prevents singularities near
-kinematic limits, and $\mathbf{v}_{\mathrm{des}} \in \mathbb{R}^6$ is the
-desired end-effector spatial velocity. The damped pseudo-inverse solves
-$\mathbf{J}_{\mathrm{arm}} \dot{\mathbf{q}} = \mathbf{v}_{\mathrm{des}}$ in a
-least-squares sense, mapping a commanded \ac{EE} motion to the joint space.
-Here only the angular component of $\mathbf{v}_{\mathrm{des}}$ is active: it
-encodes the rotation required to align the RealSense camera with the look-at
-direction $\mathbf{x}_{EE} = (\mathbf{p}^* -
-\mathbf{p}_{EE})/\|\mathbf{p}^* - \mathbf{p}_{EE}\|$, keeping the patient's
-torso centred in the frame. The translational component of
-$\mathbf{v}_{\mathrm{des}}$ is zero, as the arm holds a nominal home position
-during approach. The base velocity is modulated by a
-QualityMonitor that scales the approach speed in proportion to detection
-confidence, avoiding premature commitment to uncertain targets while preventing
-unnecessary stops.
+\draft{where $\mu > 0$ prevents singularities near kinematic limits.
+Only the angular component of $\mathbf{v}_{\mathrm{des}}$ is active: it encodes
+the look-at rotation $\mathbf{x}_{EE} = (\mathbf{p}^* -
+\mathbf{p}_{EE})/\|\mathbf{p}^* - \mathbf{p}_{EE}\|$, keeping the torso centred
+in the frame; the translational component is zero, holding a nominal home
+position. The base approach speed $v_x$ is modulated by the detection
+confidence: the robot slows when the torso estimate is uncertain and resumes
+full speed once confidence is restored. We refer to this confidence-gated
+modulation as the QualityMonitor. At each viewpoint, depth
+and skeleton data are fused into 3D keypoint estimates via a weighted average
+of detection rate and spatial stability. From the fused torso model, the five
+canonical \ac{FAST} target poses are computed as fixed offsets from the torso
+centroid in $\mathcal{F}_0$.}
 
-\subsubsection{Adaptive anticipatory scan grid}
-
-The arm executes a perceptual body scan using a dynamically generated Cartesian
-grid of poses around the current \ac{EE} position. During the pre-approach
-phase, the RealSense tracker publishes per-keypoint confidence scores for the
-four torso landmarks (shoulders and hips), which drive the grid generation. If
-all four keypoints are detected with high confidence, the scan uses a minimal
-two-pose grid: the current \ac{EE} pose advanced toward the patient plus an
-elevated viewpoint. If any keypoint falls below the threshold, the grid expands
-to a three-pose comprehensive pattern with symmetric lateral offsets, an
-elevated frontal viewpoint, and the home pose interleaved between lateral
-transits. All scanning poses include a forward advance toward the patient. At
-each pose, depth and skeleton data are fused into 3D keypoint estimates via a
-weighted average accounting for detection rate and spatial stability. From the
-fused torso model, the five canonical \ac{FAST} target poses are computed as
-fixed offsets from the estimated torso centroid in $\mathcal{F}_0$.
-
-\subsection{Phase C --- Exposure}
+\subsection{Exposure}
 \label{sec:phase_exposure}
 
-After the anticipatory scanner has localised the patient's anatomy, Phase~C
+After the torso mapper has localised the patient's anatomy, Phase~3
 executes a systematic visual inspection of the body surface, serving the ``E''
 (Exposure) component of the \ac{ABCDE} protocol. A key design principle is that
-the operator remains in the loop: the system automates the scanning motion but
+the \draft{remote} operator remains in the loop: the system automates the scanning motion but
 preserves the clinician's ability to inspect, re-examine, and override.
 
 \subsubsection{Posture optimisation for body reconfiguration}
 \label{sec:body_reconf}
 
-Once the anticipatory body scanner has localised the patient's anatomy and
+Once the anticipatory torso mapper has localised the patient's anatomy and
 computed the target set $\mathcal{T}$ (both \ac{FAST} ultrasound targets and
 exposure grid points) in $\mathcal{F}_W$, the system pre-plans an optimal body
 posture for each target through a two-tier kinematically-aware stance search
-with \ac{IK}-driven retry. This optimisation is shared with Phase~D
+with \ac{IK}-driven retry. This optimisation is shared with Phase~4
 (Section~\ref{sec:phase_fast}).
 
 The posture optimisation space spans three parameters: body height $h \in
@@ -183,17 +182,14 @@ displacement when strictly necessary.  The two-tier escalation proceeds as
 follows:
 
 \begin{enumerate}
-  \item \textbf{2D search}---$(h, \varphi)$ only: a coarse grid sweeps
-        $\mathcal{H} \times \mathcal{P}$ ($N_h N_p$ combinations, typically
-        12).  For each candidate, the system transforms the target to
-        $\mathcal{F}_0$ and queries the \ac{IK} solver.  If a posture yields
-        a solution within a \SI{2}{\second} timeout, it is selected.
-  \item \textbf{3D escalation}---$(dy, h, \varphi)$: when the 2D search fails,
-        the optimiser adds longitudinal base displacement $dy$ (Spot walks
-        along the patient's body), expanding to $N_{dy} N_h N_p$
-        combinations.  If the \ac{IK} solver also times out at this tier, the
-        point is skipped---the arm cannot reach it even with full base
-        repositioning.
+  \item \textbf{\draft{In-place search}}---$(h, \varphi)$ only: a
+        coarse grid sweeps $\mathcal{H} \times \mathcal{P}$ ($N_h N_p$
+        combinations). The posture yielding an \ac{IK} solution within
+        \SI{2}{\second} is selected.
+  \item \textbf{\draft{Base-displacement search}}---$(dy, h,
+        \varphi)$: when the in-place search fails, the optimiser adds
+        longitudinal base displacement $dy$, expanding to $N_{dy} N_h N_p$
+        combinations. If the \ac{IK} solver times out, the point is skipped.
 \end{enumerate}
 
 The optimisation is computed once per target after $\mathcal{T}$ is available,
@@ -223,39 +219,45 @@ travel.
 
 \subsubsection{Injury detection}
 
-At each grid point, Grounding DINO---a zero-shot
-open-vocabulary object detector---runs on the RealSense RGB stream at
+At each grid point, Grounding DINO~\cite{liu2023groundingdino}---a zero-shot
+open-vocabulary object detector---runs on the \draft{EE-mounted camera} RGB stream at
 approximately 1\,fps on the Jetson Orin GPU, prompted with a vocabulary
-of wound-related terms (wound, laceration, bleeding, burn, etc.). Detections
-are projected to 3D world coordinates via the registered depth channel and
-associated with their grid point index.
+of wound-related terms (wound, laceration, bleeding, burn, etc.).
+\draft{We select Grounding DINO over alternatives such as
+OWL-ViT~\cite{minderer2022owlv2} and GLIP~\cite{li2022glip} because its joint
+visual-language grounding produces tighter bounding boxes for fine-grained
+injury descriptions, which is critical for 3D back-projection accuracy.} \draft{Detections are projected to 3D world coordinates via the
+registered depth channel and associated with their grid point index. This 3D
+projection is required because the operator's clicks during interactive review
+trigger a physical robot repositioning to the corresponding body surface
+point, which demands metric 3D coordinates.}
 
 \subsubsection{Web-based interactive review}
 
-Following the sweep, the system enters an interactive review phase: the web
-interface overlays the exposure grid on the RealSense feed with detected
-injuries highlighted as colour-coded bounding boxes.  The operator can click
-any grid point to command the robot to return to that body region for
-re-inspection.  The full re-positioning mechanism---posture optimisation,
-settle, base navigation, and \ac{IK} trajectory replay---is detailed in
-Section~\ref{sec:system_architecture}.  A termination command ends the review
-and advances the mission to Phase~D.
+\draft{Following the sweep, the web interface
+(Section~\ref{sec:system_architecture}) overlays the scan grid on the
+\ac{EE}-mounted camera feed with detected injuries highlighted as
+colour-coded bounding boxes. The remote operator can click any grid point
+to command a full re-inspection of that body region.}
 
-\subsection{Phase D --- \acs{FAST}}
+\subsection{\acs{FAST}}
 \label{sec:phase_fast}
 
-Phase~D performs autonomous ultrasound acquisition at the $N$ \ac{FAST}
-targets estimated during Phase~B. Body posture optimisation for each
+\draft{Phase~4 performs autonomous ultrasound acquisition at the $N$
+\ac{FAST} targets estimated during Phase~2. Body posture optimisation for each
 $\mathbf{T}_i^* \in \mathcal{T}$ follows the same two-tier procedure described
-in Section~\ref{sec:body_reconf}, applied to the \ac{FAST} target set. The
-distinctive requirement of this phase is compliant probe contact with the
-patient's body surface.
+in Section~\ref{sec:body_reconf}. The critical challenge of this phase is
+compliant probe contact: the ultrasound probe must maintain controlled pressure
+against the patient's skin---excessive force risks injury, while insufficient
+contact loses the acoustic signal. On a legged platform, this is compounded by
+the fact that the Z1 arm provides no native impedance control, requiring us to
+implement a custom torque-level controller for safe physical interaction.}
 
 \subsubsection{Contact control}
 
-The Unitree Z1 does not provide native impedance control, yet ultrasound
-scanning requires compliant probe contact. \ac{TERESA} implements a custom
-Cartesian impedance controller on the Z1 torque interface at \SI{500}{\hertz}.
+\draft{Ultrasound scanning requires compliant probe contact. To
+achieve this on our platform, \ac{TERESA} implements a custom Cartesian
+impedance controller on the Z1 torque interface at \SI{500}{\hertz}.}
 The desired \ac{EE} pose is computed relative to the torso surface centroid
 $\mathbf{p}_s$ and outward normal $\mathbf{n}_s$, placing the probe at
 $\mathbf{p}_{\mathrm{des}} = \mathbf{p}_s + d\,\mathbf{n}_s$, where $d$ is the

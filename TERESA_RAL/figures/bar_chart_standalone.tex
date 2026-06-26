@@ -1,0 +1,33 @@
+% ============================================================
+%  BAR CHART (Fig. 5) — Standalone version for PNG export
+%  Compile with: pdflatex bar_chart_standalone.tex
+% ============================================================
+\documentclass[tikz,border=10pt]{standalone}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.15}
+\usepackage{siunitx}
+\begin{document}
+\begin{tikzpicture}
+  \begin{axis}[
+      ybar,
+      width  = 8cm,
+      height = 5.5cm,
+      bar width = 8pt,
+      ymin = 0, ymax = 110,
+      ylabel = {Completion (\%)},
+      xtick = data,
+      xticklabels = {Fixed nominal, Heuristic, In-place, Base-displacement},
+      x tick label style = {font=\footnotesize, rotate=30, anchor=east, align=center},
+      legend style = {font=\footnotesize, at={(0.03,0.97)}, anchor=north west},
+      enlarge x limits = 0.18,
+      ymajorgrids = true,
+      grid style = {dotted, gray!50},
+      axis line style = {gray},
+    ]
+    \addplot[fill=cyan!60,  draw=cyan!80!black]  coordinates {(1,40) (2,55) (3,70) (4,85)};
+    \addplot[fill=green!60, draw=green!80!black] coordinates {(1,50) (2,65) (3,85) (4,100)};
+    \legend{Exposure, FAST}
+  \end{axis}
+\end{tikzpicture}
+\end{document}

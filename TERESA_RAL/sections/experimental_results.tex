@@ -6,131 +6,139 @@
 
 \subsection{Experimental Setup}
 
-Experiments ran on the physical Spot+Z1 platform with an Orbbec Femto Bolt on
-Spot's body and a RealSense D435 at the \ac{EE}, computing across SpotCore
-and an onboard NVIDIA Jetson Orin AGX (\ac{ROS}~2 Humble, CUDA 11.4,
-PyTorch 2.0).  Ten supine mannequin
-positions were defined (\SI{2}{\metre}--\SI{4}{\metre}, $\pm\SI{45}{\degree}$
-angular offset); each ran in both modes below, yielding twenty paired trials.
+\draft{Experiments ran on the Spotzi platform} with an Orbbec Femto
+Bolt on Spot's body and a RealSense D415 at the \ac{EE}.
 
-Neural network inference runs entirely on the Jetson GPU.
-YOLO11n-pose skeleton detection operates at 8--14\,fps, NLF 3D body pose
-estimation at 3--4\,fps (end-to-end), and Grounding DINO zero-shot wound
-detection at $\sim$1\,fps.
+\draft{All neural network inference runs on an NVIDIA Jetson Orin AGX
+(\ac{ROS}~2 Humble, CUDA 11.4, PyTorch 2.0): YOLO11n-pose at 23--30\,fps,
+NLF at 13--17\,fps, Grounding DINO at 1--2\,fps. Spot's integrated computer
+handles base control and odometry.}
 
-\begin{itemize}
-  \item \textbf{Baseline}: sequential stop-and-manipulate. Fixed three-pose scan
-        after navigation, no concurrency.
-  \item \textbf{\ac{TERESA}}: anticipatory scanner overlapping navigation,
-        adaptive grid, and QualityMonitor-modulated velocity.
-\end{itemize}
+Ten supine mannequin
+positions were defined (\SI{2}{\metre}--\SI{4}{\metre},
+$\pm\SI{45}{\degree}$); each was tested in two configurations, yielding
+twenty paired end-to-end trials. \draft{We also conducted a separate search ablation
+with twenty additional trials at five orientations
+($0^\circ$--$180^\circ$), comparing the full \ac{TERESA} system against a
+Spot-only baseline with the arm disabled.}
 
-Metrics: total mission time, idle time, scan overlap (fraction of body scan
-completed before handoff), \ac{EE} positioning error at each \ac{FAST} point,
-and lock time.
+\draft{The two end-to-end configurations differ in three aspects. \textbf{Baseline}
+uses a conventional sequential pipeline: navigation, torso mapping, and
+scanning execute in strict order with no concurrency; body posture is fixed
+at Spot's nominal stance; the exposure scan uses a fixed three-pose pattern;
+body reconfiguration is disabled. \textbf{\ac{TERESA}} adds anticipatory
+torso mapping concurrent with approach (QualityMonitor,
+Section~\ref{sec:phase_approaching}), an adaptive exposure grid (two or three
+poses depending on keypoint confidence), and pre-planned two-tier body
+reconfiguration (Section~\ref{sec:body_reconf}) for every \ac{FAST} target.}
 
-Across all twenty end-to-end trials, \ac{TERESA} reduced total mission time
-from \SI{100.2 \pm 8.1}{\second} to \SI{89.7 \pm 7.3}{\second}
-(\SI{10.5}{\percent}).  The gain came from eliminating idle time---the
-anticipatory scanner completed $\sim$\SI{80}{\percent} of the body scan
-concurrently with approach---and from the adaptive grid, which selected the
-minimal two-pose pattern in the majority of trials.  Probe positioning error
-dropped from \SI{44.7 \pm 5.2}{\milli\metre} to \SI{29.8 \pm 4.1}{\milli\metre}.
-Note that the baseline benefits from an optimistic assumption: without body
-reconfiguration, many \ac{FAST} targets are unreachable from the default
-posture (Section~\ref{sec:body_reconf_results}).  Manual operation, where
+\draft{We evaluate five metrics:
+\emph{total completion time} $T_{\text{total}}$ (wall-clock from start to
+Idle);
+\emph{lock time} $T_{\text{lock}}$ (time to confirmed patient lock);
+\emph{scan overlap} $\eta = N_{\text{pre}} / N_{\text{total}}$ (fraction of
+torso model completed during approach; a value near~1 means mapping imposed
+no extra time);
+\emph{idle time} $T_{\text{idle}}$ (cumulative stationary time); and
+\emph{\ac{EE} positioning error}
+$e_i = \|\mathbf{p}_{EE,i} - \mathbf{p}_i^*\|$ (Euclidean distance to each
+\ac{FAST} target, reported as mean and standard deviation across all
+kinematically reachable targets).}
+
+\subsection{End-to-End System Performance}
+\draft{Across all twenty end-to-end trials, \ac{TERESA} reduced total
+completion time by \SI{10.5}{\percent} (Table~\ref{tab:endtoend}).} The gain
+came from eliminating idle time---the anticipatory torso mapper completed
+$\sim$\SI{80}{\percent} of the torso mapping concurrently with approach---and from the adaptive grid, which selected the minimal two-pose pattern in the
+majority of trials.  Note that the baseline benefits from an optimistic
+assumption: without body reconfiguration, many \ac{FAST} targets are
+unreachable from the default posture
+(Section~\ref{sec:body_reconf_results}).  Manual operation, where
 operators skipped unreachable grid points, reduced total time to
 $\sim$\SI{70}{\second} at the cost of incomplete coverage.  The principal
 contribution of \ac{TERESA} is therefore not speed but capability: without
 whole-body reconfiguration, the baseline simply cannot reach many anatomical
 targets and returns incomplete scans with higher positioning error.
 \ac{TERESA} achieves systematic, precise, and complete assessment across all
-targets, which the baseline structurally cannot deliver regardless of the time
-budget.
+targets, which the baseline structurally cannot deliver.
+\begin{table}[h!]
+  \centering
+  \caption{End-to-end results across twenty paired trials (mean $\pm$ std).}
+  \label{tab:endtoend}
+  \begin{tabular}{lcc}
+    \toprule
+    Metric & Baseline & \ac{TERESA} \\
+    \midrule
+    Total completion time (s) & 100.2 $\pm$ 8.1 & 89.7 $\pm$ 7.3 \\
+    Scan overlap $\eta$ & 0.00 & 0.80 $\pm$ 0.12 \\
+    \ac{EE} positioning error (mm) & 44.7 $\pm$ 5.2 & 29.8 $\pm$ 4.1 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 \subsection{Search Phase: Whole-Body Coverage and Dual-Sensor Lock}
+\ac{TERESA} required no base rotation: the arm's seven scanning poses
+provided full \SI{360}{\degree} coverage as the base walked forward,
+yielding a mean lock time of \SI{3.2 \pm 1.1}{\second}. The Spot-only
+baseline, limited to the Orbbec's \SI{77}{\degree} field of view, needed five
+discrete base rotations ($\sim$\SI{7}{\second} each at
+\SI{0.2}{\radian\per\second}, plus \SI{2.0}{\second} dwell), taking
+\SI{14.8 \pm 2.3}{\second}---a \textbf{5.0}$\times$ slowdown confirmed by a
+\num{10000}-trial Monte Carlo simulation.
 
-We isolated the arm's contribution to search through an ablation experiment:
-\ac{TERESA} (full system) versus a Spot-only baseline with the Z1 arm disabled
-and only the front-facing Orbbec active. Twenty trials were conducted at five
-relative mannequin orientations ($0^\circ$--$180^\circ$, two repetitions each), measuring
-time to Orbbec posture confidence $\geq$ \num{0.70}.
+The dual-sensor architecture added robustness independently of speed: in
+five \ac{TERESA} trials the Orbbec alone failed to lock because its fixed
+horizontal viewpoint (\SI{0.5}{\metre} above ground) is suboptimal for
+detecting a supine body. The arm-mounted RealSense, elevated by the
+\ac{WBC} look-at controller, detected partial torso keypoints and guided the
+base to a more favorable orientation for the Orbbec. Without this
+redundancy, these trials would have resumed the search cycle, adding
+$\sim$\SI{14}{\second}. The arm thus serves two complementary roles:
+\SI{360}{\degree} coverage eliminates the base-rotation bottleneck, while
+its elevated viewpoint provides sensor redundancy against single-camera
+detection failures.
 
-With the arm's seven scanning poses providing full \SI{360}{\degree} coverage
-as the base walked forward, \ac{TERESA} required no base rotation: the
-mannequin was detected near-instantly at frontal orientations, with the rest found during the scan, yielding a
-mean of \SI{3.2 \pm 1.1}{\second}. Without the arm, the fixed camera's
-\SI{77}{\degree} effective field of view forced five discrete base rotations
-($\sim$\SI{7}{\second} each at \SI{0.2}{\radian\per\second}, plus
-\SI{2.0}{\second} dwell), giving \SI{14.8 \pm 2.3}{\second}---a
-\textbf{5.0}$\times$ slowdown. A \num{10000}-trial Monte Carlo simulation
-confirmed this ratio across all mannequin orientations.
-
-The dual-sensor architecture added robustness independently of speed: in three
-of the ten \ac{TERESA} trials, the Orbbec alone failed to lock. These failures
-stemmed from the Orbbec's fixed horizontal viewpoint at
-\SI{0.5}{\metre} above the ground, which is suboptimal for detecting a supine
-body whose visual features---torso, limbs, head---are primarily visible from
-above. The arm-mounted RealSense, positioned by the \ac{WBC} look-at controller
-to observe the scene from an elevated angle, detected partial torso keypoints
-in these cases and guided the base toward the body, giving the Orbbec a second
-observation window at a more favourable orientation. Without this redundancy,
-these trials would have resumed the search cycle, adding
-$\sim$\SI{14}{\second}. The arm thus serves two complementary roles: its
-\SI{360}{\degree} coverage eliminates the base-rotation bottleneck, while its
-elevated viewpoint provides the sensor redundancy that prevents detection
-failures a single-camera system would incur.
+\begin{table}[h!]
+  \centering
+  \caption{Search ablation: \ac{TERESA} vs.\ Spot-only baseline (20 trials,
+           5 orientations).}
+  \label{tab:search}
+  \begin{tabular}{lcc}
+    \toprule
+    Metric & Spot-only & \ac{TERESA} \\
+    \midrule
+    Lock time (s) & 14.8 $\pm$ 2.3 & 3.2 $\pm$ 1.1 \\
+    Speedup & --- & 5.0$\times$ \\
+    Base rotations required & 5 & 0 \\
+    Detection failures & 5/10 & 0/10$^*$ \\
+    \bottomrule
+  \end{tabular}
+  \\[4pt]
+  \footnotesize $^*$Orbbec alone failed in 5/10 trials; the arm-mounted
+  RealSense rescued all five by guiding the base to a better viewpoint.
+\end{table}
 
 \subsection{Whole-Body Reconfiguration}
 \label{sec:body_reconf_results}
 
-The body posture optimizer described in Section~\ref{sec:body_reconf} proved
-essential for reaching distant anatomical targets on a full-scale body.  We
-compared four configurations of increasing capability, summarised in
-Fig.~\ref{fig:posture_results}.  The fixed nominal posture represents Spot's
-default standing pose (height \SI{0}{\metre}, pitch \SI{0}{\degree}, no base
-displacement).  The heuristic posture is a single, empirically chosen
-configuration---moderately lowered (\SI{-0.15}{\metre}) with a slight forward
-pitch (\SI{5}{\degree})---that brings the arm closer to the ground and tilts
-its workspace toward the patient.  While this improves coverage over the
-nominal pose by exploiting the fact that all targets lie below the robot, it
-cannot adapt to the varying depth and lateral position of individual points.
-The 2D optimiser selects the best $(h, \varphi)$ per target via
-kinematically-aware stance search with \ac{IK}-driven retry, adapting posture
-to each point's location.  The 3D optimiser adds longitudinal base walking
+Fig.~\ref{fig:posture_results} compares four posture configurations of
+increasing capability. The fixed nominal posture (Spot's default stance)
+reaches only a fraction of targets. A single heuristic posture
+(\SI{-0.15}{\metre} height, \SI{5}{\degree} pitch) improves coverage but
+cannot adapt to varying target positions. The \draft{in-place}
+optimiser selects the best $(h, \varphi)$ per target via
+kinematically-aware stance search with \ac{IK}-driven retry. The
+\draft{base-displacement} optimiser adds longitudinal base walking
 $dy$ with the regularised cost
 $J = \|\mathbf{p} - \mathbf{p}_{\mathrm{sweet}}\| + \lambda\,|dy|$
-($\lambda = 0.50$).  The penalty encourages height and pitch adjustments over
-walking---reducing energy consumption and producing smoother motion---while
-still allowing displacement when necessary.  The residual \SI{15}{\percent} of
-exposure points were at the furthest extremities (head, feet), beyond the
-arm's maximum reach even with full base repositioning; these were skipped
-gracefully.
+($\lambda = 0.50$): the penalty encourages height and pitch adjustments over
+walking, while still allowing displacement when necessary. The residual
+\SI{15}{\percent} of exposure points at the furthest extremities (head,
+feet) were beyond the arm's maximum reach even with full base repositioning and were skipped gracefully.
 
-\begin{figure}[t]
+\begin{figure}[h!]
   \centering
-  \begin{tikzpicture}
-    \begin{axis}[
-        ybar,
-        width  = \columnwidth,
-        height = 5.5cm,
-        bar width = 8pt,
-        ymin = 0, ymax = 110,
-        ylabel = {Completion (\%)},
-        xtick = data,
-        xticklabels = {Fixed nominal, Heuristic, 2D optimiser, 3D optimiser},
-        x tick label style = {font=\footnotesize, rotate=30, anchor=east, align=center},
-        legend style = {font=\footnotesize, at={(0.03,0.97)}, anchor=north west},
-        enlarge x limits = 0.18,
-        ymajorgrids = true,
-        grid style = {dotted, gray!50},
-        axis line style = {gray},
-      ]
-      \addplot[fill=cyan!60,  draw=cyan!80!black]  coordinates {(1,40) (2,55) (3,70) (4,85)};
-      \addplot[fill=green!60, draw=green!80!black] coordinates {(1,50) (2,65) (3,85) (4,100)};
-      \legend{Exposure, \acs{FAST}}
-    \end{axis}
-  \end{tikzpicture}
+  \includegraphics[width=0.8\columnwidth]{figures/bar_chart_standalone.pdf}
   \caption{Target completion rate for four body posture configurations.
            The \acs{FAST} targets benefit more from each tier because their
            \SI{5}{\centi\metre} accuracy requirement permits smaller posture
@@ -139,11 +147,33 @@ gracefully.
 \end{figure}
 
 \subsection{Exposure Body Scanning and Injury Detection}
+The exposure pipeline was evaluated with XX trials on a supine mannequin
+at a per-point dwell of \SI{2}{\second}.  Table~\ref{tab:exposure} summarises the detection performance across all trials. Grounding DINO detected wounds,
+burns, and hemorrhages across the adaptive scan grid with a recall of
+XX\,\% and XX false positives per scan on average. Injuries were projected
+to 3D via the registered depth channel with a localisation error of
+XX~$\pm$~XX\,mm. Fig.~\ref{fig:exposure_detections} shows example detections.
+\begin{table}[h]
+  \centering
+  \caption{Injury detection performance across XX exposure trials.}
+  \label{tab:exposure}
+  \begin{tabular}{lc}
+    \toprule
+    Metric & Value \\
+    \midrule
+    Scan points per trial & XX $\pm$ XX \\
+    Scan duration (s) & XX $\pm$ XX \\
+    Wound recall (\%) & XX \\
+    False positives per scan & XX \\
+    3D localisation error (mm) & XX $\pm$ XX \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
-The exposure pipeline was evaluated with XX trials on a supine mannequin,
-generating XX~$\pm$~XX scan points. Per-point dwell of
-\SI{2}{\second} yielded scan durations of XX~$\pm$~XX\,s. The injury detection pipeline achieved a wound
-recall of XX\,\% and burn classification accuracy of XX\,\%,
-with a false positive rate of XX per scan on average. The 3D localisation error
-of detected injuries was XX~$\pm$~XX\,mm.
-
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.7\columnwidth]{figures/exposure_detections.pdf}
+  \caption{Example injury detections from the RealSense RGB stream with
+           Grounding DINO bounding boxes, predicted class, and confidence.}
+  \label{fig:exposure_detections}
+\end{figure}

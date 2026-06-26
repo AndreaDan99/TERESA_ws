@@ -22,11 +22,17 @@
 \usepackage{acronym}      % \ac{}, \acf{}, \acp{}
 \usepackage{tikz}
 \usepackage{pgfplots}
+\usepackage{dblfloatfix}
+\usepackage{float}
 \pgfplotsset{compat=1.15}
 \usetikzlibrary{arrows.meta, automata, positioning, shapes.geometric,
                 fit, calc, backgrounds}
-
+\usepackage{algorithm}
+\usepackage{algorithmic}
 % ── Macros ──────────────────────────────────────────────────
+\newif\ifdraftmode
+%\draftmodetrue   % comment this line to hide red markup
+\newcommand{\draft}[1]{\ifdraftmode\textcolor{red}{#1}\else#1\fi}
 \newcommand{\R}[1]{\mathbb{R}^{#1}}
 \newcommand{\vdes}{\mathbf{v}_{\mathrm{des}}}
 \newcommand{\Jarm}{\mathbf{J}_{\mathrm{arm}}}
@@ -70,15 +76,11 @@ emergency assessment, mobile manipulation, body reconfiguration.
 % ── System Overview Figure ────────────────────────────────────
 \begin{figure}[t]
   \centering
-  \includegraphics[scale=0.50]{figures/system_overview_annotated.png}
-  \caption{The \ac{TERESA} system during the exposure scanning phase. The Spot
-           quadruped base (left) carries the Z1 manipulator with a wrist-mounted
-           Intel RealSense D415 for close-range torso tracking and a body-mounted
-           Orbbec Femto Bolt for wide-field patient detection. The web-based
-           Body Map interface (background) renders the real-time skeleton, body
-           region boundaries, and exposure scan grid. The dashed orange arrow
-           marks the exposure path from the RealSense to a burn scar on the
-           patient's torso.}
+  \includegraphics[scale=0.60]{figures/system_overview_annotated.png}
+  \caption{The \ac{TERESA} system during the exposure scanning phase: Spot
+           quadruped (left) with Z1 arm carrying a wrist-mounted RealSense D415
+           for close-range torso tracking and a body-mounted Orbbec Femto Bolt
+           for wide-field patient detection.}
   \label{fig:system_overview}
 \end{figure}
 

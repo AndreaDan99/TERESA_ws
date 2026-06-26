@@ -3,24 +3,21 @@
 % ============================================================
 \section{Conclusion}
 \label{sec:conclusion}
+\draft{This paper presented \ac{TERESA}, a legged mobile manipulation
+system that treats body posture as an active perceptual resource, enabling a
+single platform to search, approach, scan, and perform ultrasound on an
+unknown patient.}
 
-This paper presented \ac{TERESA}, a legged mobile manipulator for autonomous
-emergency assessment. The core contribution is a whole-body active perception
-framework that treats body posture---height, pitch, and yaw---as a perceptual
-resource, closing the perception-action loop at the whole-body level.
-Experiments on the physical Spot+Z1 platform demonstrated that the arm's
-\SI{360}{\degree} coverage accelerates search by a factor of five over a
-fixed-camera baseline, the dual-sensor lock prevents single-camera detection
-failures, anticipatory scanning eliminates idle time by completing the body
-scan concurrently with approach, and body reconfiguration lifts anatomical
-target completion from \SI{40}{\percent} to \SI{100}{\percent} for \ac{FAST}
-targets.  The exposure pipeline integrates zero-shot wound detection with an
-interactive web-based review interface.
+\draft{This work shows that the manipulator arm simultaneously serves
+as a tool for interaction and perception---a duality amplified by legged
+posture. \ac{TERESA} exploits this coupling through posture-perception
+co-design rather than explicit modelling, a practical strategy for legged
+robots operating beyond structured settings.}
 
-Several limitations remain: the system assumes a single stationary mannequin on
-flat terrain; ultrasound image quality and clinical scanning pressure were not
-evaluated; and injury detection relies on pre-trained models whose performance
-may vary across wound types and skin tones.  Future work will extend
-\ac{TERESA} to multi-patient scenarios, clinical ultrasound acquisition with
-impedance-controlled probe contact, and ultimately the full \ac{ABCDE}
-protocol, providing a complete autonomous primary survey for emergency triage.
+\draft{In future work, we would like to extend \ac{TERESA} to
+multi-patient scenarios and the full \ac{ABCDE} protocol. The existing
+platform can support the remaining components without architectural changes:
+airway inspection and chin-lift via the impedance controller, a digital
+stethoscope for breathing, a pulse oximeter for circulation, and pupillary
+response analysis for disability. These steps would bring autonomous
+emergency triage closer to field deployment.}

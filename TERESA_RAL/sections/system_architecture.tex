@@ -1,26 +1,42 @@
 % ============================================================
 %  IV. SYSTEM ARCHITECTURE
 % ============================================================
+
 \section{System Architecture}
 \label{sec:system_architecture}
 
-The \ac{TERESA} system is organised into four layers---hardware, perception,
-mission management, and control---communicating over \ac{ROS}~2 with
-\ac{DDS}.
-
+The \ac{TERESA} system integrates heterogeneous hardware and software
+components over \ac{ROS}~2 with \ac{DDS}. This section describes how these
+components are connected into a deployable field system, from the physical
+platform through the coordination layer to the remote monitoring interface.
 \subsection{Hardware Platform}
-
-The hardware platform, shown in Fig.~\ref{fig:system_overview}, carries two
-\ac{RGBD} cameras with complementary roles. An Orbbec Femto Bolt is body-mounted
-for wide-field patient detection at distances up to \SI{3}{\metre}. An Intel
-RealSense D435 is mounted at the Z1 \ac{EE} and positioned by the arm's look-at
-controller as an active pan-tilt unit for close-range torso tracking and surface
-estimation. Spot's five built-in stereo cameras are positioned low on the body
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{figures/cad_callouts.pdf}
+  \caption{Mechanical integration of the Z1 arm, Orbbec Femto Bolt, RealSense D415, and auxiliary battery onto Spot's payload frame.}
+  \label{fig:cad_assembly}
+\end{figure}
+\draft{The \ac{TERESA} hardware platform builds on \emph{Spotzi}. To this base
+configuration we added an Orbbec Femto Bolt body-mounted RGB-D camera for
+wide-field patient detection, an Intel RealSense D415 wrist-mounted at
+the Z1 end-effector for close-range torso inspection, an auxiliary
+battery pack that powers the Z1 and the Orbbec independently of Spot's
+internal supply, and an NVIDIA Jetson Orin AGX for onboard perception and
+control. The entire assembly was designed in Fusion 360
+(Fig.~\ref{fig:cad_assembly}) with a modular bracket system that allows components to be
+easily swapped, removed, or extended without modifying the underlying
+structure.
+The centre of mass is placed slightly rearward of Spot's geometric centre
+to counterbalance the arm's forward displacement when extended toward the
+patient.} \draft{Several candidate arms were evaluated within the Fusion 360
+assembly; the Z1 was selected for its light weight and compact form factor,
+which preserve Spot's payload margin for the onboard computer and sensors
+while avoiding interference with the base during locomotion.} Spot's five built-in stereo cameras are positioned low on the body
 for ground-plane obstacle avoidance and are not suitable for skeleton detection.
-Computation is distributed across two units: Spot's onboard computer SpotCore
+\draft{Computation is distributed across two units: Spot's onboard computer
 handles base control and odometry, while an NVIDIA Jetson Orin AGX runs
-perception, arm control, mission coordination, and \ac{WBC} via Docker
-containers with CUDA 11.4.
+perception, arm control, task coordination, and \ac{WBC} via Docker
+containers with CUDA 11.4.}
 
 %\subsection{Frame Tree}
 %
@@ -44,104 +60,55 @@ containers with CUDA 11.4.
 %           chain.}
 %  \label{fig:frame_tree}
 %\end{figure}
-
-\subsection{Mission Management and System Integration}
-
-The mission is orchestrated by a 13-state \ac{FSM}
-(Fig.~\ref{fig:fsm}), organised into the four phases of
-Section~\ref{sec:problem_formulation}. After Waiting TF and Idle ensure system
-readiness, the \ac{FSM} enters Phase~A (Searching). The robot first walks the base
-forward while adjusting body pitch to bring the patient into the cameras' field
-of view---this is the SEARCHING state. When the RealSense detects a potential
-torso, the system uses that coarse guidance to walk toward the detection and
-adjust pitch, giving the Orbbec a clean observation window; we call this
-SEMI\_LOCKING. If the Orbbec then confirms a lying patient with high
-confidence, the system advances to LOCKING, where the NLF pipeline produces a
-refined 3D skeleton and the coordinator collects approach point estimates.
-Timeouts at any point revert to SEARCHING, ensuring the robot does not commit
-to a false detection.
-
-Phase~B (Approaching) begins once a stable lock is achieved. The robot first
-drives toward the target while the anticipatory body scanner builds the torso
-model---a state we call PRE\_APPROACH---then transitions to APPROACHING, where
-the \ac{WBC} \ac{QP} coordinates base velocity and arm look-at control
-concurrently, keeping the camera on the patient throughout the approach.
-
-Phase~C (Exposure) starts after the approach handoff. An optional Waiting
-Exposure gate lets the operator confirm before the scan begins. The system then
-enters EXPOSURE\_SCANNING, executing a multi-view body surface inspection with
-Grounding DINO injury detection at each grid point. Once the sweep is complete,
-the \ac{FSM} moves to EXPOSURE\_REVIEW: the operator can click any grid point
-in the web interface to trigger a full re-positioning and re-inspection,
-remaining in this state until explicitly terminated.
-
-Phase~D (\acs{FAST}) follows, with an analogous Waiting FAST gate for manual
-confirmation. The SCANNING state executes ultrasound acquisition under
-pre-planned body reconfiguration, one target at a time. When a target is
-kinematically unreachable from the current posture, the system temporarily
-enters WS\_EXTENSION, walking the base along the patient's body to extend the
-workspace, then loops back to SCANNING with the new \ac{IK} solution.
-
-Transitions are triggered by perception confidence (dashed edges in
-Fig.~\ref{fig:fsm}) or geometric conditions (solid edges); the mission
-completes by returning to Idle.
-
-Fig.~\ref{fig:system_block} shows the complete system architecture in six
-layers.  The Orbbec and RealSense \ac{RGBD} streams feed the Perception layer,
-which runs YOLO-pose skeleton detection, Kalman-filtered 3D back-projection,
-NLF 3D body pose estimation, surface estimation, and Grounding DINO injury
-detection.  Perception outputs route to the 13-state Mission \ac{FSM}, which
-enables four Planning modules: the Exposure Scanner, the \ac{FAST} Ultrasound
-planner, the Body Pose Optimizer, and the Web UI for interactive review.  The
-Control layer translates plans into actuation: the \ac{WBC} \ac{QP} publishes
-base velocity $[v_x,\,\omega_z]$ to Spot and arm goals to the \ac{IK} Goal
-Multiplexer; the Impedance Controller manages compliant contact during
-\ac{FAST} scanning, publishing joint torques $\boldsymbol{\tau}$ directly to
-the Z1.  The Z1 \ac{FSM} manages the arm's internal state
-transitions---homing, look-at tracking, scanning trajectory execution, and
-impedance-controlled contact---and synchronises with the \ac{WBC} coordinator.
-Dashed arrows in the diagram denote operator-triggered or posture-optimisation
-paths.  An emergency stop immediately halts the base and returns the arm to a
-safe configuration.
-
-\begin{figure*}[t]
+\subsection{Software Architecture}
+\begin{figure}[h]
   \centering
-  \resizebox{\textwidth}{!}{\input{figures/fsm}}
-  \caption{Mission \ac{FSM} with 13 states. Dashed transitions are
-           perception-driven; solid transitions are geometry-driven.}
-  \label{fig:fsm}
-\end{figure*}
-
-\begin{figure}[t]
-  \centering
-  \resizebox{\columnwidth}{!}{\input{figures/system_block}}
-  \caption{System block diagram. The six-layer architecture spans sensors,
-           perception, mission \ac{FSM}, planning, control, and hardware.
-           Dashed arrows denote operator-triggered or posture-optimisation
-           paths.}
+  \includegraphics[width=\columnwidth]{figures/system_block_standalone.pdf}
+  \caption{System block diagram. The architecture spans sensors, perception,
+           \ac{FSM}, planning, control, and hardware. Dashed arrows denote
+           operator-triggered or posture-optimisation paths.}
   \label{fig:system_block}
 \end{figure}
 
-\subsection{Web-Based Operator Interface}
+\begin{figure*}[h]
+  \centering
+  \includegraphics[width=0.9\textwidth]{figures/fsm_standalone.pdf}
+  \caption{\ac{FSM} with 13 states. Dashed transitions are perception-driven;
+           solid transitions are geometry-driven.}
+  \label{fig:fsm}
+\end{figure*}
 
-Full autonomy in emergency assessment is neither feasible nor desirable: the
-operator must retain the ability to override or re-inspect regions of clinical
-interest. \ac{TERESA} bridges this gap with a web interface that translates a
-single 2D click on the Body Map into a 3D whole-body repositioning
-command---posture optimisation, base navigation, and arm trajectory
-replay---without manual teleoperation.
+Fig.~\ref{fig:system_block} shows the complete system architecture. The Orbbec
+and RealSense RGB-D streams feed the Perception layer, which runs YOLO-pose
+skeleton detection, Kalman-filtered 3D back-projection, NLF 3D body pose
+estimation, surface estimation, and Grounding DINO injury detection. Perception
+outputs route to the 13-state \ac{FSM}, which enables four Planning modules: the
+Exposure Scanner, the \ac{FAST} Ultrasound planner, the Body Pose Optimizer, and
+the Web UI for interactive review. The Control layer translates plans into
+actuation: the \ac{WBC} \ac{QP} publishes base velocity $[v_x,\,\omega_z]$ to
+Spot and arm goals to the \ac{IK} Goal Multiplexer; the Impedance Controller
+manages compliant contact during \ac{FAST} scanning, publishing joint torques
+$\boldsymbol{\tau}$ directly to the Z1. The Z1 \ac{FSM} manages the arm's
+internal state transitions---homing, look-at tracking, scanning trajectory
+execution, and impedance-controlled contact---and synchronises with the
+\ac{WBC} coordinator. Dashed arrows in the diagram denote operator-triggered or
+posture-optimisation paths. An emergency stop immediately halts the base and
+returns the arm to a safe configuration.
 
-The \ac{TERESA} web interface provides dual-camera monitoring and robot control
-via a browser-based dashboard. During exposure
-review, the RealSense overlay renders the scan grid as clickable markers; each
-click triggers a full re-positioning sequence---posture optimisation, settle,
-and \ac{IK} trajectory replay---within the same \ac{ROS}~2 topic protocol used
-for autonomous operation. A manual/automatic scan gate toggle allows the
-operator to require explicit confirmation before advancing between mission
-phases. All web commands are mirrored on the keyboard controller for
-redundancy. Fig.~\ref{fig:web_interface} shows the interface during review.
+\subsection{Mission Management}
+The four assessment phases of Section~\ref{sec:problem_formulation} are
+orchestrated by a 13-state \ac{FSM} (Fig.~\ref{fig:fsm}). After Waiting TF and
+Idle ensure system readiness, the \ac{FSM} advances through Searching (Phase~1),
+Approaching (Phase~2), Exposure (Phase~3), and \acs{FAST} (Phase~4).
+Perception confidence triggers dashed transitions; geometric conditions drive
+solid edges. Timeouts at any point revert to the search, preventing commitment
+to false detections. The \ac{FSM} serves as a pragmatic integration layer that
+sequences the methods of Section~\ref{sec:active_perception} into a deployable
+field system; alternative orchestration paradigms could extend this approach in
+future work.
 
-\begin{figure}[t]
+\subsection{Remote Monitoring}
+\begin{figure}[h]
   \centering
   \includegraphics[width=\columnwidth]{figures/Web_interface}
   \caption{Web-based operator interface during the exposure scanning phase. The
@@ -153,3 +120,21 @@ redundancy. Fig.~\ref{fig:web_interface} shows the interface during review.
            region.}
   \label{fig:web_interface}
 \end{figure}
+Full autonomy in emergency assessment is neither feasible nor desirable: the
+remote operator must retain the ability to override or re-inspect regions of
+clinical interest. \draft{\ac{TERESA} bridges this gap with a web
+interface that displays a top-down view of the patient mannequin and scan
+grid---the Body Map. A single click on any grid marker in this map translates
+into a 3D whole-body repositioning command (posture optimisation, base
+navigation, and arm trajectory replay) without manual teleoperation.}
+
+The \ac{TERESA} web interface provides dual-camera monitoring and robot control
+via a browser-based dashboard. During exposure review, the RealSense overlay
+renders the scan grid as clickable markers; each click triggers a full
+re-positioning sequence---posture optimisation, settle, and \ac{IK} trajectory
+replay---within the same \ac{ROS}~2 topic protocol used for autonomous
+operation. \draft{A manual/automatic scan gate toggle allows the
+operator to require explicit confirmation before advancing between phases.}
+All web commands are mirrored on the keyboard controller for redundancy.
+Fig.~\ref{fig:web_interface} shows the interface during review.
+
