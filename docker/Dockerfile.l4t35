@@ -221,8 +221,12 @@ LABEL hardware="realsense-d435, orbbec-femto-bolt, unitree-z1"
 
 # ── Stage 9: Fix missing deps ──────────────────────────────────────────
 # xacro is needed by Z1 bringup (z1.launch.py processes .xacro URDF files)
+# NOTE: ros-humble-xacro apt package installs for Python 3.10 only;
+#       pip install is needed for the system Python (3.13).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-xacro \
+    && pip3 install xacro \
+    && python3 -c "import xacro; print('xacro OK')" \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ── Entrypoint ──────────────────────────────────────────────────────────
