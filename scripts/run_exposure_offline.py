@@ -48,6 +48,21 @@ import torchvision  # noqa: F401 — needed by NLF TorchScript model
 from PIL import Image
 
 # ═══════════════════════════════════════════════════════════════════════
+#  Jetson TorchScript workaround (from bench_nlf.py)
+#  Without this, the 2nd NLF forward pass deadlocks on Orin.
+# ═══════════════════════════════════════════════════════════════════════
+torch._C._jit_set_profiling_executor(False)
+torch._C._jit_set_profiling_mode(False)
+for _fn, _a in [("_jit_set_texpr_fuser_enabled", False),
+                ("_jit_override_can_fuse_on_gpu", False),
+                ("_jit_override_can_fuse_on_cpu", False),
+                ("_jit_set_nvfuser_enabled", False)]:
+    try:
+        getattr(torch._C, _fn)(_a)
+    except Exception:
+        pass
+
+# ═══════════════════════════════════════════════════════════════════════
 #  Constants — identical to the ROS2 nodes
 # ═══════════════════════════════════════════════════════════════════════
 
