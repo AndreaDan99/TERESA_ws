@@ -393,13 +393,14 @@ class ExposureReviewApp {
   }
 
   _computeSpotPose() {
-    // Spot beside body at pelvis height (to the right, positive X)
+    // Spot behind the body (negative X, like test_exposure_poses.py: center_x - 0.60)
     if (this.skeleton.length < 24) return;
     const pelvis = this.skeleton[0]; // PELVIS
-    let maxX = -Infinity;
-    for (const j of this.skeleton) { if (!isNaN(j.x)) maxX = Math.max(maxX, j.x); }
+    let minX = Infinity, maxX = -Infinity;
+    for (const j of this.skeleton) { if (!isNaN(j.x)) { minX = Math.min(minX, j.x); maxX = Math.max(maxX, j.x); } }
+    const bodyCenterX = (minX + maxX) / 2;
     this.spotPose = {
-      x: maxX + 0.20,  // 20 cm to the right of the body
+      x: bodyCenterX - 0.60,  // 60 cm behind body center (same as test_exposure_poses.py)
       y: pelvis.y,
       yaw: 0.0
     };
