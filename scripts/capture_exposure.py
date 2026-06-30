@@ -168,20 +168,16 @@ class ExposureCapture(Node):
 
     # ── TTY mode (terminal, no display) ────────────────────────
 
-    def _tick_process_save(self):
-        """Process pending saves on the main thread (has fresh frames)."""
-        if self._pending_wide:
-            self._pending_wide = False
-            self._save_wide()
-        if self._pending_close_up:
-            self._pending_close_up = False
-            self._save_close_up()
-
     def _stdin_loop(self):
         """Read stdin line-by-line in a background thread."""
         while self._running:
-            if select.select([sys.stdin], [], [], 0.2)[0]:
-                line = sys.stdin.readline().strip().lower()
+            if select.select([sys.stdin], [], [], 0.3)[0]:
+                line = sys.stdin.readline()
+                # EOF (stdin closed) → empty string before stripping
+                if not line:
+                    time.sleep(0.3)
+                    continue
+                line = line.strip().lower()
                 if line == 'w':
                     self._pending_wide = True
                 elif line == 'q':
@@ -189,7 +185,15 @@ class ExposureCapture(Node):
                     return
                 elif line == '':
                     self._pending_close_up = True
-                # else: ignore
+
+    def _tick_process_save(self):
+        """Process pending saves on main thread where frames are fresh."""
+        if self._pending_wide:
+            self._pending_wide = False
+            self._save_wide()
+        if self._pending_close_up:
+            self._pending_close_up = False
+            self._save_close_up()
 
     def _tick_tty_status(self):
         """Periodic status print."""
