@@ -276,7 +276,7 @@
   body.screenshot-mode .gdino-pct { font-size: 12px; }
   body.screenshot-mode .gdino-cam { font-size: 17px; }
   body.screenshot-mode .review-wound-chip { font-size: 16px; padding: 8px 18px; }
-  body.screenshot-mode #review-notes { font-size: 14px; height: 80px; }
+  body.screenshot-mode #review-notes { font-size: 15px; height: 100px; line-height: 1.5; }
   body.screenshot-mode #btn-goto-wound { font-size: 16px; padding: 12px; }
   body.screenshot-mode .metric-card .m-val { font-size: 22px; }
   body.screenshot-mode .metric-card .m-label { font-size: 11px; }
@@ -357,10 +357,10 @@
     <div class="section" id="review-section">
       <h3>📝 Remote Operator Revision</h3>
       <textarea id="review-notes" placeholder="Remote operator notes..."
-        style="width:100%;height:72px;resize:vertical;font-family:var(--font);font-size:12px;
+        style="width:100%;height:90px;resize:vertical;font-family:var(--font);font-size:13px;line-height:1.5;
                background:var(--bg);color:var(--text);border:1px solid var(--border);
-               border-radius:6px;padding:8px;outline:none"
-        oninput="app.reviewNotes = this.value">Deep laceration with severe tissue damage observed on the upper left chest. Wound edges are irregular with active bleeding — estimated blood loss is significant. Surrounding skin shows early signs of infection (redness, swelling). Requires urgent surgical debridement and hemostasis within 2 hours. High risk of sepsis if left untreated. Reviewed twice — Spot repositioned for closer inspection.</textarea>
+               border-radius:6px;padding:10px;outline:none"
+        oninput="app.reviewNotes = this.value">Deep laceration with severe tissue damage observed on upper left chest. Wound edges irregular with active bleeding — estimated blood loss is significant. Surrounding skin shows early signs of infection (redness, swelling). Requires urgent surgical debridement and hemostasis within 2 hours. High risk of sepsis if left untreated. Reviewed twice — Spot repositioned for closer inspection.</textarea>
       <div style="margin-top:8px">
         <h3 style="margin-bottom:6px">🔁 Review Points</h3>
         <table id="review-table" style="width:100%;border-collapse:collapse">
