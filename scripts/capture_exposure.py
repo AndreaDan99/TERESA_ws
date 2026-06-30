@@ -33,7 +33,6 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, CameraInfo
-from cv_bridge import CvBridge
 from rclpy.qos import qos_profile_sensor_data
 
 HAS_DISPLAY = os.environ.get('DISPLAY', '') != ''
@@ -42,7 +41,6 @@ HAS_DISPLAY = os.environ.get('DISPLAY', '') != ''
 class ExposureCapture(Node):
     def __init__(self, out_dir):
         super().__init__('exposure_capture')
-        self.bridge = CvBridge()
         self.out_dir = Path(out_dir)
         self.close_up_dir = self.out_dir / 'close_up'
         self.close_up_dir.mkdir(parents=True, exist_ok=True)
@@ -98,20 +96,26 @@ class ExposureCapture(Node):
 
     def _cb_rs_color(self, msg):
         try:
-            self._rs_color = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+            # Direct numpy decode — bypasses cv_bridge for reliability
+            data = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
+            if msg.encoding == 'rgb8':
+                self._rs_color = cv2.cvtColor(data, cv2.COLOR_RGB2BGR)
+            elif msg.encoding == 'bgr8':
+                self._rs_color = data
+            else:
+                self._rs_color = data
             self._frame_count = getattr(self, '_frame_count', 0) + 1
         except Exception as e:
             if not getattr(self, '_cb_rs_err_logged', False):
-                self.get_logger().error(f'cv_bridge error (color): {e}')
+                self.get_logger().error(f'decode error (color): {e}')
                 self._cb_rs_err_logged = True
 
     def _cb_rs_depth(self, msg):
         try:
-            self._rs_depth = self.bridge.imgmsg_to_cv2(
-                msg, desired_encoding='passthrough')
+            self._rs_depth = np.frombuffer(msg.data, dtype=np.uint16).reshape(msg.height, msg.width)
         except Exception as e:
             if not getattr(self, '_cb_depth_err_logged', False):
-                self.get_logger().error(f'cv_bridge error (depth): {e}')
+                self.get_logger().error(f'decode error (depth): {e}')
                 self._cb_depth_err_logged = True
 
     def _cb_rs_info(self, msg):
