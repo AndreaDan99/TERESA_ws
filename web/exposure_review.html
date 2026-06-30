@@ -217,6 +217,10 @@
   <button id="btn-load-gt" onclick="app.loadGT()">📁 Carica GT</button>
   <button id="btn-load-preds" onclick="app.loadPredictions()">📁 Carica preds</button>
   <span class="sep">|</span>
+  <input type="text" id="img-base-url" placeholder="percorso immagini (es. /work/exposure/exp_01/)"
+         style="background:var(--bg);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:10px;padding:3px 8px;border-radius:4px;width:220px;outline:none"
+         onchange="app.setImgBase(this.value)">
+  <span class="sep">|</span>
   <button id="btn-save" class="primary" onclick="app.save()">💾 Salva</button>
   <span class="sep">|</span>
   <button id="btn-screenshot" onclick="app.toggleScreenshot()">📸 Screenshot mode</button>
@@ -369,6 +373,7 @@ class ExposureReviewApp {
     this.detections = [];        // from predictions.json
     this.skeleton = [];          // 24 points {x,y,z} in metres
     this.spotPose = {x:0, y:0, yaw:0};
+    this.imgBaseUrl = '';        // base path for experiment images
 
     // Display toggles
     this.showSkel = true;
@@ -865,7 +870,16 @@ class ExposureReviewApp {
     let html = '';
     for (const gt of this.groundTruth) {
       if (gt.gdinoMatch != null) {
-        html += `<span style="color:var(--accent)">● ${gt.id}:</span> ${gt.gdinoLabel} ${Math.round(gt.gdinoScore*100)}% <span style="color:var(--text-dim);font-size:9px">(D${gt.gdinoMatch})</span><br>`;
+        const det = this.detections.find(d => d.id === gt.gdinoMatch);
+        const imgHint = det ? this._getOverlayPath(det) : '';
+        html += `<div style="margin-bottom:2px">`;
+        html += `<span style="color:var(--accent);cursor:pointer" onclick="app._toggleCrop('${gt.id}')">● ${gt.id}:</span> ${gt.gdinoLabel} ${Math.round(gt.gdinoScore*100)}% <span style="color:var(--text-dim);font-size:9px">(D${gt.gdinoMatch})</span>`;
+        html += ` <span style="cursor:pointer;font-size:12px" onclick="app._toggleCrop('${gt.id}')" title="Mostra foto">📸</span>`;
+        html += `</div>`;
+        html += `<div id="crop-${gt.id}" style="display:none;margin:2px 0 8px 14px;position:relative">`;
+        html += `<img src="" data-src="${imgHint}" alt="" style="max-width:280px;border-radius:4px;border:1px solid var(--border)" onerror="this.alt='Immagine non disponibile';this.style.display='none'">`;
+        html += `<div style="font-size:9px;color:var(--text-dim);margin-top:2px">${det ? det.source : ''}</div>`;
+        html += `</div>`;
       } else if (hasPredictions) {
         html += `<span style="color:var(--danger)">● ${gt.id}:</span> — <span style="color:var(--danger)">missed</span><br>`;
       } else {
@@ -873,6 +887,47 @@ class ExposureReviewApp {
       }
     }
     el.innerHTML = html;
+
+    // Lazy-load images after render
+    for (const gt of this.groundTruth) {
+      if (gt.gdinoMatch == null) continue;
+      const container = document.getElementById('crop-' + gt.id);
+      if (!container) continue;
+      const img = container.querySelector('img');
+      if (img && img.dataset.src) {
+        img.src = img.dataset.src;
+      }
+    }
+  }
+
+  setImgBase(url) {
+    this.imgBaseUrl = url.replace(/\/?$/, '/');  // ensure trailing slash
+  }
+
+  _getOverlayPath(det) {
+    // Build the path to the overlay image for this detection's source photo
+    const src = det.source || '';
+    const base = this.imgBaseUrl;
+    if (src === 'wide') {
+      return base + 'wide_overlay.jpg';
+    }
+    // 01_color.png → close_up/overlays/01_overlay.jpg or 01_color_overlay.jpg
+    const stem = src.replace(/\.(png|jpg)$/i, '').replace('_color', '');
+    return base + 'close_up/overlays/' + stem + '_overlay.jpg';
+  }
+
+  _toggleCrop(gtId) {
+    const el = document.getElementById('crop-' + gtId);
+    if (!el) return;
+    if (el.style.display === 'none') {
+      el.style.display = 'block';
+      const img = el.querySelector('img');
+      if (img && img.dataset.src && !img.src) {
+        img.src = img.dataset.src;
+      }
+    } else {
+      el.style.display = 'none';
+    }
   }
 
   _updateMetrics() {
