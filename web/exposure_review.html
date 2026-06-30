@@ -238,7 +238,7 @@
   <span class="sep">|</span>
   <input type="text" id="img-base-url" placeholder="percorso immagini (es. /work/exposure/exp_01/)"
          style="background:var(--bg);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:10px;padding:3px 8px;border-radius:4px;width:220px;outline:none"
-         onchange="app.setImgBase(this.value)">
+         oninput="app.setImgBase(this.value)">
   <span class="sep">|</span>
   <button id="btn-save" class="primary" onclick="app.save()">💾 Salva</button>
   <span class="sep">|</span>
@@ -916,7 +916,7 @@ class ExposureReviewApp {
     if (el.style.display === 'none') {
       el.style.display = 'block';
       const img = el.querySelector('img');
-      if (img && img.dataset.src && !img.src) {
+      if (img && img.dataset.src && img.getAttribute('src') !== img.dataset.src) {
         img.src = img.dataset.src;
       }
     } else {
@@ -947,7 +947,7 @@ class ExposureReviewApp {
     if (el.style.display === 'none') {
       el.style.display = 'block';
       const img = el.querySelector('img');
-      if (img && img.dataset.src && !img.src) {
+      if (img && img.dataset.src && img.getAttribute('src') !== img.dataset.src) {
         img.src = img.dataset.src;
       }
     } else {
