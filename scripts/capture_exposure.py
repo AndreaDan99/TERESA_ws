@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-capture_exposure.py — TERESA exposure photo capture (ROS service trigger).
+capture_exposure.py — TERESA exposure photo capture.
 
-Trigger via ROS2 service from another terminal:
-  ros2 service call /capture/trigger std_srvs/srv/Trigger   → close-up
-  ros2 service call /capture/trigger std_srvs/srv/Trigger "{data: 'w'}"  → wide
-  ros2 service call /capture/trigger std_srvs/srv/Trigger "{data: 'q'}"  → quit
+Minimal: spin_once loop + non-blocking stdin.
+  [w+ENTER] = wide shot
+  [ENTER]   = close-up
+  [q+ENTER] = quit
 
 Usage (inside teresa_gpu):
   source /opt/ros/humble/install/setup.bash
@@ -13,7 +13,8 @@ Usage (inside teresa_gpu):
 """
 
 import argparse
-import time
+import select
+import sys
 from pathlib import Path
 
 import cv2
@@ -22,160 +23,109 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, CameraInfo
 from rclpy.qos import qos_profile_sensor_data
-from std_srvs.srv import Trigger
 
 
 class ExposureCapture(Node):
     def __init__(self, out_dir):
         super().__init__('exposure_capture')
         self.out_dir = Path(out_dir)
-        self.close_up_dir = self.out_dir / 'close_up'
-        self.close_up_dir.mkdir(parents=True, exist_ok=True)
+        self.cu_dir = self.out_dir / 'close_up'
+        self.cu_dir.mkdir(parents=True, exist_ok=True)
 
-        self._rs_color = None
-        self._rs_depth = None
-        self._rs_info = None
-        self._counter = 1
-        self._frame_count = 0
+        self._color = None
+        self._depth = None
+        self._info = None
+        self._counter = 0
+        self._frame_n = 0
 
-        # Subscribers
-        self._sub_rs_color = self.create_subscription(
-            Image, '/camera/camera/color/image_raw', self._cb_rs_color,
-            qos_profile_sensor_data)
-        self._sub_rs_depth = self.create_subscription(
+        self._sub_color = self.create_subscription(
+            Image, '/camera/camera/color/image_raw', self._on_color, qos_profile_sensor_data)
+        self._sub_depth = self.create_subscription(
             Image, '/camera/camera/aligned_depth_to_color/image_raw',
-            self._cb_rs_depth, qos_profile_sensor_data)
-        self._sub_rs_info = self.create_subscription(
-            CameraInfo, '/camera/camera/color/camera_info',
-            self._cb_rs_info, qos_profile_sensor_data)
+            self._on_depth, qos_profile_sensor_data)
+        self._sub_info = self.create_subscription(
+            CameraInfo, '/camera/camera/color/camera_info', self._on_info, qos_profile_sensor_data)
 
-        # Camera info auto-save
-        self.create_timer(2.0, self._try_save_camera_info)
-        # Status
-        self.create_timer(4.0, self._tick_status)
+        print(f'📸 TERESA Exposure Capture\n'
+              f'   Out: {self.out_dir}\n'
+              f'   [w+ENTER]=wide  [ENTER]=close-up  [q+ENTER]=quit\n')
 
-        # ROS2 services for capture trigger (Trigger has no request fields in Humble)
-        self._srv_cu = self.create_service(Trigger, '/capture/close_up', self._on_close_up)
-        self._srv_wide = self.create_service(Trigger, '/capture/wide', self._on_wide)
-        self._srv_quit = self.create_service(Trigger, '/capture/quit', self._on_quit)
+    def _on_color(self, msg):
+        data = np.frombuffer(msg.data, dtype=np.uint8).copy().reshape(msg.height, msg.width, 3)
+        self._color = cv2.cvtColor(data, cv2.COLOR_RGB2BGR) if msg.encoding == 'rgb8' else data
+        self._frame_n += 1
 
-        self.get_logger().info(
-            '📸 TERESA Exposure Capture\n'
-            f'   Out: {self.out_dir}\n'
-            '   Commands (from another terminal):\n'
-            '     ros2 service call /capture/close_up std_srvs/srv/Trigger  → close-up\n'
-            '     ros2 service call /capture/wide     std_srvs/srv/Trigger  → wide\n'
-            '     ros2 service call /capture/quit     std_srvs/srv/Trigger  → quit'
-        )
+    def _on_depth(self, msg):
+        self._depth = np.frombuffer(msg.data, dtype=np.uint16).copy().reshape(msg.height, msg.width)
 
-    # ── Callbacks ──────────────────────────────────────────────
+    def _on_info(self, msg):
+        if self._info is None:
+            self._info = msg
+            self._save_camera_info()
 
-    def _cb_rs_color(self, msg):
-        try:
-            data = np.frombuffer(msg.data, dtype=np.uint8).copy().reshape(msg.height, msg.width, 3)
-            if msg.encoding == 'rgb8':
-                self._rs_color = cv2.cvtColor(data, cv2.COLOR_RGB2BGR)
-            else:
-                self._rs_color = data
-            self._frame_count += 1
-        except Exception as e:
-            if not getattr(self, '_cb_err_logged', False):
-                self.get_logger().error(f'decode error (color): {e}')
-                self._cb_err_logged = True
-
-    def _cb_rs_depth(self, msg):
-        try:
-            self._rs_depth = np.frombuffer(msg.data, dtype=np.uint16).copy().reshape(msg.height, msg.width)
-        except Exception:
-            pass
-
-    def _cb_rs_info(self, msg):
-        self._rs_info = msg
-
-    def _try_save_camera_info(self):
-        ci_path = self.out_dir / 'camera_info.json'
-        if ci_path.exists() or self._rs_info is None:
-            return
+    def _save_camera_info(self):
         import json
-        K = self._rs_info.k
-        info = {
-            'fx': float(K[0]), 'fy': float(K[4]),
-            'cx': float(K[2]), 'cy': float(K[5]),
-            'width': self._rs_info.width, 'height': self._rs_info.height,
-        }
-        with open(ci_path, 'w') as f:
+        K = self._info.k
+        info = {'fx': float(K[0]), 'fy': float(K[4]), 'cx': float(K[2]), 'cy': float(K[5]),
+                'width': self._info.width, 'height': self._info.height}
+        with open(self.out_dir / 'camera_info.json', 'w') as f:
             json.dump(info, f, indent=2)
-        self.get_logger().info('✓ camera_info.json saved')
-
-    # ── Trigger services ───────────────────────────────────────
-
-    def _on_close_up(self, request, response):
-        self._save_close_up()
-        response.success = True
-        response.message = f'Close-up #{self._counter - 1} saved'
-        return response
-
-    def _on_wide(self, request, response):
-        self._save_wide()
-        response.success = True
-        response.message = 'Wide shot saved'
-        return response
-
-    def _on_quit(self, request, response):
-        self.get_logger().info(f'Quit. {self._counter - 1} close-ups saved.')
-        response.success = True
-        response.message = 'Shutting down'
-        self.create_timer(0.2, lambda: rclpy.shutdown())
-        return response
-
-    # ── Save ───────────────────────────────────────────────────
+        print('✓ camera_info.json saved')
 
     def _save_wide(self):
-        if self._rs_color is None:
-            self.get_logger().warn('No RealSense frame yet')
-            return
-        path = self.out_dir / 'wide_color.png'
-        cv2.imwrite(str(path), self._rs_color)
-        self.get_logger().info(f'WIDE → {path}')
-        dp = self.out_dir / 'wide_depth.png'
-        if self._rs_depth is not None:
-            cv2.imwrite(str(dp), self._rs_depth)
-        else:
-            cv2.imwrite(str(dp), np.zeros(self._rs_color.shape[:2], dtype=np.uint16))
+        if self._color is None:
+            print('⚠ No frame yet'); return
+        cv2.imwrite(str(self.out_dir / 'wide_color.png'), self._color)
+        d = self._depth
+        cv2.imwrite(str(self.out_dir / 'wide_depth.png'),
+                   d if d is not None else np.zeros(self._color.shape[:2], dtype=np.uint16))
+        print(f'✓ WIDE  (frame #{self._frame_n})')
 
     def _save_close_up(self):
-        if self._rs_color is None:
-            self.get_logger().warn('No RealSense frame yet')
-            return
-        cp = self.close_up_dir / f'{self._counter:02d}_color.png'
-        dp = self.close_up_dir / f'{self._counter:02d}_depth.png'
-        cv2.imwrite(str(cp), self._rs_color)
-        if self._rs_depth is not None:
-            cv2.imwrite(str(dp), self._rs_depth)
-        else:
-            cv2.imwrite(str(dp), np.zeros(self._rs_color.shape[:2], dtype=np.uint16))
-        self.get_logger().info(f'CLOSE-UP #{self._counter} → {cp}')
+        if self._color is None:
+            print('⚠ No frame yet'); return
         self._counter += 1
+        cv2.imwrite(str(self.cu_dir / f'{self._counter:02d}_color.png'), self._color)
+        d = self._depth
+        cv2.imwrite(str(self.cu_dir / f'{self._counter:02d}_depth.png'),
+                   d if d is not None else np.zeros(self._color.shape[:2], dtype=np.uint16))
+        print(f'✓ CLOSE-UP #{self._counter}  (frame #{self._frame_n})')
 
-    # ── Status ─────────────────────────────────────────────────
+    def run(self):
+        status_t = self.get_clock().now()
+        while rclpy.ok():
+            rclpy.spin_once(self, timeout_sec=0.05)
 
-    def _tick_status(self):
-        rs_ok = '✓' if self._rs_color is not None else '✗'
-        self.get_logger().info(
-            f'Status | RS: {rs_ok}  frames: {self._frame_count}  |  close-ups: {self._counter - 1}'
-        )
+            if select.select([sys.stdin], [], [], 0)[0]:
+                line = sys.stdin.readline()
+                if not line:
+                    continue
+                line = line.strip().lower()
+                # Spin a few more times to flush the latest frame
+                for _ in range(8):
+                    rclpy.spin_once(self, timeout_sec=0.01)
+                if line == 'w':
+                    self._save_wide()
+                elif line == 'q':
+                    print(f'Done. {self._counter} close-ups saved.')
+                    return
+                elif line == '':
+                    self._save_close_up()
+
+            now = self.get_clock().now()
+            if (now - status_t).nanoseconds * 1e-9 > 4.0:
+                print(f'  [frames: {self._frame_n}  close-ups: {self._counter}]')
+                status_t = now
 
 
 def main():
     ap = argparse.ArgumentParser(description='TERESA exposure photo capture')
     ap.add_argument('--out_dir', required=True)
     args = ap.parse_args()
-
     rclpy.init()
     node = ExposureCapture(args.out_dir)
     try:
-        while rclpy.ok():
-            rclpy.spin_once(node, timeout_sec=0.1)
+        node.run()
     except KeyboardInterrupt:
         pass
     finally:
