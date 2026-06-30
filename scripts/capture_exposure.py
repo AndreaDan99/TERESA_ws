@@ -174,7 +174,8 @@ def main():
     rclpy.init()
     node = ExposureCapture(args.out_dir)
     try:
-        rclpy.spin(node)
+        while rclpy.ok():
+            rclpy.spin_once(node, timeout_sec=0.1)
     except KeyboardInterrupt:
         pass
     finally:
