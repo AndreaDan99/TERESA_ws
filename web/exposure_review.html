@@ -909,8 +909,8 @@ class ExposureReviewApp {
     if (src === 'wide') {
       return base + 'wide_overlay.jpg';
     }
-    // 01_color.png → close_up/overlays/01_overlay.jpg or 01_color_overlay.jpg
-    const stem = src.replace(/\.(png|jpg)$/i, '').replace('_color', '');
+    // 01_color.png → close_up/overlays/01_color_overlay.jpg
+    const stem = src.replace(/\.(png|jpg)$/i, '');
     return base + 'close_up/overlays/' + stem + '_overlay.jpg';
   }
 
