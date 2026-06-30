@@ -289,18 +289,18 @@
 <div id="top-bar">
   <span class="title">TERESA — Exposure Review</span>
   <span class="sep">|</span>
-  <button id="btn-load-gt" onclick="app.loadGT()">📁 Carica GT</button>
-  <button id="btn-load-preds" onclick="app.loadPredictions()">📁 Carica preds</button>
+  <button id="btn-load-gt" onclick="app.loadGT()">📁 Load GT</button>
+  <button id="btn-load-preds" onclick="app.loadPredictions()">📁 Load Preds</button>
   <span class="sep">|</span>
-  <input type="text" id="img-base-url" placeholder="percorso immagini (es. /work/exposure/exp_01/)"
+  <input type="text" id="img-base-url" placeholder="Image path (e.g. /work/exposure/exp_01/)"
          style="background:var(--bg);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:10px;padding:3px 8px;border-radius:4px;width:220px;outline:none"
          oninput="app.setImgBase(this.value)">
   <span class="sep">|</span>
-  <button id="btn-save" class="primary" onclick="app.save()">💾 Salva</button>
+  <button id="btn-save" class="primary" onclick="app.save()">💾 Save</button>
   <span class="sep">|</span>
   <button id="btn-screenshot" onclick="app.toggleScreenshot()">📸 Screenshot mode</button>
   <span class="sep">|</span>
-  <span class="tag" id="status-tag">Body Map pronta — clicca per piazzare GT</span>
+  <span class="tag" id="status-tag">Body Map ready — click to place GT</span>
 </div>
 
 <div id="main">
@@ -320,7 +320,7 @@
       <button id="btn-gt" class="active" onclick="app.toggleGT()">GT Wounds</button>
       <button id="btn-gdino" class="active" onclick="app.toggleGDINO()">GDINO</button>
       <span class="sep" style="color:var(--border);margin:0 6px">|</span>
-      <span class="label" style="font-size:10px">Clicca sulla mappa per piazzare un ground truth</span>
+      <span class="label" style="font-size:10px">Click on the map to place a ground truth</span>
     </div>
   </div>
 
@@ -329,11 +329,11 @@
     <div class="section" id="gt-section">
       <h3 id="gt-section-header">🩹 Ground Truth</h3>
       <div id="gt-list"></div>
-      <button id="add-gt-btn" onclick="app.addGTByClick()">+ Clicca sulla mappa per aggiungere</button>
+      <button id="add-gt-btn" onclick="app.addGTByClick()">+ Click on map to add</button>
     </div>
 
     <div class="section" id="fp-section" style="display:none">
-      <h3>⚠ Non associati (FP)</h3>
+      <h3>⚠ Unassigned (FP)</h3>
       <div id="fp-list"></div>
     </div>
 
@@ -372,7 +372,7 @@
                  border-radius:8px;cursor:pointer;transition:all 0.15s"
           onmouseover="this.style.background='rgba(255,200,50,0.25)'"
           onmouseout="this.style.background='rgba(255,200,50,0.08)'">
-          📍 MANDA SPOT
+          📍 SEND SPOT
         </button>
       </div>
     </div>
@@ -382,13 +382,13 @@
 <!-- Popup for GT editing -->
 <div id="popup-overlay">
   <div id="popup">
-    <h3 id="popup-title">Modifica Ground Truth</h3>
-    <label>Tipo ferita</label>
+    <h3 id="popup-title">Edit Ground Truth</h3>
+    <label>Wound type</label>
     <select id="popup-type"></select>
     <label>Note</label>
     <input type="text" id="popup-notes" placeholder="es. 5 cm cut on upper chest">
     <div class="popup-btns">
-      <button class="cancel" onclick="app.closePopup()">Annulla</button>
+      <button class="cancel" onclick="app.closePopup()">Cancel</button>
       <button class="ok" onclick="app.confirmPopup()">OK</button>
     </div>
   </div>
@@ -509,7 +509,7 @@ class ExposureReviewApp {
       this.skeleton.push({x: kp[0], y: kp[1], z: kp[2]});
     }
     this._computeSpotPose();
-    this._updateStatus('Body Map pronta — clicca per piazzare GT');
+    this._updateStatus('Body Map ready — click to place GT');
   }
 
   _computeSpotPose() {
@@ -765,7 +765,7 @@ class ExposureReviewApp {
         this.groundTruth.push(gt);
         this.addingGT = false;
         this.selectedGT = gt.id;
-        this._updateStatus(`Aggiunto ${gt.id} a (${wx.toFixed(2)}, ${wy.toFixed(2)})`);
+        this._updateStatus(`Added ${gt.id} at (${wx.toFixed(2)}, ${wy.toFixed(2)})`);
         this._render();
         this._renderSidebar();
         return;
@@ -775,7 +775,7 @@ class ExposureReviewApp {
       const clickedGT = this._findGTAt(cx, cy);
       if (clickedGT) {
         this.selectedGT = clickedGT.id;
-        this._updateStatus(`Selezionato ${clickedGT.id}`);
+        this._updateStatus(`Selected ${clickedGT.id}`);
         this._render();
         this._renderSidebar();
         return;
@@ -980,7 +980,7 @@ class ExposureReviewApp {
     const tbody = $('review-tbody');
     if (!tbody) return;
     if (this.groundTruth.length === 0) {
-      tbody.innerHTML = '<tr><td style="color:var(--text-dim);padding:8px">Nessun ground truth</td></tr>';
+      tbody.innerHTML = '<tr><td style="color:var(--text-dim);padding:8px">No ground truth</td></tr>';
       return;
     }
     let html = '<tr>';
@@ -1031,7 +1031,7 @@ class ExposureReviewApp {
     const el = $('gdino-detections');
     if (!el) return;
     if (this.detections.length === 0) {
-      el.innerHTML = '<div class="gdino-box"><div class="gdino-empty">Nessuna detection GDINO</div></div>';
+      el.innerHTML = '<div class="gdino-box"><div class="gdino-empty">No GDINO detections</div></div>';
       return;
     }
     let html = '<div class="gdino-box">';
@@ -1166,14 +1166,14 @@ class ExposureReviewApp {
 
   addGTByClick() {
     this.addingGT = true;
-    this._updateStatus('Clicca sulla Body Map per piazzare un nuovo ground truth...');
+    this._updateStatus('Click on the Body Map to place a new ground truth...');
   }
 
   // ── Popup ────────────────────────────────────────────────────────
 
   _openPopup(gt) {
     this.popupGT = gt;
-    $('popup-title').textContent = `Modifica ${gt.id}`;
+    $('popup-title').textContent = `Edit ${gt.id}`;
     const typeSel = $('popup-type');
     typeSel.innerHTML = '';
     for (const v of EXPOSURE_VOCAB) {
@@ -1229,7 +1229,7 @@ class ExposureReviewApp {
           if (data.detections) {
             this.detections = data.detections;
           }
-          this._updateStatus(`Caricato: ${this.groundTruth.length} GT, ${this.detections.length} detections`);
+          this._updateStatus(`Loaded: ${this.groundTruth.length} GT, ${this.detections.length} detections`);
           this._render();
           this._renderSidebar();
         } catch (err) {
@@ -1281,7 +1281,7 @@ class ExposureReviewApp {
               }
             }
 
-            this._updateStatus(`Caricate ${this.detections.length} detection GDINO`);
+            this._updateStatus(`Loaded ${this.detections.length} GDINO detections`);
             this._render();
             this._renderSidebar();
           } else {
@@ -1330,7 +1330,7 @@ class ExposureReviewApp {
     a.download = 'ground_truth.json';
     a.click();
     URL.revokeObjectURL(url);
-    this._updateStatus('Salvato!');
+    this._updateStatus('Saved!');
   }
 
   // ── Helpers ──────────────────────────────────────────────────────
