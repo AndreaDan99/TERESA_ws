@@ -600,7 +600,9 @@ class ExposureReviewApp {
     }
 
     // ── Body regions legend (bottom-right) ────────
-    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    // Always reset to alphabetic baseline so alignment is consistent
+    // regardless of whether GDINO legend was drawn above.
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
     const lgX2 = W - 160, lgY2 = H - 210;
     ctx.fillStyle = 'rgba(10,10,20,.8)'; ctx.strokeStyle = 'rgba(100,100,140,.4)'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.roundRect(lgX2, lgY2, 152, 175, 6); ctx.fill(); ctx.stroke();
@@ -612,7 +614,7 @@ class ExposureReviewApp {
       const y = lgY2 + 36 + li * 21;
       ctx.fillStyle = r.color; ctx.fillRect(lgX2 + 8, y, 12, 12);
       ctx.strokeStyle = r.color; ctx.lineWidth = 1.5; ctx.strokeRect(lgX2 + 8, y, 12, 12);
-      ctx.fillStyle = '#ccc'; ctx.fillText(r.name, lgX2 + 26, y + 6);
+      ctx.fillStyle = '#ccc'; ctx.fillText(r.name, lgX2 + 26, y + 10);
       li++;
     }
 
