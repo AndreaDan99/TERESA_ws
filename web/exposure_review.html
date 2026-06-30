@@ -197,6 +197,24 @@
   #popup .popup-btns button.ok { border-color: var(--accent); color: var(--accent); }
   #popup .popup-btns button.cancel { color: var(--text-dim); }
 
+  /* ── GDINO detections box (sidebar) — match canvas legend style ── */
+  .gdino-box {
+    background: rgba(10,10,20,0.88); border: 2px solid rgba(255,50,50,0.6);
+    border-radius: 8px; padding: 0; margin: 6px 0; overflow: hidden;
+  }
+  .gdino-header {
+    font-family: var(--font); font-size: 12px; font-weight: 700; color: #ff4444;
+    padding: 8px 10px 4px;
+  }
+  .gdino-row {
+    font-family: var(--font); font-size: 11px; color: #cccccc;
+    padding: 3px 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .gdino-dot { color: #ffffff; margin-right: 4px; }
+  .gdino-pct { color: #888; font-size: 10px; }
+  .gdino-src { color: #555; font-size: 9px; margin-left: 6px; }
+  .gdino-empty { padding: 12px 10px; color: #555; font-size: 10px; font-family: var(--font); }
+
   /* ── Screenshot mode — hide chrome, keep detection panel ── */
   body.screenshot-mode #top-bar,
   body.screenshot-mode #map-toolbar,
@@ -206,7 +224,8 @@
   body.screenshot-mode .gt-row select,
   body.screenshot-mode .gt-row .gt-type,
   body.screenshot-mode .gt-row .gt-status,
-  body.screenshot-mode #fp-section { display: none; }
+  body.screenshot-mode #fp-section,
+  body.screenshot-mode #gt-section { display: none; }
 </style>
 </head>
 <body>
@@ -251,7 +270,7 @@
 
   <!-- Sidebar -->
   <div id="sidebar">
-    <div class="section">
+    <div class="section" id="gt-section">
       <h3 id="gt-section-header">🩹 Ground Truth</h3>
       <div id="gt-list"></div>
       <button id="add-gt-btn" onclick="app.addGTByClick()">+ Clicca sulla mappa per aggiungere</button>
@@ -274,9 +293,9 @@
       </div>
     </div>
 
-    <div class="section" id="detection-summary-section">
-      <h3>🔍 Detection Summary</h3>
-      <div id="detection-summary" style="padding:4px 14px 8px;font-size:10px;line-height:1.7;color:var(--text-dim)"></div>
+    <div class="section" id="gdino-detections-section">
+      <h3>🩹 GDINO DETECTIONS</h3>
+      <div id="gdino-detections"></div>
     </div>
   </div>
 </div>
@@ -863,48 +882,30 @@ class ExposureReviewApp {
 
     // Metrics
     this._updateMetrics();
-    this._updateDetectionSummary();
+    this._updateGDINODetections();
   }
 
-  _updateDetectionSummary() {
-    const el = $('detection-summary');
+  _updateGDINODetections() {
+    const el = $('gdino-detections');
     if (!el) return;
-    if (this.groundTruth.length === 0) {
-      el.innerHTML = '<span style="color:var(--text-dim)">Nessun ground truth piazzato</span>';
+    if (this.detections.length === 0) {
+      el.innerHTML = '<div class="gdino-box"><div class="gdino-empty">Nessuna detection GDINO</div></div>';
       return;
     }
-    const hasPredictions = this.detections.length > 0;
-    let html = '';
-    for (const gt of this.groundTruth) {
-      if (gt.gdinoMatch != null) {
-        const det = this.detections.find(d => d.id === gt.gdinoMatch);
-        const imgHint = det ? this._getOverlayPath(det) : '';
-        html += `<div style="margin-bottom:2px">`;
-        html += `<span style="color:var(--accent);cursor:pointer" onclick="app._toggleCrop('${gt.id}')">● ${gt.id}:</span> ${gt.gdinoLabel} ${Math.round(gt.gdinoScore*100)}% <span style="color:var(--text-dim);font-size:9px">(D${gt.gdinoMatch})</span>`;
-        html += ` <span style="cursor:pointer;font-size:12px" onclick="app._toggleCrop('${gt.id}')" title="Mostra foto">📸</span>`;
-        html += `</div>`;
-        html += `<div id="crop-${gt.id}" style="display:none;margin:2px 0 8px 14px;position:relative">`;
-        html += `<img src="" data-src="${imgHint}" alt="" style="max-width:280px;border-radius:4px;border:1px solid var(--border)" onerror="this.alt='Immagine non disponibile';this.style.display='none'">`;
-        html += `<div style="font-size:9px;color:var(--text-dim);margin-top:2px">${det ? det.source : ''}</div>`;
-        html += `</div>`;
-      } else if (hasPredictions) {
-        html += `<span style="color:var(--danger)">● ${gt.id}:</span> — <span style="color:var(--danger)">missed</span><br>`;
-      } else {
-        html += `<span style="color:var(--text-dim)">● ${gt.id}:</span> — <span style="color:var(--text-dim)">in attesa</span><br>`;
-      }
+    // Same visual style as the canvas GDINO legend
+    let html = '<div class="gdino-box">';
+    html += '<div class="gdino-header">🩹 GDINO DETECTIONS</div>';
+    for (const d of this.detections) {
+      const pct = Math.round(d.score * 100);
+      const imgPath = this._getOverlayPath(d);
+      html += `<div class="gdino-row">`;
+      html += `<span class="gdino-dot">●</span>`;
+      html += `<span class="gdino-label">D${d.id}: ${d.label} <span class="gdino-pct">${pct}%</span></span>`;
+      html += `<span class="gdino-src">${d.source || ''}</span>`;
+      html += `</div>`;
     }
+    html += '</div>';
     el.innerHTML = html;
-
-    // Lazy-load images after render
-    for (const gt of this.groundTruth) {
-      if (gt.gdinoMatch == null) continue;
-      const container = document.getElementById('crop-' + gt.id);
-      if (!container) continue;
-      const img = container.querySelector('img');
-      if (img && img.dataset.src) {
-        img.src = img.dataset.src;
-      }
-    }
   }
 
   setImgBase(url) {
