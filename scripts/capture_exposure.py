@@ -184,11 +184,13 @@ class ExposureCapture(Node):
                 line = line.strip().lower()
                 if line == 'w':
                     self._pending_wide = True
+                    time.sleep(0.3)
                 elif line == 'q':
                     self._shutdown()
                     return
                 elif line == '':
                     self._pending_close_up = True
+                    time.sleep(0.3)
 
     def _tick_process_save(self):
         """Process pending saves on main thread where frames are fresh."""
