@@ -2,10 +2,8 @@
 """
 capture_exposure.py — TERESA exposure photo capture.
 
-Minimal: spin_once loop + non-blocking stdin.
-  [w+ENTER] = wide shot
-  [ENTER]   = close-up
-  [q+ENTER] = quit
+Trigger: [w]+ENTER = wide, [ENTER] = close-up, [q]+ENTER = quit.
+Save happens INSIDE the frame callback → always the latest frame.
 
 Usage (inside teresa_gpu):
   source /opt/ros/humble/install/setup.bash
@@ -13,8 +11,8 @@ Usage (inside teresa_gpu):
 """
 
 import argparse
-import select
 import sys
+import threading
 from pathlib import Path
 
 import cv2
@@ -38,6 +36,10 @@ class ExposureCapture(Node):
         self._counter = 0
         self._frame_n = 0
 
+        # Commands from stdin thread
+        self._cmd = None
+        self._running = True
+
         self._sub_color = self.create_subscription(
             Image, '/camera/camera/color/image_raw', self._on_color, qos_profile_sensor_data)
         self._sub_depth = self.create_subscription(
@@ -46,14 +48,32 @@ class ExposureCapture(Node):
         self._sub_info = self.create_subscription(
             CameraInfo, '/camera/camera/color/camera_info', self._on_info, qos_profile_sensor_data)
 
+        # Status timer
+        self.create_timer(4.0, self._tick_status)
+
         print(f'📸 TERESA Exposure Capture\n'
               f'   Out: {self.out_dir}\n'
               f'   [w+ENTER]=wide  [ENTER]=close-up  [q+ENTER]=quit\n')
+
+    # ── Frame callback (main thread) ─────────────────────────────
 
     def _on_color(self, msg):
         data = np.frombuffer(msg.data, dtype=np.uint8).copy().reshape(msg.height, msg.width, 3)
         self._color = cv2.cvtColor(data, cv2.COLOR_RGB2BGR) if msg.encoding == 'rgb8' else data
         self._frame_n += 1
+
+        # Process pending command — save happens HERE with freshest frame
+        cmd = self._cmd
+        if cmd is not None:
+            self._cmd = None
+            if cmd == 'w':
+                self._save_wide()
+            elif cmd == 'c':
+                self._save_close_up()
+            elif cmd == 'q':
+                print(f'Done. {self._counter} close-ups saved.')
+                self._running = False
+                self.create_timer(0.1, lambda: rclpy.shutdown())
 
     def _on_depth(self, msg):
         self._depth = np.frombuffer(msg.data, dtype=np.uint16).copy().reshape(msg.height, msg.width)
@@ -72,9 +92,9 @@ class ExposureCapture(Node):
             json.dump(info, f, indent=2)
         print('✓ camera_info.json saved')
 
+    # ── Save (called from callback on main thread) ────────────────
+
     def _save_wide(self):
-        if self._color is None:
-            print('⚠ No frame yet'); return
         cv2.imwrite(str(self.out_dir / 'wide_color.png'), self._color)
         d = self._depth
         cv2.imwrite(str(self.out_dir / 'wide_depth.png'),
@@ -82,8 +102,6 @@ class ExposureCapture(Node):
         print(f'✓ WIDE  (frame #{self._frame_n})')
 
     def _save_close_up(self):
-        if self._color is None:
-            print('⚠ No frame yet'); return
         self._counter += 1
         cv2.imwrite(str(self.cu_dir / f'{self._counter:02d}_color.png'), self._color)
         d = self._depth
@@ -91,46 +109,51 @@ class ExposureCapture(Node):
                    d if d is not None else np.zeros(self._color.shape[:2], dtype=np.uint16))
         print(f'✓ CLOSE-UP #{self._counter}  (frame #{self._frame_n})')
 
-    def run(self):
-        status_t = self.get_clock().now()
-        tick = 0
-        while rclpy.ok():
-            rclpy.spin_once(self, timeout_sec=0.05)
-            tick += 1
+    # ── Status ───────────────────────────────────────────────────
 
-            # Check stdin only every 20 spins (1 Hz) to not starve frame delivery
-            if tick % 20 == 0 and select.select([sys.stdin], [], [], 0)[0]:
-                line = sys.stdin.readline()
-                if line:
-                    line = line.strip().lower()
-                    # Flush to get latest frame
-                    for _ in range(6):
-                        rclpy.spin_once(self, timeout_sec=0.02)
-                    if line == 'w':
-                        self._save_wide()
-                    elif line == 'q':
-                        print(f'Done. {self._counter} close-ups saved.')
-                        return
-                    elif line == '':
-                        self._save_close_up()
+    def _tick_status(self):
+        print(f'  [frames: {self._frame_n}  close-ups: {self._counter}]')
 
-            now = self.get_clock().now()
-            if (now - status_t).nanoseconds * 1e-9 > 4.0:
-                print(f'  [frames: {self._frame_n}  close-ups: {self._counter}]')
-                status_t = now
+
+# ═══════════════════════════════════════════════════════════════════
+
+def stdin_thread(node):
+    """Read stdin in background thread, set command flag for main thread."""
+    while node._running:
+        try:
+            line = sys.stdin.readline()
+            if not line:
+                break  # EOF
+            line = line.strip().lower()
+            if line == 'w':
+                node._cmd = 'w'
+            elif line == 'q':
+                node._cmd = 'q'
+                break
+            elif line == '':
+                node._cmd = 'c'
+        except (EOFError, KeyboardInterrupt):
+            break
 
 
 def main():
     ap = argparse.ArgumentParser(description='TERESA exposure photo capture')
     ap.add_argument('--out_dir', required=True)
     args = ap.parse_args()
+
     rclpy.init()
     node = ExposureCapture(args.out_dir)
+
+    # Start stdin reader in background thread
+    t = threading.Thread(target=stdin_thread, args=(node,), daemon=True)
+    t.start()
+
     try:
-        node.run()
+        rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
+        node._running = False
         node.destroy_node()
         rclpy.shutdown()
 
