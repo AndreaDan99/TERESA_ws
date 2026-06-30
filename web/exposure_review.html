@@ -861,12 +861,15 @@ class ExposureReviewApp {
       el.innerHTML = '<span style="color:var(--text-dim)">Nessun ground truth piazzato</span>';
       return;
     }
+    const hasPredictions = this.detections.length > 0;
     let html = '';
     for (const gt of this.groundTruth) {
       if (gt.gdinoMatch != null) {
         html += `<span style="color:var(--accent)">● ${gt.id}:</span> ${gt.gdinoLabel} ${Math.round(gt.gdinoScore*100)}% <span style="color:var(--text-dim);font-size:9px">(D${gt.gdinoMatch})</span><br>`;
-      } else {
+      } else if (hasPredictions) {
         html += `<span style="color:var(--danger)">● ${gt.id}:</span> — <span style="color:var(--danger)">missed</span><br>`;
+      } else {
+        html += `<span style="color:var(--text-dim)">● ${gt.id}:</span> — <span style="color:var(--text-dim)">in attesa</span><br>`;
       }
     }
     el.innerHTML = html;
