@@ -580,21 +580,22 @@ class ExposureReviewApp {
     if (this.showGDINO && this.detections.length) {
       const usedIds = new Set(this.groundTruth.map(gt => gt.gdinoMatch).filter(id => id != null));
       const unassigned = this.detections.filter(d => !usedIds.has(d.id));
-      const lgW = 200, lgX = W - lgW - 10, lgY = 20;
-      const boxH = 30 + Math.min(unassigned.length, 10) * 22;
-      ctx.fillStyle = 'rgba(10,10,20,0.85)'; ctx.strokeStyle = 'rgba(255,50,50,0.5)'; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.roundRect(lgX, lgY, lgW, boxH, 6); ctx.fill(); ctx.stroke();
-      ctx.fillStyle = '#ff4444'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-      ctx.fillText('🩹 GDINO DETECTIONS', lgX + 8, lgY + 8);
-      ctx.font = '10px monospace';
+      const lgW = 260, lgX = W - lgW - 10, lgY = 20;
+      const rowH = 30, headerH = 38;
+      const boxH = headerH + Math.min(unassigned.length, 10) * rowH;
+      ctx.fillStyle = 'rgba(10,10,20,0.88)'; ctx.strokeStyle = 'rgba(255,50,50,0.6)'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.roundRect(lgX, lgY, lgW, boxH, 8); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#ff4444'; ctx.font = 'bold 13px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      ctx.fillText('🩹 GDINO DETECTIONS', lgX + 10, lgY + 10);
+      ctx.font = '12px monospace';
       const show = unassigned.slice(0, 10);
       for (let i = 0; i < show.length; i++) {
-        const y = lgY + 28 + i * 22;
+        const y = lgY + headerH + i * rowH;
         const d = show[i];
         const pct = Math.round(d.score * 100);
-        ctx.fillStyle = '#ffffff'; ctx.fillText('●', lgX + 10, y);
+        ctx.fillStyle = '#ffffff'; ctx.fillText('●', lgX + 12, y + 7);
         ctx.fillStyle = '#cccccc';
-        ctx.fillText(`D${d.id}: ${d.label} ${pct}%`, lgX + 24, y);
+        ctx.fillText(`D${d.id}: ${d.label} ${pct}%`, lgX + 28, y + 7);
       }
     }
 
