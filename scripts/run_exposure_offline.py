@@ -587,6 +587,7 @@ def main():
         "n_close_up_photos": len(close_up_paths),
         "n_detections": len(all_dets),
         "n_wide_detections": len(wide_dets),
+        "n_wide_raw_before_filter": wide_dets_before,
         "n_close_up_detections": len(all_close_dets),
         "mean_inference_time_ms": round(
             total_infer_time / max(len(close_up_paths), 1) * 1000, 0),
@@ -597,6 +598,8 @@ def main():
         "nlf_bbox_score": nlf_detections[0]["bbox_score"] if nlf_detections else None,
         "camera_intrinsics": K,
         # Each detection: {id, box, score, label, source, position_3d, ...}
+        # source="wide" → from wide shot (coarse, distance-filtered)
+        # source="01_color.png" → from close-up (per-region refinement)
         # After review, user adds: "verified": "tp"/"fp", "wound_id": "w1", ...
         "detections": all_dets,
     }
@@ -607,6 +610,10 @@ def main():
 
     print(f"\n{'═' * 60}")
     print(f"  ✓ {len(all_dets)} detections saved → {pred_path}")
+    print(f"\n  Two-stage detection summary:")
+    print(f"    Wide shot:  {wide_dets_before} raw → {len(wide_dets)} after distance filter")
+    print(f"    Close-ups:  {len(all_close_dets)} across {len(close_up_paths)} photos")
+    print(f"    Combined:   {len(all_dets)} total detections for manual review")
     print(f"\n  Next — manual review:")
     print(f"  1. Open close_up/overlays/ and wide_overlay.jpg")
     print(f"  2. For each detection, add to predictions.json:")

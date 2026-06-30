@@ -84,6 +84,30 @@ def main():
     n_fp = len(fp_dets)
 
     # ═══════════════════════════════════════════════════════════════
+    #  Wide shot vs close-up breakdown
+    # ═══════════════════════════════════════════════════════════════
+    wide_tp = [d for d in tp_dets if d.get("source") == "wide"]
+    wide_fp = [d for d in fp_dets if d.get("source") == "wide"]
+    cu_tp   = [d for d in tp_dets if d.get("source") != "wide"]
+    cu_fp   = [d for d in fp_dets if d.get("source") != "wide"]
+
+    # Wounds first detected in wide shot (have ≥1 wide-shot TP)
+    wide_wound_ids = set(d.get("wound_id") for d in wide_tp if d.get("wound_id"))
+    n_wide_first = len(wide_wound_ids)
+
+    # Wounds found only in close-ups (not in wide shot)
+    cu_only_wound_ids = tp_wound_ids - wide_wound_ids
+    n_cu_only = len(cu_only_wound_ids)
+
+    # Refinement gain: additional close-up TP beyond what wide shot found
+    n_wide_raw = len(wide_tp)
+    n_cu_raw = len(cu_tp)
+    n_wide_fp_raw = len(wide_fp)
+    n_cu_fp_raw = len(cu_fp)
+    n_photos_cu = data.get("n_close_up_photos", 0)
+    fp_per_cu = n_cu_fp_raw / max(n_photos_cu, 1)
+
+    # ═══════════════════════════════════════════════════════════════
     #  Metrics
     # ═══════════════════════════════════════════════════════════════
     recall = n_wounds_found / (n_wounds_found + n_fn) if (n_wounds_found + n_fn) > 0 else None
@@ -148,17 +172,34 @@ def main():
     print(f"  False positives:        {n_fp}")
     print(f"  Photos in scan:         {n_photos}")
 
+    print(f"\n  ── Wide shot vs close-up refinement ──")
+    print(f"  Wide shot — raw detections:  {n_wide_raw + n_wide_fp_raw}  "
+          f"(TP {n_wide_raw}, FP {n_wide_fp_raw})")
+    print(f"  Close-ups — raw detections:  {n_cu_raw + n_cu_fp_raw}  "
+          f"(TP {n_cu_raw}, FP {n_cu_fp_raw})")
+    print(f"  Wounds first seen in wide:   {n_wide_first}/{n_wounds_found}")
+    print(f"  Wounds found only in CU:     {n_cu_only}")
+    print(f"  Refinement gain:             {n_cu_raw} additional TP from {n_photos_cu} close-ups")
+    print(f"  FP per close-up:             {fp_per_cu:.1f}")
+
     print(f"\n  ── Table \\ref{{tab:exposure}} Metrics ──")
-    print(f"  Scan points per trial:  {n_photos}")
+    print(f"  Scan points per trial:    {n_photos}")
     scan_dur = args.scan_duration_s or (n_photos * 2.0)
-    print(f"  Scan duration (s):      {scan_dur:.0f}")
+    print(f"  Scan duration (s):        {scan_dur:.0f}")
+    print(f"  Wide shot detections:     {n_wide_raw + n_wide_fp_raw} "
+          f"({n_wide_raw} TP, {n_wide_fp_raw} FP)")
+    print(f"  Close-up detections:      {n_cu_raw + n_cu_fp_raw} "
+          f"({n_cu_raw} TP, {n_cu_fp_raw} FP)")
+    print(f"  Wounds first in wide:     {n_wide_first}/{n_wounds_found}")
+    print(f"  Close-up-only wounds:     {n_cu_only}")
+    print(f"  Refinement gain (CU TP):  {n_cu_raw}")
     if recall is not None:
-        print(f"  Wound recall:           {recall * 100:.1f}%")
-    print(f"  False positives/scan:   {fp_per_scan:.1f}")
+        print(f"  Wound recall:             {recall * 100:.1f}%")
+    print(f"  False positives/close-up: {fp_per_cu:.1f}")
     if precision is not None:
-        print(f"  Precision:              {precision * 100:.1f}%")
+        print(f"  Precision:                {precision * 100:.1f}%")
     if f1 is not None:
-        print(f"  F1:                     {f1:.3f}")
+        print(f"  F1:                       {f1:.3f}")
 
     if mean_loc_err is not None:
         print(f"  3D localisation error:  {mean_loc_err:.0f} ± {std_loc_err:.0f} mm  "
@@ -196,14 +237,21 @@ def main():
         latex_row = (
             f"    Scan points per trial & {n_photos} \\\\\n"
             f"    Scan duration (s) & {dur_str} \\\\\n"
+            f"    Wide shot detections & {n_wide_raw + n_wide_fp_raw} "
+            f"({n_wide_raw} TP, {n_wide_fp_raw} FP) \\\\\n"
+            f"    Close-up detections & {n_cu_raw + n_cu_fp_raw} "
+            f"({n_cu_raw} TP, {n_cu_fp_raw} FP) \\\\\n"
+            f"    Wounds first seen in wide shot & {n_wide_first}/{n_wounds_found} \\\\\n"
+            f"    Close-up-only wounds & {n_cu_only} \\\\\n"
+            f"    Refinement gain (CU TP) & {n_cu_raw} \\\\\n"
             f"    Wound recall (\\%) & {recall_str} \\\\\n"
-            f"    False positives per scan & {fp_str} \\\\\n"
+            f"    False positives per close-up & {fp_per_cu:.1f} \\\\\n"
         )
         if loc_str:
             latex_row += f"    3D localisation error (mm) & {loc_str} \\\\\n"
 
         print(f"\n{'═' * 60}")
-        print(f"  LaTeX row:")
+        print(f"  LaTeX row (for tab:exposure):")
         print(f"{'═' * 60}")
         print(latex_row)
 
@@ -234,6 +282,17 @@ def main():
         "mean_fp_confidence": round(mean_fp_conf, 4) if mean_fp_conf is not None else None,
         "tp_by_class": dict(tp_by_class),
         "fp_by_class": dict(fp_by_class),
+        # Wide shot vs close-up refinement
+        "n_wide_detections": n_wide_raw + n_wide_fp_raw,
+        "n_wide_tp": n_wide_raw,
+        "n_wide_fp": n_wide_fp_raw,
+        "n_close_up_detections": n_cu_raw + n_cu_fp_raw,
+        "n_close_up_tp": n_cu_raw,
+        "n_close_up_fp": n_cu_fp_raw,
+        "n_wide_first_wounds": n_wide_first,
+        "n_close_up_only_wounds": n_cu_only,
+        "refinement_gain": n_cu_raw,
+        "fp_per_close_up": round(fp_per_cu, 4),
     }
 
     if mean_loc_err is not None:
