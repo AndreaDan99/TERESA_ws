@@ -900,8 +900,7 @@ class ExposureReviewApp {
       html += `<div class="gdino-row">`;
       html += `<span class="gdino-dot">●</span>`;
       html += `<span class="gdino-label">D${d.id}: ${d.label} <span class="gdino-pct">${pct}%</span></span>`;
-      html += `<span class="gdino-src">${d.source || ''}</span>`;
-      html += ` <span style="cursor:pointer;font-size:13px" onclick="app._toggleGdinoImg('gdino-img-${d.id}')" title="Mostra foto">📸</span>`;
+      html += ` <span style="cursor:pointer;font-size:14px" onclick="app._toggleGdinoImg('gdino-img-${d.id}')" title="${d.source || 'foto'}">📸</span>`;
       html += `<div id="gdino-img-${d.id}" style="display:none;margin:4px 0 6px 18px">`;
       html += `<img src="" data-src="${imgPath}" style="max-width:260px;border-radius:4px;border:1px solid var(--border)" onerror="this.style.display='none'">`;
       html += `</div>`;
