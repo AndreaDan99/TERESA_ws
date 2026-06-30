@@ -213,12 +213,6 @@
   .gdino-dot { color: #ffffff; margin-right: 4px; font-size: 12px; }
   .gdino-pct { color: #888; font-size: 11px; }
   .gdino-cam { cursor: pointer; font-size: 14px; margin-left: 4px; }
-  .review-goto-btn {
-    background: transparent; border: 1px solid var(--border); border-radius: 4px;
-    color: var(--text-dim); cursor: pointer; font-size: 12px; padding: 1px 5px;
-    transition: all 0.15s;
-  }
-  .review-goto-btn:hover { border-color: var(--warning); color: var(--warning); background: rgba(255,200,50,0.1); }
   .gdino-empty { padding: 12px 10px; color: #555; font-size: 10px; font-family: var(--font); }
 
   /* ── GDINO image popup (bottom-left of map area, outside sidebar) ── */
@@ -329,22 +323,29 @@
     <div class="section" id="review-section">
       <h3>📝 Remote Operator Revision</h3>
       <textarea id="review-notes" placeholder="Note del revisore..."
-        style="width:100%;height:64px;resize:vertical;font-family:var(--font);font-size:11px;
+        style="width:100%;height:72px;resize:vertical;font-family:var(--font);font-size:12px;
                background:var(--bg);color:var(--text);border:1px solid var(--border);
                border-radius:6px;padding:8px;outline:none"
         oninput="app.reviewNotes = this.value"></textarea>
       <div style="margin-top:8px">
         <h3 style="margin-bottom:6px">🔁 Review Points</h3>
-        <table id="review-table" style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--font)">
+        <table id="review-table" style="width:100%;border-collapse:collapse;font-size:12px;font-family:var(--font)">
           <thead>
             <tr style="color:var(--text-dim);border-bottom:1px solid var(--border)">
-              <th style="text-align:left;padding:3px 6px">Wound</th>
-              <th style="text-align:center;padding:3px 6px">Review #</th>
-              <th style="text-align:center;padding:3px 4px">Go</th>
+              <th style="text-align:left;padding:4px 6px">Wound</th>
+              <th style="text-align:center;padding:4px 6px">Review #</th>
             </tr>
           </thead>
           <tbody id="review-tbody"></tbody>
         </table>
+        <button id="btn-goto-wound" onclick="app._gotoSelectedWound()"
+          style="width:100%;margin-top:8px;padding:8px;font-family:var(--font);font-size:13px;font-weight:700;
+                 background:rgba(255,200,50,0.1);color:var(--warning);border:2px solid var(--warning);
+                 border-radius:6px;cursor:pointer;transition:all 0.15s"
+          onmouseover="this.style.background='rgba(255,200,50,0.25)'"
+          onmouseout="this.style.background='rgba(255,200,50,0.1)'">
+          📍 MANDA SPOT
+        </button>
       </div>
     </div>
   </div>
@@ -950,7 +951,7 @@ class ExposureReviewApp {
     const tbody = $('review-tbody');
     if (!tbody) return;
     if (this.groundTruth.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="3" style="color:var(--text-dim);padding:6px">Nessun ground truth</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="2" style="color:var(--text-dim);padding:6px">Nessun ground truth</td></tr>';
       return;
     }
     let html = '';
@@ -958,15 +959,12 @@ class ExposureReviewApp {
       const count = this.reviewPoints[gt.id] || 0;
       const matched = gt.gdinoMatch != null;
       html += `<tr style="border-bottom:1px solid var(--border);color:${matched?'var(--accent)':'var(--danger)'}">`;
-      html += `<td style="padding:3px 6px">${gt.id}: ${gt.type}</td>`;
-      html += `<td style="text-align:center;padding:3px 6px;white-space:nowrap">`;
+      html += `<td style="padding:4px 8px">${gt.id}: ${gt.type}</td>`;
+      html += `<td style="text-align:center;padding:4px 8px;white-space:nowrap">`;
       html += `<span style="cursor:pointer;user-select:none" onclick="app._addReviewPoint('${gt.id}')">`;
       html += `${count > 0 ? '🔁'.repeat(Math.min(count, 5)) : '—'}`;
       html += `</span>`;
-      html += ` <span style="font-size:9px;color:var(--text-dim)">${count || ''}</span>`;
-      html += `</td>`;
-      html += `<td style="text-align:center;padding:3px 4px">`;
-      html += `<button class="review-goto-btn" onclick="app._gotoWound('${gt.id}')" title="Manda Spot a ricontrollare ${gt.id}">📍</button>`;
+      html += ` <span style="font-size:10px;color:var(--text-dim)">${count || ''}</span>`;
       html += `</td></tr>`;
     }
     tbody.innerHTML = html;
@@ -977,22 +975,27 @@ class ExposureReviewApp {
     this._updateReviewTable();
   }
 
-  _gotoWound(woundId) {
-    // Highlight the wound on the map + flash
+  _gotoSelectedWound() {
+    // Use selected GT, or first one available
+    let woundId = this.selectedGT;
+    if (!woundId && this.groundTruth.length > 0) {
+      woundId = this.groundTruth[0].id;
+    }
+    if (!woundId) return;
+    // Select + flash the wound on the map
     this.selectedGT = woundId;
     this._render();
-    // Flash the selected wound
     const flash = () => {
       this._flashGT = !this._flashGT;
       this._render();
-      if (this._flashCount === undefined) this._flashCount = 0;
-      this._flashCount++;
+      this._flashCount = (this._flashCount || 0) + 1;
       if (this._flashCount < 6) setTimeout(flash, 300);
       else { this._flashGT = false; this._flashCount = 0; this._render(); }
     };
     flash();
-    // Also increment review counter
+    // Increment review counter
     this._addReviewPoint(woundId);
+    this._updateStatus('📍 Spot inviato a ' + woundId);
   }
 
   _updateGDINODetections() {
