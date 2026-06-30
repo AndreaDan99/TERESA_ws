@@ -216,10 +216,10 @@
   .review-wound-chip {
     font-family: var(--font); font-size: 13px; font-weight: 700;
     padding: 6px 14px; border: 2px solid var(--warning); border-radius: 6px;
-    background: rgba(255,200,50,0.1); color: var(--warning); cursor: pointer;
+    background: rgba(255,200,50,0.08); color: #1a1a1a; cursor: pointer;
     transition: all 0.15s; min-width: 48px;
   }
-  .review-wound-chip:hover { background: rgba(255,200,50,0.3); transform: scale(1.08); }
+  .review-wound-chip:hover { background: rgba(255,200,50,0.25); transform: scale(1.08); }
   .gdino-empty { padding: 12px 10px; color: #555; font-size: 10px; font-family: var(--font); }
 
   /* ── GDINO image popup (bottom-left of map area, outside sidebar) ── */
@@ -255,6 +255,21 @@
   body.screenshot-mode .gt-row .gt-status,
   body.screenshot-mode #fp-section,
   body.screenshot-mode #gt-section { display: none; }
+
+  /* ── Screenshot mode: bigger text everywhere ── */
+  body.screenshot-mode { font-size: 16px; }
+  body.screenshot-mode #sidebar { font-size: 14px; }
+  body.screenshot-mode #sidebar h3 { font-size: 16px; }
+  body.screenshot-mode .gdino-row { font-size: 14px; padding: 6px 10px; }
+  body.screenshot-mode .gdino-pct { font-size: 13px; }
+  body.screenshot-mode .gdino-cam { font-size: 17px; }
+  body.screenshot-mode .review-wound-chip { font-size: 16px; padding: 8px 18px; }
+  body.screenshot-mode #review-notes { font-size: 14px; height: 80px; }
+  body.screenshot-mode .metric-card .m-val { font-size: 22px; }
+  body.screenshot-mode .metric-card .m-label { font-size: 11px; }
+  body.screenshot-mode #btn-goto-wound { font-size: 16px; padding: 12px; }
+  body.screenshot-mode .gdino-popup-title { font-size: 12px; }
+  body.screenshot-mode .gdino-popup-inner img { width: 480px; }
 </style>
 </head>
 <body>
@@ -341,10 +356,10 @@
         </table>
         <button id="btn-goto-wound" onclick="app._gotoWound(app.selectedGT || (app.groundTruth[0]||{}).id)"
           style="width:100%;margin-top:10px;padding:10px;font-family:var(--font);font-size:14px;font-weight:700;
-                 background:rgba(255,200,50,0.12);color:var(--warning);border:2px solid var(--warning);
+                 background:rgba(255,200,50,0.08);color:#1a1a1a;border:2px solid var(--warning);
                  border-radius:8px;cursor:pointer;transition:all 0.15s"
-          onmouseover="this.style.background='rgba(255,200,50,0.3)'"
-          onmouseout="this.style.background='rgba(255,200,50,0.12)'">
+          onmouseover="this.style.background='rgba(255,200,50,0.25)'"
+          onmouseout="this.style.background='rgba(255,200,50,0.08)'">
           📍 MANDA SPOT
         </button>
       </div>
