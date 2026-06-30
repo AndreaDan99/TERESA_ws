@@ -116,11 +116,15 @@ def load_nlf(model_path, device="cuda"):
         print(f"[NLF] Model not found: {model_path}")
         return None
     print(f"[NLF] Loading {model_path} on {device} …")
-    model = torch.jit.load(model_path, map_location="cpu")
-    if device == "cuda" and torch.cuda.is_available():
-        model = model.cuda()
-    else:
-        model = model.cpu()
+    use_cuda = device == "cuda" and torch.cuda.is_available()
+    map_loc = "cuda" if use_cuda else "cpu"
+    try:
+        model = torch.jit.load(model_path, map_location=map_loc)
+    except RuntimeError:
+        # Fallback: load on CPU then move
+        model = torch.jit.load(model_path, map_location="cpu")
+        if use_cuda:
+            model = model.cuda()
     model.eval()
     print("[NLF] Model loaded.")
     return model
