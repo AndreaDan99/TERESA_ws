@@ -215,15 +215,15 @@
   .gdino-cam { cursor: pointer; font-size: 14px; margin-left: 4px; }
   .gdino-empty { padding: 12px 10px; color: #555; font-size: 10px; font-family: var(--font); }
 
-  /* ── GDINO image popup (bottom-left, above sidebar) ── */
-  .gdino-popup { position: fixed; left: 12px; bottom: 24px; z-index: 9999; pointer-events: auto; }
+  /* ── GDINO image popup (bottom-left of map area, outside sidebar) ── */
+  .gdino-popup { position: fixed; left: 330px; bottom: 24px; z-index: 9999; pointer-events: auto; }
   .gdino-popup-inner {
     position: relative; background: rgba(10,10,20,0.85);
     border: 1px solid rgba(255,50,50,0.35); border-radius: 8px;
     padding: 6px; backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
   }
-  .gdino-popup-inner img { width: 300px; height: auto; border-radius: 4px; opacity: 0.90; display: block; }
+  .gdino-popup-inner img { width: 400px; height: auto; border-radius: 4px; opacity: 0.90; display: block; }
   .gdino-popup-close {
     position: absolute; top: -12px; right: -12px;
     width: 24px; height: 24px; border-radius: 50%;
