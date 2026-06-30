@@ -96,15 +96,20 @@ class ExposureCapture(Node):
     def _cb_rs_color(self, msg):
         try:
             self._rs_color = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
-        except Exception:
-            pass
+            self._frame_count = getattr(self, '_frame_count', 0) + 1
+        except Exception as e:
+            if not getattr(self, '_cb_rs_err_logged', False):
+                self.get_logger().error(f'cv_bridge error (color): {e}')
+                self._cb_rs_err_logged = True
 
     def _cb_rs_depth(self, msg):
         try:
             self._rs_depth = self.bridge.imgmsg_to_cv2(
                 msg, desired_encoding='passthrough')
-        except Exception:
-            pass
+        except Exception as e:
+            if not getattr(self, '_cb_depth_err_logged', False):
+                self.get_logger().error(f'cv_bridge error (depth): {e}')
+                self._cb_depth_err_logged = True
 
     def _cb_rs_info(self, msg):
         self._rs_info = msg
@@ -178,9 +183,10 @@ class ExposureCapture(Node):
         """Periodic status print."""
         rs_ok = '✓' if self._rs_color is not None else '✗'
         depth_ok = '✓' if self._rs_depth is not None else '✗'
+        n_frames = getattr(self, '_frame_count', 0)
         self.get_logger().info(
             f'Status  |  RS color: {rs_ok}  depth: {depth_ok}  '
-            f'|  # close-ups: {self._counter - 1}'
+            f'frames: {n_frames}  |  # close-ups: {self._counter - 1}'
         )
 
     # ── Save ───────────────────────────────────────────────────
