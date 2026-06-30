@@ -56,8 +56,7 @@
   /* ── Body Map ────────────────────────────── */
   #map-panel {
     flex: 1; display: flex; flex-direction: column;
-    background: var(--bg-card); border-right: 1px solid var(--border);
-    min-width: 0;
+    background: var(--bg-card); min-width: 0;
   }
   #map-header {
     display: flex; align-items: center; gap: 8px; flex-shrink: 0;
@@ -94,6 +93,8 @@
   #sidebar {
     width: 320px; flex-shrink: 0; display: flex; flex-direction: column;
     background: var(--bg-light); overflow-y: auto;
+    order: -1;  /* left side */
+    border-right: 1px solid var(--border);
   }
   #sidebar h3 {
     font-size: 12px; font-weight: 600; color: var(--text-dim);
@@ -196,12 +197,14 @@
   #popup .popup-btns button.ok { border-color: var(--accent); color: var(--accent); }
   #popup .popup-btns button.cancel { color: var(--text-dim); }
 
-  /* ── Screenshot mode ─────────────────────── */
+  /* ── Screenshot mode — hide buttons, keep panel ── */
   body.screenshot-mode #top-bar,
-  body.screenshot-mode #sidebar,
   body.screenshot-mode #map-toolbar,
-  body.screenshot-mode #map-header { display: none; }
-  body.screenshot-mode #map-panel { border-right: none; }
+  body.screenshot-mode #map-header,
+  body.screenshot-mode #add-gt-btn,
+  body.screenshot-mode .gt-delete,
+  body.screenshot-mode .gt-row select,
+  body.screenshot-mode .gt-row .gt-type { display: none; }
 </style>
 </head>
 <body>
