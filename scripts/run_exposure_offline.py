@@ -275,7 +275,7 @@ def back_project(u, v, depth, K):
 def distance_filter(detections, skeleton_3d, thr_m=0.15):
     """Drop detections whose 3D position is > thr_m from the nearest SMPL joint.
     Adds 'distance_to_body_m' on kept items."""
-    if not skeleton_3d:
+    if skeleton_3d is None or (hasattr(skeleton_3d, '__len__') and len(skeleton_3d) == 0):
         for d in detections:
             d["distance_to_body_m"] = None
         return detections
