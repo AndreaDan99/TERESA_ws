@@ -400,7 +400,7 @@ class ExposureReviewApp {
     for (const j of this.skeleton) { if (!isNaN(j.x)) { minX = Math.min(minX, j.x); maxX = Math.max(maxX, j.x); } }
     const bodyCenterX = (minX + maxX) / 2;
     this.spotPose = {
-      x: bodyCenterX - 0.60,  // 60 cm behind body center (same as test_exposure_poses.py)
+      x: bodyCenterX - 0.75,  // 75 cm behind body center
       y: pelvis.y,
       yaw: 0.0
     };
