@@ -197,14 +197,17 @@
   #popup .popup-btns button.ok { border-color: var(--accent); color: var(--accent); }
   #popup .popup-btns button.cancel { color: var(--text-dim); }
 
-  /* ── Screenshot mode — hide buttons, keep panel ── */
+  /* ── Screenshot mode — hide chrome, keep detection panel ── */
   body.screenshot-mode #top-bar,
   body.screenshot-mode #map-toolbar,
   body.screenshot-mode #map-header,
   body.screenshot-mode #add-gt-btn,
   body.screenshot-mode .gt-delete,
   body.screenshot-mode .gt-row select,
-  body.screenshot-mode .gt-row .gt-type { display: none; }
+  body.screenshot-mode .gt-row .gt-type,
+  body.screenshot-mode .gt-row .gt-status,
+  body.screenshot-mode #fp-section,
+  body.screenshot-mode #gt-section-header { display: none; }
 </style>
 </head>
 <body>
@@ -246,7 +249,7 @@
   <!-- Sidebar -->
   <div id="sidebar">
     <div class="section">
-      <h3>🩹 Ground Truth</h3>
+      <h3 id="gt-section-header">🩹 Ground Truth</h3>
       <div id="gt-list"></div>
       <button id="add-gt-btn" onclick="app.addGTByClick()">+ Clicca sulla mappa per aggiungere</button>
     </div>
@@ -266,6 +269,11 @@
         <div class="metric-card"><div class="m-val" id="m-precision">-</div><div class="m-label">Precision</div></div>
         <div class="metric-card"><div class="m-val" id="m-f1">-</div><div class="m-label">F1 Score</div></div>
       </div>
+    </div>
+
+    <div class="section" id="detection-summary-section">
+      <h3>🔍 Detection Summary</h3>
+      <div id="detection-summary" style="padding:4px 14px 8px;font-size:10px;line-height:1.7;color:var(--text-dim)"></div>
     </div>
   </div>
 </div>
@@ -844,6 +852,25 @@ class ExposureReviewApp {
 
     // Metrics
     this._updateMetrics();
+    this._updateDetectionSummary();
+  }
+
+  _updateDetectionSummary() {
+    const el = $('detection-summary');
+    if (!el) return;
+    if (this.groundTruth.length === 0) {
+      el.innerHTML = '<span style="color:var(--text-dim)">Nessun ground truth piazzato</span>';
+      return;
+    }
+    let html = '';
+    for (const gt of this.groundTruth) {
+      if (gt.gdinoMatch != null) {
+        html += `<span style="color:var(--accent)">● ${gt.id}:</span> ${gt.gdinoLabel} ${Math.round(gt.gdinoScore*100)}% <span style="color:var(--text-dim);font-size:9px">(D${gt.gdinoMatch})</span><br>`;
+      } else {
+        html += `<span style="color:var(--danger)">● ${gt.id}:</span> — <span style="color:var(--danger)">missed</span><br>`;
+      }
+    }
+    el.innerHTML = html;
   }
 
   _updateMetrics() {
