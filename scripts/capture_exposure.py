@@ -89,6 +89,9 @@ class ExposureCapture(Node):
             self._stdin_thread = threading.Thread(target=self._stdin_loop,
                                                   daemon=True)
             self._stdin_thread.start()
+            self._pending_wide = False
+            self._pending_close_up = False
+            self.create_timer(0.1, self._tick_process_save)  # 10 Hz save check
             self.create_timer(4.0, self._tick_tty_status)
 
     # ── Callbacks ──────────────────────────────────────────────
@@ -165,18 +168,27 @@ class ExposureCapture(Node):
 
     # ── TTY mode (terminal, no display) ────────────────────────
 
+    def _tick_process_save(self):
+        """Process pending saves on the main thread (has fresh frames)."""
+        if self._pending_wide:
+            self._pending_wide = False
+            self._save_wide()
+        if self._pending_close_up:
+            self._pending_close_up = False
+            self._save_close_up()
+
     def _stdin_loop(self):
         """Read stdin line-by-line in a background thread."""
         while self._running:
             if select.select([sys.stdin], [], [], 0.2)[0]:
                 line = sys.stdin.readline().strip().lower()
                 if line == 'w':
-                    self._save_wide()
+                    self._pending_wide = True
                 elif line == 'q':
                     self._shutdown()
                     return
                 elif line == '':
-                    self._save_close_up()
+                    self._pending_close_up = True
                 # else: ignore
 
     def _tick_tty_status(self):
