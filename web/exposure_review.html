@@ -220,6 +220,7 @@
     transition: all 0.15s; min-width: 48px;
   }
   .review-wound-chip:hover { background: rgba(255,200,50,0.25); transform: scale(1.08); }
+  .review-wound-chip.active { background: rgba(255,200,50,0.35); border-color: #ffaa00; box-shadow: 0 0 8px rgba(255,200,50,0.3); }
   .gdino-empty { padding: 12px 10px; color: #555; font-size: 10px; font-family: var(--font); }
 
   /* ── GDINO image popup (bottom-left of map area, outside sidebar) ── */
@@ -355,11 +356,11 @@
 
     <div class="section" id="review-section">
       <h3>📝 Remote Operator Revision</h3>
-      <textarea id="review-notes" placeholder="Note del revisore..."
+      <textarea id="review-notes" placeholder="Remote operator notes..."
         style="width:100%;height:72px;resize:vertical;font-family:var(--font);font-size:12px;
                background:var(--bg);color:var(--text);border:1px solid var(--border);
                border-radius:6px;padding:8px;outline:none"
-        oninput="app.reviewNotes = this.value"></textarea>
+        oninput="app.reviewNotes = this.value">Deep laceration with severe tissue damage observed on the upper left chest. Wound edges are irregular with active bleeding — estimated blood loss is significant. Surrounding skin shows early signs of infection (redness, swelling). Requires urgent surgical debridement and hemostasis within 2 hours. High risk of sepsis if left untreated. Reviewed twice — Spot repositioned for closer inspection.</textarea>
       <div style="margin-top:8px">
         <h3 style="margin-bottom:6px">🔁 Review Points</h3>
         <table id="review-table" style="width:100%;border-collapse:collapse">
@@ -985,9 +986,10 @@ class ExposureReviewApp {
     let html = '<tr>';
     for (const gt of this.groundTruth) {
       const count = this.reviewPoints[gt.id] || 0;
+      const isActive = gt.id === this.selectedGT;
       html += `<td style="padding:3px;text-align:center">`;
-      html += `<button class="review-wound-chip" onclick="app._gotoWound('${gt.id}')"`;
-      html += ` title="${gt.type}${count > 0 ? ' — rivisto ' + count + ' volte' : ''}">`;
+      html += `<button class="review-wound-chip${isActive ? ' active' : ''}" onclick="app._selectWound('${gt.id}')"`;
+      html += ` title="${gt.type}${count > 0 ? ' — reviewed ' + count + ' times' : ''}">`;
       html += `${gt.id}`;
       if (count > 0) html += ` <span style="font-size:9px;opacity:0.7">🔁${count}</span>`;
       html += `</button></td>`;
@@ -998,6 +1000,12 @@ class ExposureReviewApp {
 
   _addReviewPoint(woundId) {
     this.reviewPoints[woundId] = (this.reviewPoints[woundId] || 0) + 1;
+    this._updateReviewTable();
+  }
+
+  _selectWound(woundId) {
+    this.selectedGT = (this.selectedGT === woundId) ? null : woundId;
+    this._render();
     this._updateReviewTable();
   }
 
