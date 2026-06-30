@@ -256,7 +256,7 @@
   body.screenshot-mode #fp-section,
   body.screenshot-mode #gt-section { display: none; }
 
-  /* ── Screenshot mode: bigger fonts, black text ── */
+  /* ── Screenshot mode: bigger fonts, gray→white, keep colors ── */
   body.screenshot-mode { font-size: 16px; }
   body.screenshot-mode #sidebar { font-size: 14px; }
   body.screenshot-mode #sidebar,
@@ -264,15 +264,13 @@
   body.screenshot-mode #sidebar .section,
   body.screenshot-mode .gdino-row,
   body.screenshot-mode .gdino-label,
-  body.screenshot-mode .gdino-pct,
-  body.screenshot-mode .gdino-dot,
-  body.screenshot-mode .metric-card .m-val,
-  body.screenshot-mode .metric-card .m-label,
-  body.screenshot-mode #review-table,
-  body.screenshot-mode #review-notes,
+  body.screenshot-mode .gdino-dot { color: #fff; }
+  body.screenshot-mode .gdino-pct { color: #bbb; }
+  body.screenshot-mode .metric-card .m-label { color: #ccc; }
+  body.screenshot-mode #review-notes { color: #ddd; }
   body.screenshot-mode .gt-id,
-  body.screenshot-mode .gt-row,
-  body.screenshot-mode .gdino-popup-title { color: #111; }
+  body.screenshot-mode .gt-row { color: #fff; }
+  body.screenshot-mode .gdino-popup-title { color: #ddd; }
   body.screenshot-mode #sidebar h3 { font-size: 16px; }
   body.screenshot-mode .gdino-row { font-size: 14px; padding: 6px 10px; }
   body.screenshot-mode .gdino-pct { font-size: 12px; }
@@ -662,7 +660,7 @@ class ExposureReviewApp {
         const label = isMatched
           ? `${gt.id}: ${gt.type} ${gt.gdinoScore != null ? Math.round(gt.gdinoScore * 100) + '%' : ''}`
           : gt.id;
-        ctx.fillStyle = this._screenshot ? '#111' : '#ffffff';
+        ctx.fillStyle = '#ffffff';
         ctx.font = this._screenshot ? 'bold 12px monospace' : 'bold 10px monospace';
         ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
         ctx.fillText(label, p.x, p.y - r - 4);
