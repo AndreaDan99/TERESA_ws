@@ -600,23 +600,27 @@ class ExposureReviewApp {
     }
 
     // ── Body regions legend (bottom-right) ────────
-    // Always reset to alphabetic baseline so alignment is consistent
-    // regardless of whether GDINO legend was drawn above.
-    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    // Explicitly reset all text state so alignment is identical
+    // regardless of what other legends were drawn above.
+    ctx.save();
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     const lgX2 = W - 160, lgY2 = H - 210;
     ctx.fillStyle = 'rgba(10,10,20,.8)'; ctx.strokeStyle = 'rgba(100,100,140,.4)'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.roundRect(lgX2, lgY2, 152, 175, 6); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#888'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'left';
-    ctx.fillText('BODY REGIONS', lgX2 + 8, lgY2 + 18);
+    ctx.font = 'bold 10px monospace';
+    ctx.fillStyle = '#888'; ctx.textBaseline = 'top';
+    ctx.fillText('BODY REGIONS', lgX2 + 8, lgY2 + 10);
     ctx.font = '9px monospace';
     let li = 0;
     for (const r of Object.values(BODY_REGIONS)) {
-      const y = lgY2 + 36 + li * 21;
-      ctx.fillStyle = r.color; ctx.fillRect(lgX2 + 8, y, 12, 12);
-      ctx.strokeStyle = r.color; ctx.lineWidth = 1.5; ctx.strokeRect(lgX2 + 8, y, 12, 12);
-      ctx.fillStyle = '#ccc'; ctx.fillText(r.name, lgX2 + 26, y + 10);
+      const boxY = lgY2 + 36 + li * 21;
+      ctx.fillStyle = r.color; ctx.fillRect(lgX2 + 8, boxY, 12, 12);
+      ctx.strokeStyle = r.color; ctx.lineWidth = 1.5; ctx.strokeRect(lgX2 + 8, boxY, 12, 12);
+      ctx.fillStyle = '#ccc'; ctx.textBaseline = 'middle';
+      ctx.fillText(r.name, lgX2 + 26, boxY + 6);
       li++;
     }
+    ctx.restore();
 
     // Store proj for click handling
     this._proj = proj;
