@@ -97,7 +97,7 @@ class ExposureCapture(Node):
     def _cb_rs_color(self, msg):
         try:
             # Direct numpy decode — bypasses cv_bridge for reliability
-            data = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
+            data = np.frombuffer(msg.data, dtype=np.uint8).copy().reshape(msg.height, msg.width, 3)
             if msg.encoding == 'rgb8':
                 self._rs_color = cv2.cvtColor(data, cv2.COLOR_RGB2BGR)
             elif msg.encoding == 'bgr8':
