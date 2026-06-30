@@ -247,7 +247,8 @@
   body.screenshot-mode .gt-row .gt-type,
   body.screenshot-mode .gt-row .gt-status,
   body.screenshot-mode #fp-section,
-  body.screenshot-mode #gt-section { display: none; }
+  body.screenshot-mode #gt-section,
+  body.screenshot-mode #review-section { display: none; }
 </style>
 </head>
 <body>
@@ -318,6 +319,27 @@
     <div class="section" id="gdino-detections-section">
       <h3>🩹 GDINO DETECTIONS</h3>
       <div id="gdino-detections"></div>
+    </div>
+
+    <div class="section" id="review-section">
+      <h3>📝 Remote Operator Revision</h3>
+      <textarea id="review-notes" placeholder="Note del revisore..."
+        style="width:100%;height:64px;resize:vertical;font-family:var(--font);font-size:11px;
+               background:var(--bg);color:var(--text);border:1px solid var(--border);
+               border-radius:6px;padding:8px;outline:none"
+        oninput="app.reviewNotes = this.value"></textarea>
+      <div style="margin-top:8px">
+        <h3 style="margin-bottom:6px">🔁 Review Points</h3>
+        <table id="review-table" style="width:100%;border-collapse:collapse;font-size:10px;font-family:var(--font)">
+          <thead>
+            <tr style="color:var(--text-dim);border-bottom:1px solid var(--border)">
+              <th style="text-align:left;padding:3px 6px">Wound</th>
+              <th style="text-align:center;padding:3px 6px">Review #</th>
+            </tr>
+          </thead>
+          <tbody id="review-tbody"></tbody>
+        </table>
+      </div>
     </div>
   </div>
 </div>
@@ -415,6 +437,8 @@ class ExposureReviewApp {
     // Data
     this.groundTruth = [];       // {id, type, notes, wx, wy, wz, gdinoMatch: null | detectionId}
     this.detections = [];        // from predictions.json
+    this.reviewNotes = '';       // remote operator notes
+    this.reviewPoints = {};      // {woundId: count} recheck counter
     this.skeleton = [];          // 24 points {x,y,z} in metres
     this.spotPose = {x:0, y:0, yaw:0};
     this.imgBaseUrl = '';        // base path for experiment images
@@ -909,6 +933,35 @@ class ExposureReviewApp {
     // Metrics
     this._updateMetrics();
     this._updateGDINODetections();
+    this._updateReviewTable();
+  }
+
+  _updateReviewTable() {
+    const tbody = $('review-tbody');
+    if (!tbody) return;
+    if (this.groundTruth.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="2" style="color:var(--text-dim);padding:6px">Nessun ground truth</td></tr>';
+      return;
+    }
+    let html = '';
+    for (const gt of this.groundTruth) {
+      const count = this.reviewPoints[gt.id] || 0;
+      const matched = gt.gdinoMatch != null;
+      html += `<tr style="border-bottom:1px solid var(--border);color:${matched?'var(--accent)':'var(--danger)'}">`;
+      html += `<td style="padding:3px 6px">${gt.id}: ${gt.type}</td>`;
+      html += `<td style="text-align:center;padding:3px 6px">`;
+      html += `<span style="cursor:pointer;user-select:none" onclick="app._addReviewPoint('${gt.id}')">`;
+      html += `${count > 0 ? '🔁'.repeat(Math.min(count, 5)) : '—'}`;
+      html += `</span>`;
+      html += ` <span style="font-size:9px;color:var(--text-dim)">${count || ''}</span>`;
+      html += `</td></tr>`;
+    }
+    tbody.innerHTML = html;
+  }
+
+  _addReviewPoint(woundId) {
+    this.reviewPoints[woundId] = (this.reviewPoints[woundId] || 0) + 1;
+    this._updateReviewTable();
   }
 
   _updateGDINODetections() {
@@ -1182,6 +1235,8 @@ class ExposureReviewApp {
 
   save() {
     const output = {
+      review_notes: this.reviewNotes,
+      review_points: this.reviewPoints,
       ground_truth: this.groundTruth.map(gt => ({
         id: gt.id,
         type: gt.type,
