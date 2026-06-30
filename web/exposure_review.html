@@ -256,47 +256,34 @@
   body.screenshot-mode #fp-section,
   body.screenshot-mode #gt-section { display: none; }
 
-  /* ── Screenshot mode: lighter bg, black text, bigger fonts ── */
-  body.screenshot-mode { background: rgba(18,18,32,0.45); }
-  body.screenshot-mode #sidebar { background: rgba(26,26,46,0.35); font-size: 15px; color: #111; }
-  body.screenshot-mode #sidebar h3 { font-size: 17px; color: #111; font-weight: 800; }
-  body.screenshot-mode #sidebar .section { color: #111; }
-  body.screenshot-mode #map-panel { background: rgba(30,30,50,0.25); }
-  body.screenshot-mode #top-bar,
-  body.screenshot-mode #map-toolbar,
-  body.screenshot-mode #map-header { background: rgba(26,26,46,0.3); }
-
-  /* Skeleton lines → black */
-  body.screenshot-mode #map-body { background: rgba(18,18,32,0.2); }
-
-  /* GDINO box */
-  body.screenshot-mode .gdino-box { background: rgba(10,10,20,0.4); }
-  body.screenshot-mode .gdino-row { font-size: 15px; padding: 6px 10px; color: #111; }
-  body.screenshot-mode .gdino-dot { color: #111; }
-  body.screenshot-mode .gdino-pct { font-size: 13px; color: #333; }
-  body.screenshot-mode .gdino-cam { font-size: 18px; }
-
-  /* Review chips + button */
-  body.screenshot-mode .review-wound-chip { font-size: 17px; padding: 9px 20px; color: #111; }
-  body.screenshot-mode #review-notes { font-size: 15px; height: 80px; color: #111; background: rgba(18,18,32,0.25); }
-  body.screenshot-mode #btn-goto-wound { font-size: 17px; padding: 14px; color: #111; }
-
-  /* Metrics */
-  body.screenshot-mode .metric-card .m-val { font-size: 24px; color: #111; }
-  body.screenshot-mode .metric-card .m-label { font-size: 12px; color: #222; }
-
-  /* Table */
-  body.screenshot-mode #review-table { color: #111; }
-  body.screenshot-mode #review-table td { color: #111; }
-
-  /* Popup */
-  body.screenshot-mode .gdino-popup-title { font-size: 13px; color: #111; }
-  body.screenshot-mode .gdino-popup-inner img { width: 500px; }
-  body.screenshot-mode .gdino-popup-inner { background: rgba(10,10,20,0.5); }
-
-  /* GT list text */
-  body.screenshot-mode .gt-id { color: #111; }
-  body.screenshot-mode .gt-row { color: #111; }
+  /* ── Screenshot mode: bigger fonts, black text ── */
+  body.screenshot-mode { font-size: 16px; }
+  body.screenshot-mode #sidebar { font-size: 14px; }
+  body.screenshot-mode #sidebar,
+  body.screenshot-mode #sidebar h3,
+  body.screenshot-mode #sidebar .section,
+  body.screenshot-mode .gdino-row,
+  body.screenshot-mode .gdino-label,
+  body.screenshot-mode .gdino-pct,
+  body.screenshot-mode .gdino-dot,
+  body.screenshot-mode .metric-card .m-val,
+  body.screenshot-mode .metric-card .m-label,
+  body.screenshot-mode #review-table,
+  body.screenshot-mode #review-notes,
+  body.screenshot-mode .gt-id,
+  body.screenshot-mode .gt-row,
+  body.screenshot-mode .gdino-popup-title { color: #111; }
+  body.screenshot-mode #sidebar h3 { font-size: 16px; }
+  body.screenshot-mode .gdino-row { font-size: 14px; padding: 6px 10px; }
+  body.screenshot-mode .gdino-pct { font-size: 12px; }
+  body.screenshot-mode .gdino-cam { font-size: 17px; }
+  body.screenshot-mode .review-wound-chip { font-size: 16px; padding: 8px 18px; }
+  body.screenshot-mode #review-notes { font-size: 14px; height: 80px; }
+  body.screenshot-mode #btn-goto-wound { font-size: 16px; padding: 12px; }
+  body.screenshot-mode .metric-card .m-val { font-size: 22px; }
+  body.screenshot-mode .metric-card .m-label { font-size: 11px; }
+  body.screenshot-mode .gdino-popup-title { font-size: 12px; }
+  body.screenshot-mode .gdino-popup-inner img { width: 480px; }
 </style>
 </head>
 <body>
@@ -601,8 +588,7 @@ class ExposureReviewApp {
         (!isNaN(j.x)) ? proj(j.x, j.y) : null);
 
       // Lines
-      ctx.strokeStyle = this._screenshot ? 'rgba(0,0,0,0.55)' : 'rgba(200,200,220,.5)';
-      ctx.lineWidth = this._screenshot ? 2.5 : 1.5;
+      ctx.strokeStyle = 'rgba(200,200,220,.5)'; ctx.lineWidth = 1.5;
       for (const [i, j] of SKELETON_EDGES) {
         const a = pts[i], b = pts[j];
         if (a && b) { ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
@@ -618,8 +604,7 @@ class ExposureReviewApp {
           rx2 = Math.max(rx2, p.x); ry2 = Math.max(ry2, p.y);
         }
         const pad = Math.max(6, (rx2 - rx1) * 0.10, (ry2 - ry1) * 0.10);
-        ctx.strokeStyle = this._screenshot ? 'rgba(0,0,0,0.5)' : r.color;
-        ctx.lineWidth = this._screenshot ? 2.5 : 2; ctx.globalAlpha = this._screenshot ? 0.55 : 0.7;
+        ctx.strokeStyle = r.color; ctx.lineWidth = 2; ctx.globalAlpha = 0.7;
         ctx.strokeRect(rx1 - pad, ry1 - pad, rx2 - rx1 + pad*2, ry2 - ry1 + pad*2);
         ctx.globalAlpha = 1;
       }
@@ -631,14 +616,14 @@ class ExposureReviewApp {
         if (!d.position_3d || d.position_3d[0] == null) continue;
         const p = proj(d.position_3d[0], d.position_3d[1]);
         const isUsed = this.groundTruth.some(gt => gt.gdinoMatch === d.id);
-        const r = this._screenshot ? 10 : 8;
+        const r = 8;
         ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI*2);
         if (isUsed) {
-          ctx.fillStyle = this._screenshot ? 'rgba(0,0,0,0.25)' : 'rgba(100,100,100,0.3)';
-          ctx.strokeStyle = this._screenshot ? 'rgba(0,0,0,0.5)' : 'rgba(100,100,100,0.5)';
+          ctx.fillStyle = 'rgba(100,100,100,0.3)';
+          ctx.strokeStyle = 'rgba(100,100,100,0.5)';
         } else {
-          ctx.fillStyle = this._screenshot ? 'rgba(180,10,10,0.7)' : 'rgba(255,30,30,0.7)';
-          ctx.strokeStyle = this._screenshot ? '#111' : '#ffffff';
+          ctx.fillStyle = 'rgba(255,30,30,0.7)';
+          ctx.strokeStyle = '#ffffff';
         }
         ctx.lineWidth = 1.5; ctx.fill(); ctx.stroke();
         // Number
@@ -666,18 +651,10 @@ class ExposureReviewApp {
 
         // Fill
         ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI*2);
-        if (this._screenshot) {
-          ctx.fillStyle = isMatched ? 'rgba(40,140,80,0.85)' : 'rgba(180,20,20,0.85)';
-        } else {
-          ctx.fillStyle = isMatched ? 'rgba(80,200,120,0.85)' : 'rgba(255,30,30,0.9)';
-        }
+        ctx.fillStyle = isMatched ? 'rgba(80,200,120,0.85)' : 'rgba(255,30,30,0.9)';
         ctx.fill();
         // Border
-        if (this._screenshot) {
-          ctx.strokeStyle = isMatched ? '#1a6633' : '#991111';
-        } else {
-          ctx.strokeStyle = this._flashGT && isSelected ? '#ffdc00' : (isMatched ? '#33aa55' : '#ffcc00');
-        }
+        ctx.strokeStyle = this._flashGT && isSelected ? '#ffdc00' : (isMatched ? '#33aa55' : '#ffcc00');
         ctx.lineWidth = (this._flashGT && isSelected) ? 5 : (isSelected ? 3 : 2);
         ctx.stroke();
 
@@ -700,10 +677,9 @@ class ExposureReviewApp {
       ctx.save();
       ctx.translate(sp.x, sp.y);
       ctx.rotate(this.spotPose.yaw);
-      ctx.strokeStyle = this._screenshot ? '#111' : '#ffdc00'; ctx.lineWidth = this._screenshot ? 3 : 2;
+      ctx.strokeStyle = '#ffdc00'; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.roundRect(-sw/2, -sh/2, sw, sh, 4); ctx.stroke();
-      ctx.fillStyle = this._screenshot ? '#111' : '#ffdc00';
-      ctx.font = this._screenshot ? 'bold 13px monospace' : 'bold 11px monospace';
+      ctx.fillStyle = '#ffdc00'; ctx.font = 'bold 11px monospace';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText('TERESA', 0, 0);
       ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
@@ -741,24 +717,18 @@ class ExposureReviewApp {
     ctx.save();
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     const lgX2 = W - 160, lgY2 = H - 210;
-    ctx.fillStyle = this._screenshot ? 'rgba(255,255,255,0.45)' : 'rgba(10,10,20,.8)';
-    ctx.strokeStyle = this._screenshot ? 'rgba(0,0,0,0.4)' : 'rgba(100,100,140,.4)';
-    ctx.lineWidth = this._screenshot ? 2 : 1;
+    ctx.fillStyle = 'rgba(10,10,20,.8)'; ctx.strokeStyle = 'rgba(100,100,140,.4)'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.roundRect(lgX2, lgY2, 152, 175, 6); ctx.fill(); ctx.stroke();
-    ctx.font = this._screenshot ? 'bold 12px monospace' : 'bold 10px monospace';
-    ctx.fillStyle = this._screenshot ? '#111' : '#888'; ctx.textBaseline = 'top';
+    ctx.font = 'bold 10px monospace';
+    ctx.fillStyle = '#888'; ctx.textBaseline = 'top';
     ctx.fillText('BODY REGIONS', lgX2 + 8, lgY2 + 10);
-    ctx.font = this._screenshot ? '11px monospace' : '9px monospace';
+    ctx.font = '9px monospace';
     let li = 0;
     for (const r of Object.values(BODY_REGIONS)) {
       const boxY = lgY2 + 36 + li * 21;
-      ctx.fillStyle = this._screenshot ? 'rgba(0,0,0,0.7)' : r.color;
-      ctx.fillRect(lgX2 + 8, boxY, 12, 12);
-      ctx.strokeStyle = this._screenshot ? '#111' : r.color;
-      ctx.lineWidth = this._screenshot ? 2 : 1.5;
-      ctx.strokeRect(lgX2 + 8, boxY, 12, 12);
-      ctx.fillStyle = this._screenshot ? '#111' : '#ccc';
-      ctx.textBaseline = 'middle';
+      ctx.fillStyle = r.color; ctx.fillRect(lgX2 + 8, boxY, 12, 12);
+      ctx.strokeStyle = r.color; ctx.lineWidth = 1.5; ctx.strokeRect(lgX2 + 8, boxY, 12, 12);
+      ctx.fillStyle = '#ccc'; ctx.textBaseline = 'middle';
       ctx.fillText(r.name, lgX2 + 26, boxY + 6);
       li++;
     }
