@@ -213,8 +213,24 @@
   .gdino-dot { color: #ffffff; margin-right: 4px; font-size: 12px; }
   .gdino-pct { color: #888; font-size: 11px; }
   .gdino-cam { cursor: pointer; font-size: 14px; margin-left: 4px; }
-  .gdino-overlay-img { margin: 4px 0 6px 18px; }
   .gdino-empty { padding: 12px 10px; color: #555; font-size: 10px; font-family: var(--font); }
+
+  /* ── GDINO image popup ── */
+  .gdino-popup { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center; }
+  .gdino-popup-bg { position: absolute; inset: 0; background: rgba(0,0,0,0.75); cursor: pointer; }
+  .gdino-popup-inner { position: relative; max-width: 92vw; max-height: 85vh; }
+  .gdino-popup-close {
+    position: absolute; top: -12px; right: -12px;
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--bg-card); border: 1px solid var(--border);
+    color: var(--text); font-size: 14px; line-height: 26px;
+    text-align: center; cursor: pointer; z-index: 1;
+  }
+  .gdino-popup-close:hover { background: var(--danger); color: #fff; }
+  .gdino-popup-title {
+    font-family: var(--font); font-size: 11px; color: var(--text-dim);
+    margin-bottom: 6px; text-align: center;
+  }
 
   /* ── Screenshot mode — hide chrome, keep detection panel ── */
   body.screenshot-mode #top-bar,
@@ -900,38 +916,40 @@ class ExposureReviewApp {
     let html = '<div class="gdino-box">';
     for (const d of this.detections) {
       const pct = Math.round(d.score * 100);
-      const imgPath = this._getOverlayPath(d);
       html += `<div class="gdino-row">`;
       html += `<span class="gdino-dot">●</span>`;
       html += `<span class="gdino-label">D${d.id}: ${d.label} <span class="gdino-pct">${pct}%</span></span>`;
-      html += ` <span class="gdino-cam" data-gdino-img="gdino-img-${d.id}" title="${d.source || 'foto'}">📸</span>`;
-      html += `<div id="gdino-img-${d.id}" class="gdino-overlay-img" style="display:none">`;
-      html += `<img data-src="${imgPath}" style="max-width:260px;border-radius:4px;border:1px solid var(--border)" onerror="this.style.display='none'">`;
-      html += `</div>`;
+      html += ` <span class="gdino-cam" data-did="${d.id}" title="${d.source || 'foto'}">📸</span>`;
       html += `</div>`;
     }
     html += '</div>';
     el.innerHTML = html;
 
-    // Attach click listeners after DOM is built
+    // Attach click listeners
     for (const span of el.querySelectorAll('.gdino-cam')) {
-      const imgId = span.dataset.gdinoImg;
-      span.addEventListener('click', () => this._toggleGdinoImg(imgId));
+      const did = parseInt(span.dataset.did);
+      span.addEventListener('click', () => this._showGdinoPopup(did));
     }
   }
 
-  _toggleGdinoImg(id) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    if (el.style.display === 'none') {
-      el.style.display = 'block';
-      const img = el.querySelector('img');
-      if (img && img.dataset.src) {
-        img.src = img.dataset.src;
-      }
-    } else {
-      el.style.display = 'none';
-    }
+  _showGdinoPopup(detId) {
+    const det = this.detections.find(d => d.id === detId);
+    if (!det) return;
+    const src = this._getOverlayPath(det);
+    // Remove any existing popup
+    const old = document.querySelector('.gdino-popup');
+    if (old) old.remove();
+    // Create floating popup
+    const popup = document.createElement('div');
+    popup.className = 'gdino-popup';
+    popup.innerHTML = `
+      <div class="gdino-popup-bg" onclick="this.parentElement.remove()"></div>
+      <div class="gdino-popup-inner">
+        <span class="gdino-popup-close" onclick="this.parentElement.parentElement.remove()">✕</span>
+        <div class="gdino-popup-title">D${det.id}: ${det.label} ${Math.round(det.score*100)}% — ${det.source || ''}</div>
+        <img src="${src}" style="max-width:90vw;max-height:70vh;border-radius:6px;border:1px solid var(--border)" onerror="this.alt='Immagine non disponibile';this.style.display='none'">
+      </div>`;
+    document.body.appendChild(popup);
   }
 
   setImgBase(url) {
