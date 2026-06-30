@@ -195,6 +195,13 @@
   }
   #popup .popup-btns button.ok { border-color: var(--accent); color: var(--accent); }
   #popup .popup-btns button.cancel { color: var(--text-dim); }
+
+  /* ── Screenshot mode ─────────────────────── */
+  body.screenshot-mode #top-bar,
+  body.screenshot-mode #sidebar,
+  body.screenshot-mode #map-toolbar,
+  body.screenshot-mode #map-header { display: none; }
+  body.screenshot-mode #map-panel { border-right: none; }
 </style>
 </head>
 <body>
@@ -207,6 +214,8 @@
   <span class="sep">|</span>
   <button id="btn-save" class="primary" onclick="app.save()">💾 Salva</button>
   <span class="sep">|</span>
+  <button id="btn-screenshot" onclick="app.toggleScreenshot()">📸 Screenshot mode</button>
+  <span class="sep">|</span>
   <span class="tag" id="status-tag">Body Map pronta — clicca per piazzare GT</span>
 </div>
 
@@ -215,7 +224,7 @@
   <div id="map-panel">
     <div id="map-header">
       <span class="title">BODY MAP — top-down view</span>
-      <span class="tag" id="map-stats">skeleton: virtual</span>
+      <span class="tag" id="map-stats">skeleton</span>
     </div>
     <div id="map-body">
       <canvas id="map-canvas"></canvas>
@@ -384,13 +393,13 @@ class ExposureReviewApp {
   }
 
   _computeSpotPose() {
-    // Spot beside body at pelvis height, like test_exposure_poses.py
+    // Spot beside body at pelvis height (to the right, positive X)
     if (this.skeleton.length < 24) return;
     const pelvis = this.skeleton[0]; // PELVIS
-    let minX = Infinity;
-    for (const j of this.skeleton) { if (!isNaN(j.x)) minX = Math.min(minX, j.x); }
+    let maxX = -Infinity;
+    for (const j of this.skeleton) { if (!isNaN(j.x)) maxX = Math.max(maxX, j.x); }
     this.spotPose = {
-      x: minX - 0.15,  // 15 cm behind body
+      x: maxX + 0.20,  // 20 cm to the right of the body
       y: pelvis.y,
       yaw: 0.0
     };
@@ -873,6 +882,22 @@ class ExposureReviewApp {
     $('btn-skel').classList.toggle('active', this.showSkel);
     $('btn-gt').classList.toggle('active', this.showGT);
     $('btn-gdino').classList.toggle('active', this.showGDINO);
+  }
+
+  // ── Screenshot mode ─────────────────────────────────────────────
+
+  toggleScreenshot() {
+    this._screenshot = !this._screenshot;
+    document.body.classList.toggle('screenshot-mode', this._screenshot);
+    $('btn-screenshot').classList.toggle('active', this._screenshot);
+    // Resize canvas after sidebar hide/show
+    setTimeout(() => {
+      const canvas = $('map-canvas');
+      const parent = canvas.parentElement;
+      canvas.width = parent.clientWidth || 800;
+      canvas.height = parent.clientHeight || 600;
+      this._render();
+    }, 100);
   }
 
   // ── Add GT ───────────────────────────────────────────────────────
