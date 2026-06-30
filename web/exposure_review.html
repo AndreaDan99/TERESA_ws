@@ -926,6 +926,7 @@ class ExposureReviewApp {
 
   setImgBase(url) {
     this.imgBaseUrl = url.replace(/\/?$/, '/');  // ensure trailing slash
+    this._updateGDINODetections();  // regenerate image paths with new base URL
   }
 
   _getOverlayPath(det) {
