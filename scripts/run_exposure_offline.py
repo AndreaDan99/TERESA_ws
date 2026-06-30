@@ -167,7 +167,11 @@ def run_nlf(model, img_rgb, conf_thr=0.3, device="cuda"):
         boxes = pred["boxes"][0].cpu().numpy()
         if boxes.shape[0] == n_people:
             box_scores = boxes[:, 4]
-            boxes_xyxy = boxes[:, :4]
+            # NLF returns [cx, cy, w, h] — convert to [x1, y1, x2, y2]
+            cx, cy, bw, bh = (boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3])
+            boxes_xyxy = np.stack([
+                cx - bw / 2, cy - bh / 2,
+                cx + bw / 2, cy + bh / 2], axis=1)
             if boxes.shape[1] > 5:
                 box_ids = [int(b) for b in boxes[:, 5]]
 
@@ -297,16 +301,29 @@ def distance_filter(detections, skeleton_3d, thr_m=0.15):
 
 
 def crop_to_body(image, bbox_xyxy, margin_pct=0.15):
-    """Returns (cropped_image, (ox, oy))."""
-    if bbox_xyxy and len(bbox_xyxy) == 4:
-        x1, y1, x2, y2 = [int(v) for v in bbox_xyxy]
-        w, h = x2 - x1, y2 - y1
-        ox = max(0, int(x1 - w * margin_pct))
-        oy = max(0, int(y1 - h * margin_pct))
-        ex = min(image.shape[1], int(x2 + w * margin_pct))
-        ey = min(image.shape[0], int(y2 + h * margin_pct))
-        return image[oy:ey, ox:ex], (ox, oy)
-    return image, (0, 0)
+    """Returns (cropped_image, (ox, oy)).
+    bbox_xyxy can be [x1,y1,x2,y2] (xyxy) or [cx,cy,w,h] (YOLO) — auto-detects."""
+    if not bbox_xyxy or len(bbox_xyxy) != 4:
+        return image, (0, 0)
+    a, b, c, d = [float(v) for v in bbox_xyxy]
+    # Detect format: if a > c it's likely [cx,cy,w,h]
+    if a > c:
+        cx, cy, bw, bh = a, b, c, d
+        x1, y1 = cx - bw / 2, cy - bh / 2
+        x2, y2 = cx + bw / 2, cy + bh / 2
+    else:
+        x1, y1, x2, y2 = a, b, c, d
+    w_box, h_box = x2 - x1, y2 - y1
+    if w_box <= 0 or h_box <= 0:
+        return image, (0, 0)
+    x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+    ox = max(0, int(x1 - w_box * margin_pct))
+    oy = max(0, int(y1 - h_box * margin_pct))
+    ex = min(image.shape[1], int(x2 + w_box * margin_pct))
+    ey = min(image.shape[0], int(y2 + h_box * margin_pct))
+    if ex <= ox or ey <= oy:
+        return image, (0, 0)
+    return image[oy:ey, ox:ex], (ox, oy)
 
 
 # ═══════════════════════════════════════════════════════════════════════
