@@ -54,16 +54,18 @@ class ExposureCapture(Node):
         # Status
         self.create_timer(4.0, self._tick_status)
 
-        # ROS2 service for capture trigger
-        self._srv = self.create_service(Trigger, '/capture/trigger', self._on_trigger)
+        # ROS2 services for capture trigger (Trigger has no request fields in Humble)
+        self._srv_cu = self.create_service(Trigger, '/capture/close_up', self._on_close_up)
+        self._srv_wide = self.create_service(Trigger, '/capture/wide', self._on_wide)
+        self._srv_quit = self.create_service(Trigger, '/capture/quit', self._on_quit)
 
         self.get_logger().info(
             '📸 TERESA Exposure Capture\n'
             f'   Out: {self.out_dir}\n'
             '   Commands (from another terminal):\n'
-            '     ros2 service call /capture/trigger std_srvs/srv/Trigger              → close-up\n'
-            '     ros2 service call /capture/trigger std_srvs/srv/Trigger "{data: w}"  → wide\n'
-            '     ros2 service call /capture/trigger std_srvs/srv/Trigger "{data: q}"  → quit'
+            '     ros2 service call /capture/close_up std_srvs/srv/Trigger  → close-up\n'
+            '     ros2 service call /capture/wide     std_srvs/srv/Trigger  → wide\n'
+            '     ros2 service call /capture/quit     std_srvs/srv/Trigger  → quit'
         )
 
     # ── Callbacks ──────────────────────────────────────────────
@@ -105,23 +107,25 @@ class ExposureCapture(Node):
             json.dump(info, f, indent=2)
         self.get_logger().info('✓ camera_info.json saved')
 
-    # ── Trigger service ────────────────────────────────────────
+    # ── Trigger services ───────────────────────────────────────
 
-    def _on_trigger(self, request, response):
-        cmd = (request.data or '').strip().lower()
-        if cmd == 'w':
-            self._save_wide()
-            response.success = True
-            response.message = 'Wide shot saved'
-        elif cmd == 'q':
-            self.get_logger().info(f'Quit. {self._counter - 1} close-ups saved.')
-            response.success = True
-            response.message = 'Shutting down'
-            self.create_timer(0.2, lambda: rclpy.shutdown())
-        else:
-            self._save_close_up()
-            response.success = True
-            response.message = f'Close-up #{self._counter - 1} saved'
+    def _on_close_up(self, request, response):
+        self._save_close_up()
+        response.success = True
+        response.message = f'Close-up #{self._counter - 1} saved'
+        return response
+
+    def _on_wide(self, request, response):
+        self._save_wide()
+        response.success = True
+        response.message = 'Wide shot saved'
+        return response
+
+    def _on_quit(self, request, response):
+        self.get_logger().info(f'Quit. {self._counter - 1} close-ups saved.')
+        response.success = True
+        response.message = 'Shutting down'
+        self.create_timer(0.2, lambda: rclpy.shutdown())
         return response
 
     # ── Save ───────────────────────────────────────────────────
