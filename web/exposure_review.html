@@ -596,7 +596,8 @@ class ExposureReviewApp {
     }
 
     // ── Injury legend (bottom-left, GDINO) ──────────
-    if (this.showGDINO && this.detections.length) {
+    // Hidden during screenshot mode (sidebar version is used instead)
+    if (this.showGDINO && this.detections.length && !this._screenshot) {
       const usedIds = new Set(this.groundTruth.map(gt => gt.gdinoMatch).filter(id => id != null));
       const unassigned = this.detections.filter(d => !usedIds.has(d.id));
       const lgW = 260, lgX = 10;
@@ -892,7 +893,6 @@ class ExposureReviewApp {
       el.innerHTML = '<div class="gdino-box"><div class="gdino-empty">Nessuna detection GDINO</div></div>';
       return;
     }
-    // Same visual style as the canvas GDINO legend
     let html = '<div class="gdino-box">';
     html += '<div class="gdino-header">🩹 GDINO DETECTIONS</div>';
     for (const d of this.detections) {
@@ -902,10 +902,28 @@ class ExposureReviewApp {
       html += `<span class="gdino-dot">●</span>`;
       html += `<span class="gdino-label">D${d.id}: ${d.label} <span class="gdino-pct">${pct}%</span></span>`;
       html += `<span class="gdino-src">${d.source || ''}</span>`;
+      html += ` <span style="cursor:pointer;font-size:13px" onclick="app._toggleGdinoImg('gdino-img-${d.id}')" title="Mostra foto">📸</span>`;
+      html += `<div id="gdino-img-${d.id}" style="display:none;margin:4px 0 6px 18px">`;
+      html += `<img src="" data-src="${imgPath}" style="max-width:260px;border-radius:4px;border:1px solid var(--border)" onerror="this.style.display='none'">`;
+      html += `</div>`;
       html += `</div>`;
     }
     html += '</div>';
     el.innerHTML = html;
+  }
+
+  _toggleGdinoImg(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (el.style.display === 'none') {
+      el.style.display = 'block';
+      const img = el.querySelector('img');
+      if (img && img.dataset.src && !img.src) {
+        img.src = img.dataset.src;
+      }
+    } else {
+      el.style.display = 'none';
+    }
   }
 
   setImgBase(url) {
