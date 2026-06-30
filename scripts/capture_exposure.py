@@ -93,24 +93,26 @@ class ExposureCapture(Node):
 
     def run(self):
         status_t = self.get_clock().now()
+        tick = 0
         while rclpy.ok():
             rclpy.spin_once(self, timeout_sec=0.05)
+            tick += 1
 
-            if select.select([sys.stdin], [], [], 0)[0]:
+            # Check stdin only every 20 spins (1 Hz) to not starve frame delivery
+            if tick % 20 == 0 and select.select([sys.stdin], [], [], 0)[0]:
                 line = sys.stdin.readline()
-                if not line:
-                    continue
-                line = line.strip().lower()
-                # Spin a few more times to flush the latest frame
-                for _ in range(8):
-                    rclpy.spin_once(self, timeout_sec=0.01)
-                if line == 'w':
-                    self._save_wide()
-                elif line == 'q':
-                    print(f'Done. {self._counter} close-ups saved.')
-                    return
-                elif line == '':
-                    self._save_close_up()
+                if line:
+                    line = line.strip().lower()
+                    # Flush to get latest frame
+                    for _ in range(6):
+                        rclpy.spin_once(self, timeout_sec=0.02)
+                    if line == 'w':
+                        self._save_wide()
+                    elif line == 'q':
+                        print(f'Done. {self._counter} close-ups saved.')
+                        return
+                    elif line == '':
+                        self._save_close_up()
 
             now = self.get_clock().now()
             if (now - status_t).nanoseconds * 1e-9 > 4.0:
