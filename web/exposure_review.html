@@ -576,13 +576,14 @@ class ExposureReviewApp {
       ctx.restore();
     }
 
-    // ── Injury legend (top-right, GDINO) ──────────
+    // ── Injury legend (bottom-left, GDINO) ──────────
     if (this.showGDINO && this.detections.length) {
       const usedIds = new Set(this.groundTruth.map(gt => gt.gdinoMatch).filter(id => id != null));
       const unassigned = this.detections.filter(d => !usedIds.has(d.id));
-      const lgW = 260, lgX = W - lgW - 10, lgY = 20;
+      const lgW = 260, lgX = 10;
       const rowH = 30, headerH = 38;
       const boxH = headerH + Math.min(unassigned.length, 10) * rowH;
+      const lgY = H - boxH - 10;
       ctx.fillStyle = 'rgba(10,10,20,0.88)'; ctx.strokeStyle = 'rgba(255,50,50,0.6)'; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.roundRect(lgX, lgY, lgW, boxH, 8); ctx.fill(); ctx.stroke();
       ctx.fillStyle = '#ff4444'; ctx.font = 'bold 13px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
