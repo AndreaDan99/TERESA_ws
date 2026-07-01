@@ -38,8 +38,8 @@ RUN rm -f /etc/apt/sources.list.d/*ros* 2>/dev/null; \
     # === TORCH NATIVE LIBS (same as teresa_gpu) ===
     libopenblas0 libjpeg-turbo8 libpng16-16 \
     \
-    # === GUI / OPENCV ===
-    mesa-utils libgl1 libopencv-dev \
+    # === GUI ===
+    mesa-utils libgl1 \
     \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
