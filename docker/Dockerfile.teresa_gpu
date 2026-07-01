@@ -34,7 +34,7 @@ ENV PIP_NO_CACHE_DIR=1
 ENV HF_HOME=/work/hf_cache
 
 # Fix expired ROS GPG key + install xacro and joint_state_publisher_gui
-RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key | apt-key add - && \
+RUN apt-key adv --keyserver keyserver.ubuntu.com --recv-keys F42ED6FBAB17C654 && \
     apt-get update && apt-get install -y --no-install-recommends \
       ros-humble-xacro ros-humble-joint-state-publisher-gui \
  && rm -rf /var/lib/apt/lists/*
