@@ -14,7 +14,7 @@ import os
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -85,7 +85,7 @@ def generate_launch_description():
         package="joint_state_publisher",
         executable="joint_state_publisher",
         name="joint_state_publisher",
-        condition=IfCondition(LaunchConfiguration("gui"), invert=True),
+        condition=UnlessCondition(LaunchConfiguration("gui")),
     )
 
     rviz = Node(
