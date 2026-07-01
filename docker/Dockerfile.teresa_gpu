@@ -33,14 +33,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_NO_CACHE_DIR=1
 ENV HF_HOME=/work/hf_cache
 
-# Install xacro + joint_state_publisher_gui (ROS repo key expired, force install)
-RUN apt-get update -o Acquire::AllowInsecureRepositories=true \
-      -o APT::Get::AllowUnauthenticated=true 2>/dev/null || true; \
-    apt-get install -y --no-install-recommends \
-      --allow-unauthenticated \
-      ros-humble-xacro ros-humble-joint-state-publisher-gui \
- && rm -rf /var/lib/apt/lists/*
-
 # native libs torch / torchvision link against (not all present in ros-base).
 # Drop the stale ROS apt source first — its GPG key is expired and would abort
 # apt-get update; we only need the three libs from the Ubuntu ports repos.
