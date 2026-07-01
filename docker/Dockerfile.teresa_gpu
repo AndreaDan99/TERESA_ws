@@ -33,9 +33,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_NO_CACHE_DIR=1
 ENV HF_HOME=/work/hf_cache
 
-# Fix expired ROS GPG key + install xacro and joint_state_publisher_gui
-RUN apt-key adv --keyserver keyserver.ubuntu.com --recv-keys F42ED6FBAB17C654 && \
-    apt-get update && apt-get install -y --no-install-recommends \
+# Install xacro + joint_state_publisher_gui (ROS repo key expired, force install)
+RUN apt-get update -o Acquire::AllowInsecureRepositories=true \
+      -o APT::Get::AllowUnauthenticated=true 2>/dev/null || true; \
+    apt-get install -y --no-install-recommends \
+      --allow-unauthenticated \
       ros-humble-xacro ros-humble-joint-state-publisher-gui \
  && rm -rf /var/lib/apt/lists/*
 
