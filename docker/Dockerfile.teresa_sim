@@ -1,8 +1,5 @@
 # =============================================================================
-# TERESA — Full TERESA image with simulation (SpotZi)
-#
-# Combines teresa_core (hardware drivers + Z1 + WBC) and teresa_gpu (GPU perception)
-# into a single image with GUI tools (RViz) for simulation and testing.
+# teresa_sim — Simulation-only image for SpotZi visualization (RViz)
 #
 # Base: humble-desktop-pytorch = ROS2 Humble Desktop + PyTorch 2.0 CUDA + RViz
 #   Already includes: rviz2, joint_state_publisher_gui, xacro, robot_state_publisher,
@@ -12,14 +9,14 @@
 #   -v /home/spot_orin/AndreaDantonaTeresa/TERESA_ws:/ros2_ws
 #
 # BUILD (on Jetson Orin):
-#   docker build -f docker/Dockerfile.teresa -t teresa:latest .
+#   docker build -f docker/Dockerfile.teresa_sim -t teresa_sim:latest .
 #
 # RUN:
-#   docker run -d --name teresa --runtime=nvidia --net=host \
+#   docker run -d --name teresa_sim --runtime=nvidia --net=host \
 #     -e DISPLAY=:1 -v /tmp/.X11-unix:/tmp/.X11-unix \
 #     -v /home/spot_orin/AndreaDantonaTeresa/TERESA_ws:/ros2_ws \
 #     -v /ssd/andrea_deploy:/work \
-#     teresa:latest sleep infinity
+#     teresa_sim:latest sleep infinity
 # =============================================================================
 
 FROM dustynv/ros:humble-desktop-pytorch-l4t-r35.4.1
@@ -67,7 +64,7 @@ RUN echo 'source /opt/ros/humble/setup.bash' >> /root/.bashrc && \
 
 # ── Labels ─────────────────────────────────────────────────────────────────
 LABEL maintainer="andrea.dantona@unife.it"
-LABEL description="TERESA — Spot + Z1 arm simulation & control (desktop)"
+LABEL description="teresa_sim — SpotZi simulation & visualization (RViz + GUI)"
 LABEL version="l4t-r35.4.1-desktop"
 LABEL ros_distro="humble"
 LABEL cuda_version="11.4"
