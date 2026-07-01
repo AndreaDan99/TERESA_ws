@@ -1,0 +1,65 @@
+<?xml version="1.0"?>
+<!--
+  SpotZi — Combined Spot + Z1 arm URDF
+  ======================================
+  Mounts the Unitree Z1 6-DOF arm on Boston Dynamics Spot's body.
+  Mount offset matches TERESA physical setup: (0.20, 0, 0.20) from body.
+
+  Usage:
+    xacro urdf/spotzi.urdf.xacro > /tmp/spotzi.urdf
+    check_urdf /tmp/spotzi.urdf
+    ros2 launch spotzi_description display.launch.py
+-->
+<robot name="spotzi" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ================================================================= -->
+  <!-- Xacro arguments                                                   -->
+  <!-- ================================================================= -->
+  <xacro:arg name="tf_prefix" default="" />
+  <xacro:arg name="with_gripper" default="true" />
+  <xacro:arg name="z1_mount_x" default="0.20" />
+  <xacro:arg name="z1_mount_y" default="0.0" />
+  <xacro:arg name="z1_mount_z" default="0.20" />
+
+  <!-- ================================================================= -->
+  <!-- Includes                                                          -->
+  <!-- ================================================================= -->
+  <xacro:include filename="$(find spotzi_description)/urdf/spot_macro.xacro" />
+  <xacro:include filename="$(find spotzi_description)/urdf/z1_macro.xacro" />
+
+  <!-- ================================================================= -->
+  <!-- Materials                                                         -->
+  <!-- ================================================================= -->
+  <material name="Grey">
+    <color rgba="0.3 0.3 0.3 1.0" />
+  </material>
+
+  <!-- ================================================================= -->
+  <!-- SPOT: body + 4 legs (no arm, no feet)                             -->
+  <!-- ================================================================= -->
+  <xacro:load_spot
+    arm="false"
+    feet="false"
+    gripperless="false"
+    tf_prefix="$(arg tf_prefix)"
+    include_transmissions="false" />
+
+  <!-- ================================================================= -->
+  <!-- Z1 MOUNT: fixed joint from Spot body to Z1 world                  -->
+  <!-- ================================================================= -->
+  <link name="world" />
+
+  <joint name="z1_mount_joint" type="fixed">
+    <origin xyz="$(arg z1_mount_x) $(arg z1_mount_y) $(arg z1_mount_z)" rpy="0 0 0" />
+    <parent link="$(arg tf_prefix)body" />
+    <child link="world" />
+  </joint>
+
+  <!-- ================================================================= -->
+  <!-- Z1 ARM: 6-DOF manipulator (link00 → link06) + optional gripper    -->
+  <!-- ================================================================= -->
+  <xacro:load_z1
+    with_gripper="$(arg with_gripper)"
+    sim_ignition="false" />
+
+</robot>
