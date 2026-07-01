@@ -25,7 +25,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_NO_CACHE_DIR=1
 ENV HF_HOME=/work/hf_cache
 
-# ── System dependencies (native libs + build tools + hardware drivers) ──────
+# ── System dependencies (build tools + native libs) ──────────────────────
 # Drop stale ROS apt sources to avoid GPG key errors during apt-get update
 RUN rm -f /etc/apt/sources.list.d/*ros* 2>/dev/null; \
     apt-get update && apt-get install -y --no-install-recommends \
@@ -38,12 +38,8 @@ RUN rm -f /etc/apt/sources.list.d/*ros* 2>/dev/null; \
     # === TORCH NATIVE LIBS (same as teresa_gpu) ===
     libopenblas0 libjpeg-turbo8 libpng16-16 \
     \
-    # === INTEL REALSENSE D435 (librealsense2) ===
-    librealsense2-dev libeigen3-dev \
-    \
-    # === ORBBEC FEMTO BOLT ===
-    libgflags-dev nlohmann-json3-dev libgoogle-glog-dev \
-    libssl-dev libdw-dev mesa-utils libgl1 libopencv-dev \
+    # === GUI / OPENCV ===
+    mesa-utils libgl1 libopencv-dev \
     \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
